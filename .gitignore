@@ -83,6 +83,17 @@ src-tauri/*.log
 !.env.example
 !.env.*.example
 
+# Local product docs (not tracked; keep on disk only)
+docs/
+
+# Local application data (SQLite / settings) — never commit user DBs
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
 # Operating system files
 .DS_Store
 Thumbs.db
