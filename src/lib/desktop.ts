@@ -20,3 +20,11 @@ export {
   type DictionaryCandidateEntry,
   type DictionaryListResult,
 } from "@/lib/dictionary"
+
+export {
+  getDatabaseInfo,
+  getSettings,
+  setSettings,
+  type AppSettings,
+  type DatabaseInfo,
+} from "@/lib/settings"

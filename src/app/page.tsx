@@ -6,10 +6,11 @@ import { AppShell, NAV_ORDER, type NavId } from "@/components/app-shell"
 import { DictionaryPage } from "@/components/home/dictionary-page"
 import { ExtractPage } from "@/components/home/extract-page"
 import { PlaceholderPage } from "@/components/home/placeholder-page"
+import { SettingsPage } from "@/components/home/settings-page"
 import { cn } from "@/lib/utils"
 
 const PLACEHOLDERS: Record<
-  Exclude<NavId, "extract" | "dictionary">,
+  Exclude<NavId, "extract" | "dictionary" | "settings">,
   { eyebrow: string; title: string; description: string }
 > = {
   compress: {
@@ -28,12 +29,6 @@ const PLACEHOLDERS: Record<
     title: "日志",
     description: "查看最近运行日志、导出日志包，并备份本机 SQLite 数据库。",
   },
-  settings: {
-    eyebrow: "Preferences",
-    title: "设置",
-    description:
-      "压缩默认项、字典与日志参数、外部破解工具路径，以及快捷解压入口。",
-  },
 }
 
 type SlideDirection = "forward" | "backward" | null
@@ -51,6 +46,9 @@ function renderNavPage(nav: NavId) {
   }
   if (nav === "dictionary") {
     return <DictionaryPage />
+  }
+  if (nav === "settings") {
+    return <SettingsPage />
   }
   return <PlaceholderPage {...PLACEHOLDERS[nav]} />
 }
