@@ -1,0 +1,9 @@
+[package]
+name = "arc-recall-core"
+version = "0.1.0"
+description = "Platform-independent core for ArcRecall"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

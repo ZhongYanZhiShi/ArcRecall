@@ -1,0 +1,77 @@
+name: Bug report
+description: Report a reproducible problem in ArcRecall
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. Please remove private file names, passwords, and other sensitive information from logs and screenshots.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the problem and what you expected to happen.
+      placeholder: A clear and concise description of the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest set of steps that consistently reproduces the problem.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. See ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      options:
+        - Desktop app
+        - Web app
+        - Rust service
+        - Project setup or documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide the release version or commit hash if available.
+      placeholder: main or a commit hash
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the operating system and relevant runtime or browser versions.
+      placeholder: Windows 11, Rust ..., Node.js ..., Edge ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Add useful diagnostics after removing paths, passwords, and other sensitive data.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: I removed sensitive information from this report.
+          required: true

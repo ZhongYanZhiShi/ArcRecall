@@ -1,0 +1,105 @@
+<p align="center">
+  <a href="./README.md">English</a> | <strong>简体中文</strong>
+</p>
+
+<div align="center">
+
+# ArcRecall
+
+用于识别真实文件格式、修复异常后缀并处理嵌套压缩资源的本地优先桌面工具。
+
+<p><a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-2024-000000?logo=rust&amp;logoColor=white" alt="Rust 2024"></a> <a href="https://v2.tauri.app/"><img src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&amp;logoColor=white" alt="Tauri 2"></a> <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16.2-black?logo=nextdotjs" alt="Next.js 16.2"></a> <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19.2-149ECA?logo=react&amp;logoColor=white" alt="React 19.2"></a> <a href="https://ui.shadcn.com/"><img src="https://img.shields.io/badge/shadcn%2Fui-Base_UI-000000" alt="shadcn/ui with Base UI"></a> <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-D22128" alt="Apache License 2.0"></a></p>
+
+</div>
+
+## 项目简介
+
+有些网络资源会被删除文件后缀、改成与真实格式无关的后缀，或封装在多层加密压缩包中。系统无法直接识别这类文件，用户只能猜测格式并逐层尝试解包。
+
+ArcRecall 会读取文件内容来判断真实格式，补回或修正后缀，并逐层处理嵌套压缩包。遇到加密文件时，密码验证在本机进行。Next.js 前端负责交互，Tauri 负责原生桌面生命周期和 IPC 边界，与平台无关的 Rust 核心负责文件识别与归档处理。
+
+## 计划支持
+
+- 根据文件签名和内部结构识别真实格式
+- 逐层分析和解包嵌套压缩文件
+- 在本机检测加密并验证密码
+- 保存处理记录，方便后续查看
+
+## 项目结构
+
+```text
+arc-recall/
+├─ src/            # Next.js 界面
+├─ src-tauri/      # Tauri 2 桌面壳与 IPC 适配层
+├─ crates/
+│  └─ arc-recall-core/ # 与平台无关的 Rust 业务逻辑
+├─ Cargo.toml       # Rust workspace
+└─ Cargo.lock       # Rust 依赖锁定
+```
+
+## 环境要求
+
+- 当前稳定版 Rust 工具链
+- 当前维护中的 Node.js 版本与 [pnpm](https://pnpm.io/)
+- [Tauri 环境要求](https://v2.tauri.app/start/prerequisites/)中列出的当前平台依赖
+
+## 快速开始
+
+克隆仓库：
+
+```powershell
+git clone https://github.com/ZhongYanZhiShi/arc-recall.git
+cd arc-recall
+```
+
+安装依赖并验证基础构建：
+
+```powershell
+pnpm install
+cargo build --workspace
+```
+
+启动桌面应用：
+
+```powershell
+pnpm desktop:dev
+```
+
+Tauri 会启动 Next.js 开发服务器，并在原生桌面窗口中打开它。生产构建会嵌入 Next.js 静态导出，前端通过 Tauri command 调用 Rust，而不是访问本机 HTTP API。
+
+## 开发检查
+
+```powershell
+# Rust
+cargo fmt --all -- --check
+cargo test --workspace
+
+# Web
+pnpm format:check
+pnpm lint
+pnpm typecheck
+pnpm build
+
+# Desktop
+pnpm desktop:build
+```
+
+添加 shadcn/ui 组件：
+
+```powershell
+pnpm dlx shadcn@latest add <component>
+```
+
+## 参与贡献
+
+欢迎通过 [Issues](https://github.com/ZhongYanZhiShi/arc-recall/issues) 提交问题或建议，也欢迎发起 [Pull Request](https://github.com/ZhongYanZhiShi/arc-recall/pulls)。
+
+提交改动前，请先阅读[贡献指南](./CONTRIBUTING.zh-CN.md)，并运行与改动范围对应的检查。
+
+## 许可证
+
+ArcRecall 使用 [Apache License 2.0](./LICENSE) 开源。
+
+## 免责声明
+
+ArcRecall 主要用于学习、研究和技术交流。请仅处理你拥有或已获得明确授权的文件，并自行确认相关操作符合当地法律法规。因误操作、数据损坏、未经授权使用或其他不当使用造成的后果，由使用者自行承担。

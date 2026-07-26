@@ -1,0 +1,2 @@
+npm run format:check
+cargo fmt --all -- --check

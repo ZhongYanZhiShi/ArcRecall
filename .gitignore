@@ -1,0 +1,99 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Build output
+bin/
+obj/
+publish/
+artifacts/
+TestResults/
+out/
+build/
+dist/
+
+# IDE / editor metadata
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.rsuser
+*.userosscache
+*.sln.docstates
+
+# Local agent / AI tooling
+.codex/
+.claude/
+.agents/
+.cursor/
+
+# Local tooling
+mise.local.toml
+*.local.toml
+
+# Node.js and Next.js
+node_modules/
+.next/
+.turbo/
+.vercel/
+.cache/
+.eslintcache
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+next-env.d.ts
+# 统一使用 pnpm，忽略其它包管理器的 lockfile
+package-lock.json
+yarn.lock
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnpm-store/
+.pnp
+.pnp.*
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# Tauri / desktop packaging
+src-tauri/target/
+src-tauri/gen/
+src-tauri/WixTools/
+src-tauri/*.log
+*.msi
+*.nsis.zip
+*.AppImage
+*.dmg
+*.deb
+*.rpm
+
+# Misc
+*.pem
+*.log
+
+# Local environment
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
