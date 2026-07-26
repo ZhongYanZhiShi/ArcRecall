@@ -3,13 +3,33 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Reserved for future preferences (compress defaults, log level, etc.).
-/// Dictionary import encoding is auto-detected and is not user-selectable.
+/// External cracking / engine tool paths.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineSettings {
+    /// Shared public directory for downloaded engines (hashcat 等).
+    /// Empty = use default `{LocalAppData}/ArcRecall/tools`.
+    #[serde(default)]
+    pub tools_directory: String,
+    /// Absolute path to hashcat.exe (or empty if not configured).
+    #[serde(default)]
+    pub hashcat_path: String,
+    /// Absolute path to John tools directory (7z2john / rar2john).
+    #[serde(default)]
+    pub john_tools_directory: String,
+    /// Absolute path to perl.exe (for 7z2john.pl).
+    #[serde(default)]
+    pub perl_path: String,
+}
+
+/// Application preferences stored in settings.json.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     #[serde(default)]
     pub version: u32,
+    #[serde(default)]
+    pub engine: EngineSettings,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -65,6 +85,44 @@ impl SettingsStore {
         fs::write(&self.path, json)?;
         Ok(())
     }
+
+    pub fn save_hashcat_path(&self, hashcat_path: &str) -> Result<AppSettings, SettingsError> {
+        let mut settings = self.load()?;
+        settings.engine.hashcat_path = hashcat_path.trim().to_string();
+        self.save(&settings)?;
+        Ok(settings)
+    }
+
+    pub fn save_tools_directory(
+        &self,
+        tools_directory: &str,
+    ) -> Result<AppSettings, SettingsError> {
+        let mut settings = self.load()?;
+        settings.engine.tools_directory = tools_directory.trim().to_string();
+        self.save(&settings)?;
+        Ok(settings)
+    }
+
+    pub fn save_john_perl(
+        &self,
+        john_tools_directory: &str,
+        perl_path: &str,
+    ) -> Result<AppSettings, SettingsError> {
+        let mut settings = self.load()?;
+        settings.engine.john_tools_directory = john_tools_directory.trim().to_string();
+        settings.engine.perl_path = perl_path.trim().to_string();
+        self.save(&settings)?;
+        Ok(settings)
+    }
+}
+
+/// Resolve the effective tools root: custom setting if set, else app default.
+pub fn resolve_tools_directory(default_tools: &Path, configured_tools_directory: &str) -> PathBuf {
+    let custom = configured_tools_directory.trim();
+    if custom.is_empty() {
+        return default_tools.to_path_buf();
+    }
+    PathBuf::from(custom)
 }
 
 /// Runtime info about on-disk data files (shown in Settings → 数据).
@@ -76,6 +134,7 @@ pub struct DatabaseInfo {
     pub candidate_count: u64,
     pub settings_path: String,
     pub root_path: String,
+    pub tools_path: String,
 }
 
 #[cfg(test)]
@@ -88,6 +147,31 @@ mod tests {
         let path = dir.path().join("settings.json");
         let store = SettingsStore::open(&path).unwrap();
         assert!(path.is_file());
-        let _ = store.load().unwrap();
+        let loaded = store.load().unwrap();
+        assert!(loaded.engine.hashcat_path.is_empty());
+    }
+
+    #[test]
+    fn saves_hashcat_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let store = SettingsStore::open(&path).unwrap();
+        store
+            .save_hashcat_path(r"C:\tools\hashcat\hashcat.exe")
+            .unwrap();
+        assert_eq!(
+            store.load().unwrap().engine.hashcat_path,
+            r"C:\tools\hashcat\hashcat.exe"
+        );
+    }
+
+    #[test]
+    fn resolve_tools_directory_uses_default_when_empty() {
+        let default = PathBuf::from(concat!(r"C:\", "Users", r"\me\AppData\Local\ArcRecall\tools"));
+        assert_eq!(resolve_tools_directory(&default, ""), default);
+        assert_eq!(
+            resolve_tools_directory(&default, r"D:\Shared\ArcTools"),
+            PathBuf::from(r"D:\Shared\ArcTools")
+        );
     }
 }

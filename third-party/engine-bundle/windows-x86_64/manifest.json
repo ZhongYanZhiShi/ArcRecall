@@ -1,0 +1,89 @@
+{
+  "manifestVersion": 1,
+  "target": "windows-x86_64",
+  "generatedAt": "2026-07-26",
+  "components": [
+    {
+      "id": "7zip",
+      "name": "7-Zip",
+      "version": "26.02",
+      "license": "LGPL-2.1-or-later WITH unRAR-restriction"
+    },
+    {
+      "id": "hashcat",
+      "name": "Hashcat",
+      "version": "7.1.2",
+      "license": "MIT"
+    },
+    {
+      "id": "john",
+      "name": "John the Ripper jumbo",
+      "version": "1.9.0-jumbo-1",
+      "license": "GPL-2.0-only and other bundled licenses"
+    },
+    {
+      "id": "perl",
+      "name": "Strawberry Perl",
+      "version": "5.42.2.1",
+      "license": "Artistic-1.0-Perl OR GPL-1.0-or-later and bundled dependency licenses"
+    }
+  ],
+  "resources": [
+    {
+      "id": "7zip-bootstrap",
+      "url": "https://github.com/ip7z/7zip/releases/download/26.02/7zr.exe",
+      "relativePath": "bootstrap/7zr.exe",
+      "sha256": "56b8cc9f4971cef253644fafe54063ed7fdca551d4dee0f8c6baa81b855acd72",
+      "size": 602112,
+      "purpose": "runtime"
+    },
+    {
+      "id": "7zip",
+      "url": "https://github.com/ip7z/7zip/releases/download/26.02/7z2602-x64.exe",
+      "relativePath": "packages/7z2602-x64.exe",
+      "sha256": "6745fa76dc2ea031596d8678f6f6b99c3c1b435b4164a63485adbbc7b8d82ef0",
+      "size": 1657896,
+      "purpose": "runtime"
+    },
+    {
+      "id": "hashcat",
+      "url": "https://github.com/hashcat/hashcat/releases/download/v7.1.2/hashcat-7.1.2.7z",
+      "relativePath": "packages/hashcat-7.1.2.7z",
+      "sha256": "80db0316387794ce9d14ed376da75b8a7742972485b45db790f5f8260307ff98",
+      "size": 19682772,
+      "purpose": "runtime"
+    },
+    {
+      "id": "john",
+      "url": "https://www.openwall.com/john/k/john-1.9.0-jumbo-1-win64.7z",
+      "relativePath": "packages/john-1.9.0-jumbo-1-win64.7z",
+      "sha256": "ce05a898b72bb30c3c4f703e3ffcf25966c1b1801eb7e095030b44092ef92eaf",
+      "size": 22217857,
+      "purpose": "runtime"
+    },
+    {
+      "id": "perl",
+      "url": "https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54221_64bit/strawberry-perl-5.42.2.1-64bit-portable.zip",
+      "relativePath": "packages/strawberry-perl-5.42.2.1-64bit-portable.zip",
+      "sha256": "32d83be90cf04b807cfb9477482bc36302cdee6f5b04cf57e81adecbd8f07898",
+      "size": 304301401,
+      "purpose": "runtime"
+    },
+    {
+      "id": "john-source",
+      "url": "https://www.openwall.com/john/k/john-1.9.0-jumbo-1.tar.xz",
+      "relativePath": "sources/john-1.9.0-jumbo-1.tar.xz",
+      "sha256": "f5d123f82983c53d8cc598e174394b074be7a77756f5fb5ed8515918c81e7f3b",
+      "size": 33638768,
+      "purpose": "corresponding-source"
+    },
+    {
+      "id": "7zip-source",
+      "url": "https://github.com/ip7z/7zip/releases/download/26.02/7z2602-src.7z",
+      "relativePath": "sources/7z2602-src.7z",
+      "sha256": "c7502dd4557481f52ccf1b3e680329f1fdd207e79a25544afeb3106325474944",
+      "size": 1530535,
+      "purpose": "corresponding-source"
+    }
+  ]
+}

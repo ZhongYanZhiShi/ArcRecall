@@ -65,6 +65,7 @@ lerna-debug.log*
 src-tauri/target/
 src-tauri/gen/
 src-tauri/WixTools/
+src-tauri/resources/engine-bundle/
 src-tauri/*.log
 *.msi
 *.nsis.zip

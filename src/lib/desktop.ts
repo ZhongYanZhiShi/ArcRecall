@@ -22,9 +22,37 @@ export {
 } from "@/lib/dictionary"
 
 export {
+  downloadHashcat,
   getDatabaseInfo,
+  getFullEngineBundleStatus,
+  getHashcatStatus,
+  getJohnPerlStatus,
   getSettings,
+  installFullEngineBundle,
+  setJohnPerl,
   setSettings,
+  setToolsDirectory,
   type AppSettings,
   type DatabaseInfo,
+  type EngineComponentStatus,
+  type FullEngineBundleInstallResult,
+  type FullEngineBundleStatus,
+  type HashcatInstallResult,
+  type HashcatStatus,
+  type JohnPerlStatus,
 } from "@/lib/settings"
+
+export {
+  analyzeArchive,
+  cancelRecovery,
+  getRecoveryStatus,
+  openOutputDirectory,
+  pickArchivePath,
+  pickOutputDirectory,
+  startRecovery,
+  type ArchiveAnalysis,
+  type ArchiveFormat,
+  type RecoveryPhase,
+  type RecoveryStartRequest,
+  type RecoveryTaskStatus,
+} from "@/lib/recovery"

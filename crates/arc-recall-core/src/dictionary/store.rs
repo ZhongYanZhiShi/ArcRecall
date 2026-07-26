@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -233,6 +233,41 @@ impl DictionaryCandidateStore {
         })
     }
 
+    /// Materialize all line-safe candidates as a UTF-8 wordlist.
+    ///
+    /// Successful candidates are tried first. Values containing a line break
+    /// or NUL cannot be represented losslessly by line-oriented Hashcat/John
+    /// wordlists and are skipped.
+    pub fn export_wordlist(&self, destination: impl AsRef<Path>) -> Result<u64, DictionaryError> {
+        let destination = destination.as_ref();
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        self.with_connection(|conn| {
+            let file = File::create(destination)?;
+            let mut writer = BufWriter::with_capacity(64 * 1024, file);
+            let mut stmt = conn.prepare_cached(
+                "SELECT candidate_text \
+                 FROM dictionary_candidates \
+                 ORDER BY success_count DESC, id ASC;",
+            )?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            let mut exported = 0u64;
+            for row in rows {
+                let candidate = row?;
+                if candidate.contains(['\r', '\n', '\0']) {
+                    continue;
+                }
+                writer.write_all(candidate.as_bytes())?;
+                writer.write_all(b"\n")?;
+                exported += 1;
+            }
+            writer.flush()?;
+            Ok(exported)
+        })
+    }
+
     /// Read a single candidate text by id (for tests / diagnostics).
     pub fn get_value(&self, id: i64) -> Result<Option<String>, DictionaryError> {
         self.with_connection(|conn| {
@@ -368,6 +403,24 @@ mod tests {
                 .unwrap()
                 .success_count,
             2
+        );
+    }
+
+    #[test]
+    fn export_wordlist_prioritizes_success_and_skips_multiline_values() {
+        let (dir, store) = temp_db();
+        store
+            .add_candidates(["first", "winner", "line\nbreak", "nul\0value"])
+            .expect("add");
+        store.increment_success("winner").expect("increment");
+        let destination = dir.path().join("dictionary.txt");
+
+        let exported = store.export_wordlist(&destination).expect("export");
+
+        assert_eq!(exported, 2);
+        assert_eq!(
+            std::fs::read_to_string(destination).expect("read"),
+            "winner\nfirst\n"
         );
     }
 }

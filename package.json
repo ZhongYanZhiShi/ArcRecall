@@ -14,7 +14,9 @@
     "build": "next build",
     "tauri": "mise exec -- tauri",
     "desktop:dev": "mise exec -- tauri dev",
-    "desktop:build": "mise exec -- tauri build",
+    "desktop:build": "pnpm engine-bundle:prepare && mise exec -- tauri build --config src-tauri/tauri.windows.full.conf.json",
+    "desktop:build:thin": "mise exec -- tauri build",
+    "engine-bundle:prepare": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/prepare-engine-bundle.ps1",
     "lint": "eslint",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
@@ -23,6 +25,7 @@
   "dependencies": {
     "@base-ui/react": "^1.6.0",
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.4.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.26.0",
