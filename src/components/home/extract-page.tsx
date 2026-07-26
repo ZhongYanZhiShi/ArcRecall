@@ -10,6 +10,7 @@ import {
 import * as React from "react"
 
 import { Button } from "@/components/ui/button"
+import { countDictionary, isDesktopRuntime } from "@/lib/dictionary"
 import { cn } from "@/lib/utils"
 
 type OutputMode = "sibling" | "custom"
@@ -28,6 +29,27 @@ export function ExtractPage() {
   const [dragOver, setDragOver] = React.useState(false)
   // 空状态为 idle；后续接业务后在选文件/验密成功时 setPhase("ready")
   const [phase] = React.useState<ViewPhase>("idle")
+  const [dictionaryCount, setDictionaryCount] = React.useState<number | null>(
+    null
+  )
+
+  React.useEffect(() => {
+    let cancelled = false
+    void countDictionary()
+      .then((count) => {
+        if (!cancelled) {
+          setDictionaryCount(count)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDictionaryCount(isDesktopRuntime() ? null : 0)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   /** 自定义输出目录：整块路径控件可点；业务接入后在此调系统目录选择器 */
   const handlePickOutputDir = React.useCallback(() => {
@@ -227,7 +249,8 @@ export function ExtractPage() {
             </div>
             <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/30 px-3 py-2">
               <p className="truncate text-xs text-muted-foreground">
-                全局字典候选 · —
+                全局字典候选 ·{" "}
+                {dictionaryCount == null ? "—" : `${dictionaryCount} 条`}
               </p>
               <div className="flex shrink-0 gap-2">
                 <Button size="sm" variant="outline" className="rounded-md">

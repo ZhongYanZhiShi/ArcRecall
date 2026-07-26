@@ -3,12 +3,13 @@
 import * as React from "react"
 
 import { AppShell, NAV_ORDER, type NavId } from "@/components/app-shell"
+import { DictionaryPage } from "@/components/home/dictionary-page"
 import { ExtractPage } from "@/components/home/extract-page"
 import { PlaceholderPage } from "@/components/home/placeholder-page"
 import { cn } from "@/lib/utils"
 
 const PLACEHOLDERS: Record<
-  Exclude<NavId, "extract">,
+  Exclude<NavId, "extract" | "dictionary">,
   { eyebrow: string; title: string; description: string }
 > = {
   compress: {
@@ -16,12 +17,6 @@ const PLACEHOLDERS: Record<
     title: "压缩",
     description:
       "选择文件或文件夹创建 7z / ZIP 归档，可设置压缩级别、密码与文件名加密。",
-  },
-  dictionary: {
-    eyebrow: "Candidates",
-    title: "字典",
-    description:
-      "管理本机全局密码候选集：导入文本字典、单条或粘贴新增、搜索与删除。",
   },
   history: {
     eyebrow: "Recall",
@@ -53,6 +48,9 @@ function prefersReducedMotion() {
 function renderNavPage(nav: NavId) {
   if (nav === "extract") {
     return <ExtractPage />
+  }
+  if (nav === "dictionary") {
+    return <DictionaryPage />
   }
   return <PlaceholderPage {...PLACEHOLDERS[nav]} />
 }
