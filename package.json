@@ -14,6 +14,7 @@
     "build": "next build",
     "tauri": "mise exec -- tauri",
     "desktop:dev": "mise exec -- tauri dev",
+    "desktop:dev:full": "pnpm engine-bundle:prepare && mise exec -- tauri dev --config src-tauri/tauri.windows.full.conf.json",
     "desktop:build": "pnpm engine-bundle:prepare && mise exec -- tauri build --config src-tauri/tauri.windows.full.conf.json",
     "desktop:build:thin": "mise exec -- tauri build",
     "engine-bundle:prepare": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/prepare-engine-bundle.ps1",
