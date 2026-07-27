@@ -70,4 +70,5 @@ impl Default for DictionaryCandidateQuery {
 pub struct DictionaryListResult {
     pub entries: Vec<DictionaryCandidateEntry>,
     pub total_count: u64,
+    pub matched_count: u64,
 }

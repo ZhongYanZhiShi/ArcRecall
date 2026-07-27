@@ -29,6 +29,7 @@ export type DictionaryCandidateQuery = {
 export type DictionaryListResult = {
   entries: DictionaryCandidateEntry[]
   totalCount: number
+  matchedCount: number
 }
 
 const EMPTY_SUMMARY: DictionaryCandidateAddSummary = {
@@ -240,6 +241,7 @@ const memoryStore = (() => {
     return {
       entries: all.slice(skip, skip + take),
       totalCount: byText.size,
+      matchedCount: all.length,
     }
   }
 

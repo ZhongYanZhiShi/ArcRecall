@@ -188,6 +188,18 @@ impl DictionaryCandidateStore {
         })
     }
 
+    pub fn count_matches(&self, search_text: &str) -> Result<u64, DictionaryError> {
+        self.with_connection(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM dictionary_candidates \
+                 WHERE ?1 = '' OR instr(candidate_text, ?1) > 0;",
+                [search_text],
+                |row| row.get(0),
+            )?;
+            Ok(count as u64)
+        })
+    }
+
     pub fn list(
         &self,
         query: &DictionaryCandidateQuery,
@@ -195,6 +207,7 @@ impl DictionaryCandidateStore {
         Ok(DictionaryListResult {
             entries: self.list_entries(query)?,
             total_count: self.count()?,
+            matched_count: self.count_matches(&query.search_text)?,
         })
     }
 
@@ -330,25 +343,42 @@ mod tests {
     }
 
     #[test]
-    fn list_search_and_delete() {
+    fn list_search_pagination_and_delete() {
         let (_dir, store) = temp_db();
         store
             .add_candidates(["alpha", "beta", "alphabet"])
             .expect("add");
 
-        let matches = store
-            .list_entries(&DictionaryCandidateQuery {
+        let page = store
+            .list(&DictionaryCandidateQuery {
+                search_text: String::new(),
+                skip: 1,
+                take: 1,
+            })
+            .expect("page");
+        assert_eq!(page.total_count, 3);
+        assert_eq!(page.matched_count, 3);
+        assert_eq!(page.entries[0].value, "beta");
+
+        let result = store
+            .list(&DictionaryCandidateQuery {
                 search_text: "alpha".into(),
                 skip: 0,
                 take: 10,
             })
             .expect("search");
+        assert_eq!(result.total_count, 3);
+        assert_eq!(result.matched_count, 2);
         assert_eq!(
-            matches.iter().map(|e| e.value.as_str()).collect::<Vec<_>>(),
+            result
+                .entries
+                .iter()
+                .map(|e| e.value.as_str())
+                .collect::<Vec<_>>(),
             ["alpha", "alphabet"]
         );
 
-        store.delete(&[matches[0].id]).expect("delete");
+        store.delete(&[result.entries[0].id]).expect("delete");
         let remaining = store
             .list_entries(&DictionaryCandidateQuery::default())
             .expect("list");

@@ -1,6 +1,15 @@
 "use client"
 
-import { FileUp, Library, Plus, RefreshCw, Search, Trash2 } from "lucide-react"
+import {
+  ChevronLeft,
+  ChevronRight,
+  FileUp,
+  Library,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+} from "lucide-react"
 import * as React from "react"
 
 import {
@@ -13,7 +22,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -60,7 +68,8 @@ type StatusTone = "neutral" | "busy" | "ok" | "warn"
 
 export function DictionaryPage() {
   const [entries, setEntries] = React.useState<DictionaryCandidateEntry[]>([])
-  const [totalCount, setTotalCount] = React.useState(0)
+  const [pageIndex, setPageIndex] = React.useState(0)
+  const [matchedCount, setMatchedCount] = React.useState(0)
   const [searchInput, setSearchInput] = React.useState("")
   const [appliedSearch, setAppliedSearch] = React.useState("")
   const [selectedIds, setSelectedIds] = React.useState<Set<number>>(
@@ -76,27 +85,52 @@ export function DictionaryPage() {
   const [singleCandidate, setSingleCandidate] = React.useState("")
   const [pastedCandidates, setPastedCandidates] = React.useState("")
   const fileInputRef = React.useRef<HTMLInputElement>(null)
+  const scrollAreaRef = React.useRef<HTMLDivElement>(null)
 
-  const loadEntries = React.useCallback(async (searchText: string) => {
-    const result = await listDictionary({
-      searchText,
-      skip: 0,
-      take: DICTIONARY_PAGE_SIZE,
-    })
-    setEntries(result.entries)
-    setTotalCount(result.totalCount)
-    setSelectedIds((prev) => {
-      const visible = new Set(result.entries.map((e) => e.id))
-      const next = new Set<number>()
-      for (const id of prev) {
-        if (visible.has(id)) {
-          next.add(id)
-        }
+  const loadEntries = React.useCallback(
+    async (searchText: string, requestedPageIndex = 0) => {
+      const fetchPage = (nextPageIndex: number) =>
+        listDictionary({
+          searchText,
+          skip: nextPageIndex * DICTIONARY_PAGE_SIZE,
+          take: DICTIONARY_PAGE_SIZE,
+        })
+
+      let resolvedPageIndex = Math.max(0, requestedPageIndex)
+      let result = await fetchPage(resolvedPageIndex)
+      const lastPageIndex = Math.max(
+        0,
+        Math.ceil(result.matchedCount / DICTIONARY_PAGE_SIZE) - 1
+      )
+
+      if (resolvedPageIndex > lastPageIndex) {
+        resolvedPageIndex = lastPageIndex
+        result = await fetchPage(resolvedPageIndex)
       }
-      return next
-    })
-    return result
-  }, [])
+
+      setEntries(result.entries)
+      setMatchedCount(result.matchedCount)
+      setPageIndex(resolvedPageIndex)
+      setSelectedIds((prev) => {
+        const visible = new Set(result.entries.map((e) => e.id))
+        const next = new Set<number>()
+        for (const id of prev) {
+          if (visible.has(id)) {
+            next.add(id)
+          }
+        }
+        return next
+      })
+      const viewport = scrollAreaRef.current?.querySelector<HTMLElement>(
+        '[data-slot="scroll-area-viewport"]'
+      )
+      if (viewport) {
+        viewport.scrollTop = 0
+      }
+      return { ...result, pageIndex: resolvedPageIndex }
+    },
+    []
+  )
 
   const runBusy = React.useCallback(
     async (workingMessage: string, operation: () => Promise<void>) => {
@@ -149,7 +183,7 @@ export function DictionaryPage() {
 
   const handleRefresh = () => {
     void runBusy("正在刷新候选…", async () => {
-      const result = await loadEntries(appliedSearch)
+      const result = await loadEntries(appliedSearch, pageIndex)
       setStatusTone("ok")
       setStatus(
         formatLoadStatus(
@@ -165,7 +199,7 @@ export function DictionaryPage() {
   const handleSearch = () => {
     void runBusy("正在查询候选…", async () => {
       setAppliedSearch(searchInput)
-      const result = await loadEntries(searchInput)
+      const result = await loadEntries(searchInput, 0)
       setStatusTone("ok")
       setStatus(
         formatLoadStatus(
@@ -188,7 +222,7 @@ export function DictionaryPage() {
       const ids = [...selectedIds]
       await deleteDictionaryCandidates(ids)
       setSelectedIds(new Set())
-      const result = await loadEntries(appliedSearch)
+      const result = await loadEntries(appliedSearch, pageIndex)
       setStatusTone("ok")
       setStatus(
         `已删除 ${count} 个候选。全局字典候选共 ${result.totalCount} 条。`
@@ -203,7 +237,7 @@ export function DictionaryPage() {
     void runBusy("正在导入候选…", async () => {
       try {
         const summary = await importDictionaryFile(file)
-        const result = await loadEntries(appliedSearch)
+        const result = await loadEntries(appliedSearch, pageIndex)
         setStatusTone("ok")
         setStatus(
           `${formatAddStatus("导入完成", summary)} 全局共 ${result.totalCount} 条。`
@@ -224,7 +258,7 @@ export function DictionaryPage() {
     void runBusy("正在添加候选…", async () => {
       const summary = await addDictionaryCandidates([singleCandidate])
       setSingleCandidate("")
-      const result = await loadEntries(appliedSearch)
+      const result = await loadEntries(appliedSearch, pageIndex)
       setStatusTone("ok")
       setStatus(
         `${formatAddStatus("单条新增完成", summary)} 全局共 ${result.totalCount} 条。`
@@ -240,7 +274,7 @@ export function DictionaryPage() {
       const candidates = splitLines(pastedCandidates)
       const summary = await addDictionaryCandidates(candidates)
       setPastedCandidates("")
-      const result = await loadEntries(appliedSearch)
+      const result = await loadEntries(appliedSearch, pageIndex)
       setStatusTone("ok")
       setStatus(
         `${formatAddStatus("批量新增完成", summary)} 全局共 ${result.totalCount} 条。`
@@ -288,6 +322,28 @@ export function DictionaryPage() {
     entries.length > 0 && selectedVisibleCount === entries.length
   const someVisibleSelected =
     selectedVisibleCount > 0 && selectedVisibleCount < entries.length
+  const pageCount = Math.ceil(matchedCount / DICTIONARY_PAGE_SIZE)
+  const displayedPage = pageCount === 0 ? 0 : pageIndex + 1
+  const hasPreviousPage = pageIndex > 0
+  const hasNextPage = pageIndex + 1 < pageCount
+
+  const handlePageChange = (nextPageIndex: number) => {
+    if (
+      isBusy ||
+      nextPageIndex < 0 ||
+      nextPageIndex >= pageCount ||
+      nextPageIndex === pageIndex
+    ) {
+      return
+    }
+    void runBusy(`正在加载第 ${nextPageIndex + 1} 页…`, async () => {
+      const result = await loadEntries(appliedSearch, nextPageIndex)
+      setStatusTone("ok")
+      setStatus(
+        `第 ${result.pageIndex + 1} 页加载完成。全局字典候选共 ${result.totalCount} 条。`
+      )
+    })
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -376,79 +432,67 @@ export function DictionaryPage() {
 
         <Card
           size="sm"
-          className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden py-0 shadow-sm ring-border/60"
+          className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden rounded-xl py-0 shadow-sm ring-border/60"
         >
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 border-b border-border/80 py-2.5">
-            <div className="flex min-w-0 items-center gap-2">
-              <Checkbox
-                checked={allVisibleSelected}
-                indeterminate={someVisibleSelected}
-                disabled={isEmpty || isBusy}
-                onCheckedChange={(checked) =>
-                  toggleSelectAllVisible(checked === true)
-                }
-                aria-label="全选当前列表"
-              />
-              <CardDescription className="text-xs">
-                {selectedIds.size > 0
-                  ? `已选 ${selectedIds.size}`
-                  : `显示 ${entries.length} 条`}
-              </CardDescription>
-            </div>
-            <div className="flex shrink-0 items-center gap-1.5">
-              <Badge variant="secondary" className="font-normal">
-                全局 {totalCount}
-              </Badge>
-              {appliedSearch ? (
-                <Badge variant="outline" className="max-w-[10rem] font-normal">
-                  <span className="truncate">筛选 · {appliedSearch}</span>
-                </Badge>
-              ) : null}
-            </div>
-          </CardHeader>
-
           <CardContent className="min-h-0 flex-1 p-0">
-            {isEmpty ? (
-              <div className="flex h-full min-h-[220px] flex-col items-center justify-center px-6 py-10 text-center">
-                <div className="mb-3 flex size-11 items-center justify-center rounded-2xl bg-muted">
-                  <Library
-                    className="size-5 text-muted-foreground"
-                    strokeWidth={1.75}
-                  />
-                </div>
-                <p className="text-sm font-medium">没有可显示的候选</p>
-                <p className="mt-1 max-w-xs text-xs text-muted-foreground">
-                  导入字典文件，或直接添加候选；重复项会自动跳过。
-                </p>
-                <Button
-                  size="sm"
-                  className="mt-4"
-                  disabled={isBusy}
-                  onClick={() => setAddPanelOpen(true)}
-                >
-                  <Plus data-icon="inline-start" />
-                  添加候选
-                </Button>
-              </div>
-            ) : (
-              <ScrollArea className="h-full max-h-full">
-                <Table>
-                  <TableHeader>
+            <ScrollArea
+              ref={scrollAreaRef}
+              className="h-full max-h-full [&_[data-slot=table-container]]:overflow-visible"
+            >
+              <Table>
+                <TableHeader className="sticky top-0 z-10 bg-card">
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="h-9 w-10 px-3">
+                      <Checkbox
+                        checked={allVisibleSelected}
+                        indeterminate={someVisibleSelected}
+                        disabled={isEmpty || isBusy}
+                        onCheckedChange={(checked) =>
+                          toggleSelectAllVisible(checked === true)
+                        }
+                        aria-label="全选当前列表"
+                      />
+                    </TableHead>
+                    <TableHead className="h-9 px-3 text-xs">候选明文</TableHead>
+                    <TableHead className="h-9 w-20 px-3 text-right text-xs">
+                      字节
+                    </TableHead>
+                    <TableHead className="h-9 w-16 px-3 text-right text-xs">
+                      命中
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {isEmpty ? (
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="h-9 w-10 px-3" />
-                      <TableHead className="h-9 px-3 text-xs">
-                        候选明文
-                      </TableHead>
-                      <TableHead className="h-9 w-20 px-3 text-right text-xs">
-                        字节
-                      </TableHead>
-                      <TableHead className="h-9 w-16 px-3 text-right text-xs">
-                        命中
-                      </TableHead>
+                      <TableCell colSpan={4} className="p-0">
+                        <div className="flex min-h-[220px] flex-col items-center justify-center px-6 py-10 text-center">
+                          <div className="mb-3 flex size-11 items-center justify-center rounded-2xl bg-muted">
+                            <Library
+                              className="size-5 text-muted-foreground"
+                              strokeWidth={1.75}
+                            />
+                          </div>
+                          <p className="text-sm font-medium">
+                            没有可显示的候选
+                          </p>
+                          <p className="mt-1 max-w-xs text-xs text-muted-foreground">
+                            导入字典文件，或直接添加候选；重复项会自动跳过。
+                          </p>
+                          <Button
+                            size="sm"
+                            className="mt-4"
+                            disabled={isBusy}
+                            onClick={() => setAddPanelOpen(true)}
+                          >
+                            <Plus data-icon="inline-start" />
+                            添加候选
+                          </Button>
+                        </div>
+                      </TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {entries.map((entry) => {
+                  ) : (
+                    entries.map((entry) => {
                       const selected = selectedIds.has(entry.id)
                       return (
                         <TableRow
@@ -488,12 +532,42 @@ export function DictionaryPage() {
                           </TableCell>
                         </TableRow>
                       )
-                    })}
-                  </TableBody>
-                </Table>
-              </ScrollArea>
-            )}
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </ScrollArea>
           </CardContent>
+          <div className="flex h-10 shrink-0 items-center justify-between border-t border-border/80 px-3">
+            <p
+              className="text-xs text-muted-foreground tabular-nums"
+              aria-live="polite"
+            >
+              第 {displayedPage} / {pageCount} 页
+            </p>
+            <nav className="flex items-center gap-1" aria-label="字典分页">
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                disabled={isBusy || !hasPreviousPage}
+                onClick={() => handlePageChange(pageIndex - 1)}
+                aria-label="上一页"
+                title="上一页"
+              >
+                <ChevronLeft />
+              </Button>
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                disabled={isBusy || !hasNextPage}
+                onClick={() => handlePageChange(pageIndex + 1)}
+                aria-label="下一页"
+                title="下一页"
+              >
+                <ChevronRight />
+              </Button>
+            </nav>
+          </div>
         </Card>
 
         <Card
