@@ -9,7 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_recall_core::{
     APP_DATA_FOLDER_NAME, AppLogLevel, AppPaths, AppSettings, ArchiveAnalysis, ArchiveFormat,
-    CancellationToken, DEFAULT_RECURSIVE_MAX_ARCHIVES, DEFAULT_RECURSIVE_MAX_DEPTH, DatabaseInfo,
+    CancellationToken, CompressionError, CompressionFormat, CompressionJob, CompressionPhase,
+    CompressionUpdate, DEFAULT_RECURSIVE_MAX_ARCHIVES, DEFAULT_RECURSIVE_MAX_DEPTH, DatabaseInfo,
     DictionaryCandidateAddSummary, DictionaryCandidateQuery, DictionaryCandidateStore,
     DictionaryListResult, FullEngineBundleInstallResult, FullEngineBundleManager,
     FullEngineBundleStatus, HashcatInstallResult, HashcatStatus, HashcatToolDownloader,
@@ -17,14 +18,16 @@ use arc_recall_core::{
     RecoveryDictionary, RecoveryError, RecoveryHistoryListResult, RecoveryHistoryQuery,
     RecoveryHistoryRecord, RecoveryHistoryStore, RecoveryJob, RecoveryPhase, RecoveryToolPaths,
     RecoveryUpdate, RecursiveRecoveryOptions, SERVICE_NAME, SettingsStore, analyze_archive,
-    fingerprint_file_sha256, health_status, path_for_display, probe_john_perl,
-    recover_and_extract_recursive_lazy, resolve_tools_directory,
+    compress_archive, fingerprint_file_sha256, health_status, path_for_display,
+    prepare_compression, probe_john_perl, recover_and_extract_recursive_lazy,
+    resolve_tools_directory,
 };
 use logging::{LogExportResult, LogLevel, LogListResult, LogQuery, LogStore};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 static RECOVERY_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static COMPRESSION_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static DATABASE_BACKUP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const MIB_BYTES: u64 = 1024 * 1024;
 const RECOVERY_EVENT_LIMIT: usize = 80;
@@ -38,12 +41,19 @@ struct AppState {
     logger: Arc<LogStore>,
     engine_install: Arc<Mutex<()>>,
     recovery_task: Mutex<Option<RecoveryTaskHandle>>,
+    compression_task: Mutex<Option<CompressionTaskHandle>>,
 }
 
 struct RecoveryTaskHandle {
     id: String,
     cancellation: CancellationToken,
     status: Arc<Mutex<RecoveryTaskStatus>>,
+}
+
+struct CompressionTaskHandle {
+    id: String,
+    cancellation: CancellationToken,
+    status: Arc<Mutex<CompressionTaskStatus>>,
 }
 
 #[derive(Serialize)]
@@ -64,6 +74,42 @@ struct RecoveryStartRequest {
     avoid_output_collision: bool,
     #[serde(default = "default_recursive_recovery")]
     recursive: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompressionStartRequest {
+    sources: Vec<String>,
+    output_directory: Option<String>,
+    base_name: String,
+    #[serde(default)]
+    format: CompressionFormat,
+    #[serde(default = "default_compression_level")]
+    level: u8,
+    password: Option<String>,
+    #[serde(default)]
+    encrypt_file_names: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompressionTaskStatus {
+    task_id: String,
+    phase: CompressionPhase,
+    running: bool,
+    completed: bool,
+    success: bool,
+    cancelled: bool,
+    message: String,
+    processed_source_count: u64,
+    total_source_count: u64,
+    started_at_ms: u64,
+    elapsed_ms: u64,
+    output_path: String,
+}
+
+const fn default_compression_level() -> u8 {
+    5
 }
 
 #[derive(Debug, Serialize)]
@@ -924,6 +970,228 @@ async fn archive_analyze(
 }
 
 #[tauri::command]
+async fn compression_start(
+    state: State<'_, AppState>,
+    request: CompressionStartRequest,
+) -> Result<CompressionTaskStatus, String> {
+    {
+        let current = state
+            .compression_task
+            .lock()
+            .map_err(|error| error.to_string())?;
+        if let Some(task) = current.as_ref() {
+            let status = task.status.lock().map_err(|error| error.to_string())?;
+            if status.running {
+                return Err("已有压缩任务正在运行，请先等待完成或取消。".into());
+            }
+        }
+    }
+
+    let manager = full_bundle_manager(&state)?;
+    let bundle_status = manager.status();
+    if !bundle_status.seven_zip.runnable {
+        if bundle_status.bundled {
+            return Err("7-Zip 尚未部署，请先在“设置 → 解密引擎”中安装完整包。".into());
+        }
+        return Err("当前构建未提供 7-Zip 资源，请使用完整发行构建并安装引擎包。".into());
+    }
+
+    let task_id = next_compression_task_id();
+    let prepared = prepare_compression(CompressionJob {
+        sources: request.sources.into_iter().map(PathBuf::from).collect(),
+        output_directory: request
+            .output_directory
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .map(PathBuf::from),
+        base_name: request.base_name,
+        format: request.format,
+        level: request.level,
+        password: request.password.filter(|password| !password.is_empty()),
+        encrypt_file_names: request.encrypt_file_names,
+        work_id: task_id.clone(),
+    })
+    .map_err(|error| error.to_string())?;
+    let started_at_ms = current_time_ms();
+    let initial = CompressionTaskStatus {
+        task_id: task_id.clone(),
+        phase: CompressionPhase::Preparing,
+        running: true,
+        completed: false,
+        success: false,
+        cancelled: false,
+        message: format!(
+            "已准备 {} 个来源，等待 7-Zip 启动。",
+            prepared.source_count()
+        ),
+        processed_source_count: 0,
+        total_source_count: prepared.source_count(),
+        started_at_ms,
+        elapsed_ms: 0,
+        output_path: path_for_display(prepared.output_path()),
+    };
+    let status = Arc::new(Mutex::new(initial.clone()));
+    let cancellation = CancellationToken::default();
+    {
+        let mut current = state
+            .compression_task
+            .lock()
+            .map_err(|error| error.to_string())?;
+        *current = Some(CompressionTaskHandle {
+            id: task_id.clone(),
+            cancellation: cancellation.clone(),
+            status: Arc::clone(&status),
+        });
+    }
+
+    write_log(
+        &state.logger,
+        LogLevel::Info,
+        "compression",
+        "compression.started",
+        "压缩任务已启动。",
+        [
+            ("task_id".into(), task_id.clone()),
+            (
+                "source_count".into(),
+                initial.total_source_count.to_string(),
+            ),
+            (
+                "format".into(),
+                format!("{:?}", request.format).to_lowercase(),
+            ),
+        ],
+    );
+
+    let seven_zip = manager.seven_zip_executable();
+    let status_for_updates = Arc::clone(&status);
+    let status_for_result = Arc::clone(&status);
+    let logger = Arc::clone(&state.logger);
+    std::thread::spawn(move || {
+        let result = compress_archive(
+            prepared,
+            &seven_zip,
+            &cancellation,
+            |update: CompressionUpdate| {
+                if let Ok(mut task_status) = status_for_updates.lock() {
+                    task_status.phase = update.phase;
+                    task_status.message = update.message;
+                    task_status.processed_source_count = update.processed_source_count;
+                    task_status.total_source_count = update.total_source_count;
+                }
+            },
+        );
+        if let Ok(mut task_status) = status_for_result.lock() {
+            task_status.running = false;
+            task_status.completed = true;
+            task_status.elapsed_ms = current_time_ms().saturating_sub(task_status.started_at_ms);
+            match result {
+                Ok(result) => {
+                    task_status.phase = CompressionPhase::Completed;
+                    task_status.success = true;
+                    task_status.message = "压缩完成。".into();
+                    task_status.processed_source_count = result.source_count;
+                    task_status.output_path = path_for_display(&result.output_path);
+                    write_log(
+                        &logger,
+                        LogLevel::Info,
+                        "compression",
+                        "compression.completed",
+                        "压缩任务已完成。",
+                        [
+                            ("task_id".into(), task_id.clone()),
+                            ("source_count".into(), result.source_count.to_string()),
+                        ],
+                    );
+                }
+                Err(CompressionError::Cancelled) => {
+                    task_status.phase = CompressionPhase::Cancelled;
+                    task_status.cancelled = true;
+                    task_status.message = "压缩任务已取消，临时归档已清理。".into();
+                    write_log(
+                        &logger,
+                        LogLevel::Warn,
+                        "compression",
+                        "compression.cancelled",
+                        "压缩任务已取消。",
+                        [("task_id".into(), task_id.clone())],
+                    );
+                }
+                Err(error) => {
+                    task_status.phase = CompressionPhase::Failed;
+                    task_status.message = error.to_string();
+                    write_log(
+                        &logger,
+                        LogLevel::Error,
+                        "compression",
+                        "compression.failed",
+                        "压缩任务执行失败。",
+                        [("task_id".into(), task_id.clone())],
+                    );
+                }
+            }
+        }
+    });
+
+    Ok(initial)
+}
+
+#[tauri::command]
+fn compression_status(
+    state: State<'_, AppState>,
+    task_id: Option<String>,
+) -> Result<Option<CompressionTaskStatus>, String> {
+    let current = state
+        .compression_task
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let Some(task) = current.as_ref() else {
+        return Ok(None);
+    };
+    if task_id.as_deref().is_some_and(|id| id != task.id) {
+        return Ok(None);
+    }
+    let mut status = task
+        .status
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    if status.running {
+        status.elapsed_ms = current_time_ms().saturating_sub(status.started_at_ms);
+    }
+    Ok(Some(status))
+}
+
+#[tauri::command]
+fn compression_cancel(state: State<'_, AppState>, task_id: String) -> Result<bool, String> {
+    let current = state
+        .compression_task
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let Some(task) = current.as_ref().filter(|task| task.id == task_id) else {
+        return Ok(false);
+    };
+    let status = task.status.lock().map_err(|error| error.to_string())?;
+    if !status.running {
+        return Ok(false);
+    }
+    drop(status);
+    task.cancellation.cancel();
+    if let Ok(mut status) = task.status.lock() {
+        status.message = "正在停止 7-Zip 并清理临时归档…".into();
+    }
+    write_log(
+        &state.logger,
+        LogLevel::Warn,
+        "compression",
+        "compression.cancel_requested",
+        "已请求停止压缩任务。",
+        [("task_id".into(), task_id)],
+    );
+    Ok(true)
+}
+
+#[tauri::command]
 async fn recovery_start(
     state: State<'_, AppState>,
     request: RecoveryStartRequest,
@@ -1500,6 +1768,12 @@ fn next_recovery_task_id() -> String {
     format!("recovery-{timestamp}-{sequence}")
 }
 
+fn next_compression_task_id() -> String {
+    let timestamp = current_time_ms();
+    let sequence = COMPRESSION_TASK_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("compression-{timestamp}-{sequence}")
+}
+
 /// Data root: `{LocalAppData}/ArcRecall` (not the reverse-domain identifier).
 fn resolve_app_paths(app: &AppHandle) -> Result<AppPaths, String> {
     let local = app
@@ -1555,6 +1829,7 @@ pub fn run() {
                 logger,
                 engine_install: Arc::new(Mutex::new(())),
                 recovery_task: Mutex::new(None),
+                compression_task: Mutex::new(None),
             });
             Ok(())
         })
@@ -1586,6 +1861,9 @@ pub fn run() {
             tool_john_perl_status,
             tool_set_john_perl,
             archive_analyze,
+            compression_start,
+            compression_status,
+            compression_cancel,
             recovery_start,
             recovery_status,
             recovery_cancel,

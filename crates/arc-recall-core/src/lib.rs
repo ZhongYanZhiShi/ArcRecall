@@ -20,16 +20,18 @@ pub use settings::{
     resolve_tools_directory,
 };
 pub use tools::{
-    ArchiveAnalysis, ArchiveFormat, CancellationToken, DEFAULT_RECURSIVE_MAX_ARCHIVES,
-    DEFAULT_RECURSIVE_MAX_DEPTH, ENGINE_BUNDLE_MANIFEST_VERSION, ENGINE_BUNDLE_TARGET,
-    EngineBundleError, EngineComponentStatus, FullEngineBundleInstallResult,
+    ArchiveAnalysis, ArchiveFormat, CancellationToken, CompressionError, CompressionFormat,
+    CompressionJob, CompressionPhase, CompressionResult, CompressionUpdate,
+    DEFAULT_RECURSIVE_MAX_ARCHIVES, DEFAULT_RECURSIVE_MAX_DEPTH, ENGINE_BUNDLE_MANIFEST_VERSION,
+    ENGINE_BUNDLE_TARGET, EngineBundleError, EngineComponentStatus, FullEngineBundleInstallResult,
     FullEngineBundleManager, FullEngineBundleStatus, HASHCAT_GITHUB_REPO, HASHCAT_MANIFEST_VERSION,
     HashcatInstallResult, HashcatStatus, HashcatToolDownloader, HashcatToolError, JOHN_VERSION,
-    JohnPerlStatus, PERL_VERSION, RecoveredArchive, RecoveryDictionary, RecoveryError, RecoveryJob,
-    RecoveryPhase, RecoveryResult, RecoveryToolPaths, RecoveryUpdate, RecursiveRecoveryOptions,
-    RecursiveRecoveryResult, SEVEN_ZIP_VERSION, analyze_archive, fingerprint_file_sha256,
-    path_for_display, probe_john_perl, recover_and_extract, recover_and_extract_lazy,
-    recover_and_extract_recursive_lazy,
+    JohnPerlStatus, PERL_VERSION, PreparedCompressionJob, RecoveredArchive, RecoveryDictionary,
+    RecoveryError, RecoveryJob, RecoveryPhase, RecoveryResult, RecoveryToolPaths, RecoveryUpdate,
+    RecursiveRecoveryOptions, RecursiveRecoveryResult, SEVEN_ZIP_VERSION, analyze_archive,
+    compress_archive, fingerprint_file_sha256, path_for_display, prepare_compression,
+    probe_john_perl, recover_and_extract, recover_and_extract_lazy,
+    recover_and_extract_recursive_lazy, resolve_available_archive_path, sanitize_archive_base_name,
 };
 
 pub const SERVICE_NAME: &str = "arc-recall-core";

@@ -1,4 +1,5 @@
 mod bundle;
+mod compression;
 mod hashcat;
 mod john;
 mod recovery;
@@ -8,6 +9,11 @@ pub use bundle::{
     ENGINE_BUNDLE_MANIFEST_VERSION, ENGINE_BUNDLE_TARGET, EngineBundleError, EngineComponentStatus,
     FullEngineBundleInstallResult, FullEngineBundleManager, FullEngineBundleStatus, JOHN_VERSION,
     PERL_VERSION, SEVEN_ZIP_VERSION,
+};
+pub use compression::{
+    CompressionError, CompressionFormat, CompressionJob, CompressionPhase, CompressionResult,
+    CompressionUpdate, PreparedCompressionJob, compress_archive, prepare_compression,
+    resolve_available_archive_path, sanitize_archive_base_name,
 };
 pub use hashcat::{
     HASHCAT_GITHUB_REPO, HASHCAT_MANIFEST_VERSION, HashcatInstallResult, HashcatStatus,

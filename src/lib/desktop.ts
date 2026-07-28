@@ -46,6 +46,19 @@ export {
 } from "@/lib/settings"
 
 export {
+  cancelCompression,
+  getCompressionStatus,
+  pickCompressionFiles,
+  pickCompressionFolder,
+  pickCompressionOutputDirectory,
+  startCompression,
+  type CompressionFormat,
+  type CompressionPhase,
+  type CompressionStartRequest,
+  type CompressionTaskStatus,
+} from "@/lib/compression"
+
+export {
   backupDatabase,
   clearLogs,
   exportLogs,
