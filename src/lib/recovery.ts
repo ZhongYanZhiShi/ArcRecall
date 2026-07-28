@@ -4,6 +4,23 @@ import { open } from "@tauri-apps/plugin-dialog"
 import { isDesktopRuntime } from "@/lib/dictionary"
 
 export type ArchiveFormat = "sevenZip" | "zip" | "rar3" | "rar5"
+export type RecoveryComputeMode = "gpuPreferred" | "cpuOnly"
+export type RecoveryComputeDevice = "gpu" | "cpu"
+
+export type RecoveryMethodCapability = {
+  id: string
+  label: string
+  device: RecoveryComputeDevice
+  supported: boolean
+  available: boolean
+  message: string
+}
+
+export type RecoveryCapabilities = {
+  gpuAvailable: boolean
+  cpuAvailable: boolean
+  methods: RecoveryMethodCapability[]
+}
 
 export type RecoveryPhase =
   | "preparing"
@@ -62,6 +79,7 @@ export type RecoveryTaskStatus = {
   elapsedMs: number
   recoveredPassword: string | null
   outputDirectory: string
+  computeMode: RecoveryComputeMode
   recursiveEnabled: boolean
   recursiveDepth: number
   currentArchivePath: string | null
@@ -81,6 +99,7 @@ export type RecoveryStartRequest = {
   knownPassword?: string | null
   avoidOutputCollision?: boolean
   recursive?: boolean
+  computeMode?: RecoveryComputeMode
 }
 
 function requireDesktopRuntime(): void {
@@ -118,6 +137,50 @@ export async function pickOutputDirectory(): Promise<string | null> {
 export async function analyzeArchive(path: string): Promise<ArchiveAnalysis> {
   requireDesktopRuntime()
   return invoke<ArchiveAnalysis>("archive_analyze", { path })
+}
+
+export async function getRecoveryCapabilities(): Promise<RecoveryCapabilities> {
+  if (!isDesktopRuntime()) {
+    return {
+      gpuAvailable: false,
+      cpuAvailable: false,
+      methods: [
+        {
+          id: "hashcatGpu",
+          label: "Hashcat GPU",
+          device: "gpu",
+          supported: true,
+          available: false,
+          message: "浏览器预览不包含桌面计算设备。",
+        },
+        {
+          id: "hashcatCpu",
+          label: "Hashcat CPU",
+          device: "cpu",
+          supported: true,
+          available: false,
+          message: "浏览器预览不包含桌面计算设备。",
+        },
+        {
+          id: "johnCpu",
+          label: "John CPU",
+          device: "cpu",
+          supported: true,
+          available: false,
+          message: "浏览器预览不包含桌面引擎。",
+        },
+        {
+          id: "sevenZipCpu",
+          label: "7-Zip CPU",
+          device: "cpu",
+          supported: true,
+          available: false,
+          message: "浏览器预览不包含桌面引擎。",
+        },
+      ],
+    }
+  }
+  return invoke<RecoveryCapabilities>("recovery_capabilities")
 }
 
 export async function startRecovery(

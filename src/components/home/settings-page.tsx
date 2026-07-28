@@ -11,6 +11,7 @@ import {
   Package,
   Sparkles,
   Settings2,
+  Zap,
 } from "lucide-react"
 import * as React from "react"
 
@@ -27,6 +28,11 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  getRecoveryCapabilities,
+  type RecoveryCapabilities,
+  type RecoveryComputeMode,
+} from "@/lib/recovery"
 import {
   type AppLogLevel,
   type AppSettings,
@@ -119,6 +125,12 @@ export function SettingsPage({
   const [hashcat, setHashcat] = React.useState<HashcatStatus | null>(null)
   const [johnPerl, setJohnPerl] = React.useState<JohnPerlStatus | null>(null)
   const [appSettings, setAppSettings] = React.useState<AppSettings | null>(null)
+  const [recoveryCapabilities, setRecoveryCapabilities] =
+    React.useState<RecoveryCapabilities | null>(null)
+  const [recoverySettingsBusy, setRecoverySettingsBusy] = React.useState(false)
+  const [recoverySettingsMessage, setRecoverySettingsMessage] = React.useState<
+    string | null
+  >(null)
   const [toolsDirInput, setToolsDirInput] = React.useState("")
   const [johnDirInput, setJohnDirInput] = React.useState("")
   const [perlPathInput, setPerlPathInput] = React.useState("")
@@ -135,14 +147,16 @@ export function SettingsPage({
 
   const refreshEngine = React.useCallback(async () => {
     try {
-      const [bundle, status, john] = await Promise.all([
+      const [bundle, status, john, recovery] = await Promise.all([
         getFullEngineBundleStatus(),
         getHashcatStatus(),
         getJohnPerlStatus(),
+        getRecoveryCapabilities(),
       ])
       setFullBundle(bundle)
       setHashcat(status)
       setJohnPerl(john)
+      setRecoveryCapabilities(recovery)
       setToolsDirInput(status.configuredToolsDirectory || "")
       setJohnDirInput(john.johnToolsDirectory || "")
       setPerlPathInput(john.perlPath || "")
@@ -158,13 +172,15 @@ export function SettingsPage({
     let cancelled = false
     void (async () => {
       try {
-        const [info, bundle, status, john, settings] = await Promise.all([
-          getDatabaseInfo(),
-          getFullEngineBundleStatus(),
-          getHashcatStatus(),
-          getJohnPerlStatus(),
-          getSettings(),
-        ])
+        const [info, bundle, status, john, settings, recovery] =
+          await Promise.all([
+            getDatabaseInfo(),
+            getFullEngineBundleStatus(),
+            getHashcatStatus(),
+            getJohnPerlStatus(),
+            getSettings(),
+            getRecoveryCapabilities(),
+          ])
         if (cancelled) {
           return
         }
@@ -173,6 +189,7 @@ export function SettingsPage({
         setHashcat(status)
         setJohnPerl(john)
         setAppSettings(settings)
+        setRecoveryCapabilities(recovery)
         setLogMaxDiskInput(
           String(settings.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB)
         )
@@ -439,6 +456,40 @@ export function SettingsPage({
     })()
   }
 
+  const handleRecoveryComputeModeChange = (mode: RecoveryComputeMode) => {
+    if (
+      recoverySettingsBusy ||
+      appSettings === null ||
+      (appSettings.recovery?.computeMode ?? "gpuPreferred") === mode
+    ) {
+      return
+    }
+    const previous = appSettings
+    const next: AppSettings = {
+      ...appSettings,
+      recovery: { computeMode: mode },
+    }
+    setAppSettings(next)
+    setRecoverySettingsBusy(true)
+    setRecoverySettingsMessage("正在保存默认解密方式…")
+    void (async () => {
+      try {
+        const saved = await setSettings(next)
+        setAppSettings(saved)
+        setRecoverySettingsMessage(
+          mode === "gpuPreferred"
+            ? "默认使用 GPU 优先；GPU 不可用或执行失败时自动回退 CPU。"
+            : "默认仅使用 CPU，恢复任务不会调用 GPU。"
+        )
+      } catch (error) {
+        setAppSettings(previous)
+        setRecoverySettingsMessage(`保存失败：${errorMessage(error)}`)
+      } finally {
+        setRecoverySettingsBusy(false)
+      }
+    })()
+  }
+
   const activeMeta =
     CATEGORIES.find((item) => item.id === category) ?? CATEGORIES[0]!
 
@@ -514,6 +565,109 @@ export function SettingsPage({
             </TabsContent>
 
             <TabsContent value="engine" className="mt-0 space-y-2 outline-none">
+              <Card size="sm">
+                <CardHeader className="border-b border-border/80">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <CardTitle className="text-sm">默认解密方式</CardTitle>
+                        <Badge variant="secondary" className="font-normal">
+                          可在解压页快速切换
+                        </Badge>
+                      </div>
+                      <CardDescription className="text-xs">
+                        GPU 优先会自动回退 CPU；仅 CPU 模式不会启动 GPU
+                        恢复进程。
+                      </CardDescription>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={engineBusy || recoverySettingsBusy}
+                      onClick={() => void refreshEngine()}
+                    >
+                      重新探测
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3 pt-4">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      disabled={recoverySettingsBusy}
+                      onClick={() =>
+                        handleRecoveryComputeModeChange("gpuPreferred")
+                      }
+                      className={cn(
+                        "flex items-start gap-2 rounded-xl border p-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-60",
+                        (appSettings?.recovery?.computeMode ??
+                          "gpuPreferred") === "gpuPreferred"
+                          ? "border-foreground bg-foreground text-background"
+                          : "border-border bg-card hover:bg-muted/50"
+                      )}
+                    >
+                      <Zap className="mt-0.5 size-4 shrink-0" />
+                      <span>
+                        <span className="block text-xs font-semibold">
+                          GPU 优先
+                        </span>
+                        <span className="mt-0.5 block text-[11px] opacity-70">
+                          Hashcat GPU → Hashcat / John / 7-Zip CPU
+                        </span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={recoverySettingsBusy}
+                      onClick={() => handleRecoveryComputeModeChange("cpuOnly")}
+                      className={cn(
+                        "flex items-start gap-2 rounded-xl border p-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-60",
+                        appSettings?.recovery?.computeMode === "cpuOnly"
+                          ? "border-foreground bg-foreground text-background"
+                          : "border-border bg-card hover:bg-muted/50"
+                      )}
+                    >
+                      <Cpu className="mt-0.5 size-4 shrink-0" />
+                      <span>
+                        <span className="block text-xs font-semibold">
+                          仅 CPU
+                        </span>
+                        <span className="mt-0.5 block text-[11px] opacity-70">
+                          Hashcat CPU → John CPU → 7-Zip CPU
+                        </span>
+                      </span>
+                    </button>
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">
+                      当前支持的恢复方式
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {recoveryCapabilities?.methods.map((method) => (
+                        <Badge
+                          key={method.id}
+                          title={method.message}
+                          variant={method.available ? "default" : "outline"}
+                          className="font-normal"
+                        >
+                          {method.label} ·{" "}
+                          {method.available ? "可用" : "未就绪"}
+                        </Badge>
+                      )) ?? (
+                        <Badge variant="outline" className="font-normal">
+                          正在探测…
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  {recoverySettingsMessage ? (
+                    <p className="rounded-xl bg-muted/50 px-2.5 py-2 text-xs text-muted-foreground">
+                      {recoverySettingsMessage}
+                    </p>
+                  ) : null}
+                </CardContent>
+              </Card>
+
               <Card size="sm">
                 <CardHeader className="border-b border-border/80">
                   <div className="flex flex-wrap items-start justify-between gap-2">

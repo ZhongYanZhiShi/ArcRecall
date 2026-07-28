@@ -97,6 +97,7 @@ export {
 export {
   analyzeArchive,
   cancelRecovery,
+  getRecoveryCapabilities,
   getRecoveryStatus,
   openOutputDirectory,
   pickArchivePath,
@@ -104,6 +105,10 @@ export {
   startRecovery,
   type ArchiveAnalysis,
   type ArchiveFormat,
+  type RecoveryCapabilities,
+  type RecoveryComputeDevice,
+  type RecoveryComputeMode,
+  type RecoveryMethodCapability,
   type RecoveryPhase,
   type RecoveryStartRequest,
   type RecoveryTaskStatus,

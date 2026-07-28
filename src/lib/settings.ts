@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core"
 
 import { countDictionary, isDesktopRuntime } from "@/lib/dictionary"
+import type { RecoveryComputeMode } from "@/lib/recovery"
 
 export type EngineSettings = {
   /** Empty = app default tools dir under ArcRecall. */
@@ -25,6 +26,9 @@ export type AppSettings = {
   version?: number
   engine?: EngineSettings
   logging?: LoggingSettings
+  recovery?: {
+    computeMode: RecoveryComputeMode
+  }
 }
 
 export type DatabaseInfo = {
@@ -175,6 +179,9 @@ export async function getSettings(): Promise<AppSettings> {
       logging: {
         level: "info",
         maxDiskMib: DEFAULT_LOG_MAX_DISK_MIB,
+      },
+      recovery: {
+        computeMode: "gpuPreferred",
       },
     }
   }

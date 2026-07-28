@@ -6,6 +6,7 @@ import {
   ChevronDown,
   CircleAlert,
   Copy,
+  Cpu,
   Eye,
   EyeOff,
   FolderPlus,
@@ -15,6 +16,7 @@ import {
   ShieldCheck,
   Square,
   Upload,
+  Zap,
 } from "lucide-react"
 import * as React from "react"
 
@@ -24,16 +26,20 @@ import { countDictionary, isDesktopRuntime } from "@/lib/dictionary"
 import {
   analyzeArchive,
   cancelRecovery,
+  getRecoveryCapabilities,
   getRecoveryStatus,
   openOutputDirectory,
   pickArchivePath,
   pickOutputDirectory,
   startRecovery,
   type ArchiveAnalysis,
+  type RecoveryCapabilities,
+  type RecoveryComputeMode,
   type RecoveryPhase,
   type RecoveryTaskEvent,
   type RecoveryTaskStatus,
 } from "@/lib/recovery"
+import { getSettings, setSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 
 type OutputMode = "sibling" | "custom"
@@ -60,6 +66,14 @@ export function ExtractPage() {
   const [outputDir, setOutputDir] = React.useState<string | null>(null)
   const [openWhenDone, setOpenWhenDone] = React.useState(true)
   const [recursive, setRecursive] = React.useState(true)
+  const [computeMode, setComputeMode] =
+    React.useState<RecoveryComputeMode>("gpuPreferred")
+  const [computeModeBusy, setComputeModeBusy] = React.useState(false)
+  const [capabilities, setCapabilities] =
+    React.useState<RecoveryCapabilities | null>(null)
+  const [capabilityError, setCapabilityError] = React.useState<string | null>(
+    null
+  )
   const [dragOver, setDragOver] = React.useState(false)
   const [analysis, setAnalysis] = React.useState<ArchiveAnalysis | null>(null)
   const [knownPassword, setKnownPassword] = React.useState("")
@@ -92,6 +106,32 @@ export function ExtractPage() {
   React.useEffect(refreshDictionaryCount, [refreshDictionaryCount])
 
   React.useEffect(() => {
+    let disposed = false
+    void getSettings()
+      .then((settings) => {
+        if (!disposed) {
+          setComputeMode(settings.recovery?.computeMode ?? "gpuPreferred")
+        }
+      })
+      .catch(() => undefined)
+    void getRecoveryCapabilities()
+      .then((next) => {
+        if (!disposed) {
+          setCapabilities(next)
+          setCapabilityError(null)
+        }
+      })
+      .catch((reason) => {
+        if (!disposed) {
+          setCapabilityError(toErrorMessage(reason))
+        }
+      })
+    return () => {
+      disposed = true
+    }
+  }, [])
+
+  React.useEffect(() => {
     if (!isDesktopRuntime()) {
       return
     }
@@ -100,6 +140,7 @@ export function ExtractPage() {
       .then((latest) => {
         if (!disposed && latest) {
           setTask((current) => current ?? latest)
+          setComputeMode(latest.computeMode ?? "gpuPreferred")
         }
       })
       .catch((reason) => {
@@ -302,6 +343,7 @@ export function ExtractPage() {
         knownPassword: knownPassword || null,
         avoidOutputCollision: outputMode === "sibling",
         recursive,
+        computeMode,
       })
       autoOpenTasks.current.add(started.taskId)
       setShowRecoveredPassword(false)
@@ -312,7 +354,33 @@ export function ExtractPage() {
     } finally {
       setBusy(false)
     }
-  }, [analysis, knownPassword, outputDir, outputMode, recursive])
+  }, [analysis, computeMode, knownPassword, outputDir, outputMode, recursive])
+
+  const handleComputeModeChange = React.useCallback(
+    async (nextMode: RecoveryComputeMode) => {
+      if (running || computeModeBusy || nextMode === computeMode) {
+        return
+      }
+      const previousMode = computeMode
+      setComputeMode(nextMode)
+      setComputeModeBusy(true)
+      setError(null)
+      try {
+        const current = await getSettings()
+        const saved = await setSettings({
+          ...current,
+          recovery: { computeMode: nextMode },
+        })
+        setComputeMode(saved.recovery?.computeMode ?? nextMode)
+      } catch (reason) {
+        setComputeMode(previousMode)
+        setError(`无法保存解密方式：${toErrorMessage(reason)}`)
+      } finally {
+        setComputeModeBusy(false)
+      }
+    },
+    [computeMode, computeModeBusy, running]
+  )
 
   const handleCancel = React.useCallback(async () => {
     if (!task?.running) {
@@ -572,6 +640,82 @@ export function ExtractPage() {
             <span className="shrink-0 text-[10px] text-muted-foreground">
               最多 5 层 · 100 个
             </span>
+          </div>
+          <div className="mt-2 border-t border-border/70 pt-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="shrink-0 text-xs font-medium">解密方式</span>
+              <div
+                role="group"
+                aria-label="解密算力"
+                className="relative grid h-8 shrink-0 grid-cols-2 items-stretch rounded-md border border-border bg-background p-0.5"
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded bg-foreground transition-transform duration-200",
+                    computeMode === "cpuOnly" && "translate-x-full"
+                  )}
+                />
+                <SegmentButton
+                  active={computeMode === "gpuPreferred"}
+                  onClick={() => void handleComputeModeChange("gpuPreferred")}
+                  disabled={running || computeModeBusy}
+                >
+                  <Zap className="size-3" />
+                  GPU 优先
+                </SegmentButton>
+                <SegmentButton
+                  active={computeMode === "cpuOnly"}
+                  onClick={() => void handleComputeModeChange("cpuOnly")}
+                  disabled={running || computeModeBusy}
+                >
+                  <Cpu className="size-3" />
+                  仅 CPU
+                </SegmentButton>
+              </div>
+              <span className="min-w-48 flex-1 text-[11px] text-muted-foreground">
+                {recoveryComputeSummary(
+                  task,
+                  computeMode,
+                  capabilities,
+                  computeModeBusy
+                )}
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="mr-0.5 text-[10px] text-muted-foreground">
+                当前支持
+              </span>
+              {capabilities?.methods.map((method) => (
+                <span
+                  key={method.id}
+                  title={method.message}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px]",
+                    method.available
+                      ? "border-foreground/15 bg-foreground/5 text-foreground"
+                      : "border-border text-muted-foreground"
+                  )}
+                >
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "size-1.5 rounded-full",
+                      method.available
+                        ? "bg-emerald-500"
+                        : "bg-muted-foreground/35"
+                    )}
+                  />
+                  {method.label}
+                </span>
+              )) ?? (
+                <span className="text-[10px] text-muted-foreground">
+                  {capabilityError
+                    ? "能力探测失败，可在设置中重新检测"
+                    : "正在探测计算设备与引擎…"}
+                </span>
+              )}
+            </div>
           </div>
         </section>
 
@@ -986,6 +1130,30 @@ function recoveryEventMetadata(event: RecoveryTaskEvent): string {
   return parts.join(" · ")
 }
 
+function recoveryComputeSummary(
+  task: RecoveryTaskStatus | null,
+  mode: RecoveryComputeMode,
+  capabilities: RecoveryCapabilities | null,
+  saving: boolean
+): string {
+  if (saving) {
+    return "正在保存默认解密方式…"
+  }
+  if (task?.running) {
+    return `当前正在使用：${task.engine || "7-Zip CPU 基础校验"}`
+  }
+  if (task?.completed) {
+    return `本次实际使用：${task.engine || "7-Zip CPU"}`
+  }
+  if (mode === "cpuOnly") {
+    return "准备仅使用 CPU，不会调用 GPU"
+  }
+  if (capabilities && !capabilities.gpuAvailable) {
+    return "未检测到可用 GPU，任务会自动使用 CPU"
+  }
+  return "准备优先使用 GPU，失败时自动回退 CPU"
+}
+
 function SegmentButton({
   active,
   onClick,
@@ -1003,7 +1171,7 @@ function SegmentButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "relative z-10 inline-flex h-full min-h-0 items-center justify-center rounded px-2.5 text-xs leading-none font-semibold transition-colors duration-200 outline-none",
+        "relative z-10 inline-flex h-full min-h-0 items-center justify-center gap-1 rounded px-2.5 text-xs leading-none font-semibold transition-colors duration-200 outline-none",
         "focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60",
         active
           ? "text-background"
