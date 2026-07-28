@@ -1,7 +1,6 @@
 "use client"
 
 import {
-  Archive,
   ArrowLeft,
   Cpu,
   Database,
@@ -57,7 +56,7 @@ import {
 } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 
-export type SettingsCategory = "compress" | "ai" | "engine" | "app" | "data"
+export type SettingsCategory = "ai" | "engine" | "app" | "data"
 
 const CATEGORIES: {
   id: SettingsCategory
@@ -65,12 +64,6 @@ const CATEGORIES: {
   icon: React.ComponentType<{ className?: string; strokeWidth?: number }>
   description: string
 }[] = [
-  {
-    id: "compress",
-    label: "压缩",
-    icon: Archive,
-    description: "默认格式、级别、密码与文件名加密",
-  },
   {
     id: "ai",
     label: "AI 模型",
@@ -87,7 +80,7 @@ const CATEGORIES: {
     id: "app",
     label: "应用",
     icon: Settings2,
-    description: "日志级别、容量、7-Zip 诊断与快捷入口",
+    description: "日志级别、容量与 7-Zip 运行诊断",
   },
   {
     id: "data",
@@ -553,13 +546,6 @@ export function SettingsPage({
           </TabsList>
 
           <div className="min-h-0 flex-1 overflow-y-auto pb-1">
-            <TabsContent value="compress" className="mt-0 outline-none">
-              <PlaceholderCategory
-                title="压缩默认值"
-                body="默认格式（7z / ZIP）、压缩级别、默认密码与 7z 文件名加密将在此配置。"
-              />
-            </TabsContent>
-
             <TabsContent value="ai" className="mt-0 outline-none">
               <AiSettingsPanel />
             </TabsContent>
@@ -1237,10 +1223,6 @@ export function SettingsPage({
                     />
                   </CardContent>
                 </Card>
-                <PlaceholderCategory
-                  title="资源管理器快捷解压"
-                  body="可启用 / 禁用「用 ArcRecall 快捷解压」右键菜单（HKCU，无需管理员）。"
-                />
               </div>
             </TabsContent>
 
@@ -1296,24 +1278,6 @@ export function SettingsPage({
         </Tabs>
       </div>
     </div>
-  )
-}
-
-function PlaceholderCategory({ title, body }: { title: string; body: string }) {
-  return (
-    <Card size="sm">
-      <CardHeader>
-        <div className="flex items-center gap-2">
-          <CardTitle className="text-sm">{title}</CardTitle>
-          <Badge variant="outline" className="font-normal">
-            待接入
-          </Badge>
-        </div>
-        <CardDescription className="text-xs leading-relaxed">
-          {body}
-        </CardDescription>
-      </CardHeader>
-    </Card>
   )
 }
 
