@@ -602,7 +602,7 @@ export function SettingsPage({
                         "flex items-start gap-2 rounded-xl border p-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-60",
                         (appSettings?.recovery?.computeMode ??
                           "gpuPreferred") === "gpuPreferred"
-                          ? "border-foreground bg-foreground text-background"
+                          ? "border-primary bg-primary text-primary-foreground"
                           : "border-border bg-card hover:bg-muted/50"
                       )}
                     >
@@ -623,7 +623,7 @@ export function SettingsPage({
                       className={cn(
                         "flex items-start gap-2 rounded-xl border p-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-60",
                         appSettings?.recovery?.computeMode === "cpuOnly"
-                          ? "border-foreground bg-foreground text-background"
+                          ? "border-primary bg-primary text-primary-foreground"
                           : "border-border bg-card hover:bg-muted/50"
                       )}
                     >
@@ -1115,7 +1115,7 @@ export function SettingsPage({
                               "rounded-xl border px-2.5 py-2 text-left transition-colors outline-none",
                               "focus-visible:ring-2 focus-visible:ring-ring/30 disabled:opacity-50",
                               active
-                                ? "border-foreground bg-foreground text-background"
+                                ? "border-primary bg-primary text-primary-foreground"
                                 : "border-border bg-background hover:bg-muted/60"
                             )}
                           >
@@ -1126,7 +1126,7 @@ export function SettingsPage({
                               className={cn(
                                 "mt-0.5 block text-[10px] leading-tight",
                                 active
-                                  ? "text-background/70"
+                                  ? "text-primary-foreground/70"
                                   : "text-muted-foreground"
                               )}
                             >

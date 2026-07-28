@@ -136,7 +136,7 @@ export function AppShell({ activeNav, onNavChange, children }: AppShellProps) {
   }, [updateIndicator])
 
   return (
-    <div className="relative flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
+    <div className="app-canvas relative flex h-svh min-h-0 flex-col overflow-hidden text-foreground">
       <main className="min-h-0 min-w-0 flex-1 overflow-hidden pb-20">
         {children}
       </main>
@@ -146,8 +146,8 @@ export function AppShell({ activeNav, onNavChange, children }: AppShellProps) {
           ref={navRef}
           aria-label="功能切换"
           className={cn(
-            "pointer-events-auto relative flex items-center gap-1 rounded-2xl border border-border/80 bg-background/90 p-1.5",
-            "shadow-lg shadow-black/5 backdrop-blur-md dark:shadow-black/30",
+            "pointer-events-auto relative flex items-center gap-1 rounded-2xl border border-border/80 bg-card/90 p-1.5",
+            "shadow-lg shadow-primary/5 backdrop-blur-md dark:shadow-black/30",
             "animate-dock-enter motion-safe-only"
           )}
         >
@@ -155,7 +155,7 @@ export function AppShell({ activeNav, onNavChange, children }: AppShellProps) {
           <span
             aria-hidden
             className={cn(
-              "pointer-events-none absolute top-0 left-0 rounded-xl bg-foreground shadow-sm",
+              "pointer-events-none absolute top-0 left-0 rounded-xl bg-primary shadow-sm",
               "transition-[transform,width,height,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
               indicator.ready ? "opacity-100" : "opacity-0"
             )}
@@ -240,7 +240,7 @@ const ToolButton = React.forwardRef<
         "transition-dock focus-visible:ring-2 focus-visible:ring-ring/40",
         "active:scale-95",
         active
-          ? "text-background"
+          ? "text-primary-foreground"
           : "text-muted-foreground hover:scale-105 hover:bg-muted/80 hover:text-foreground"
       )}
     >

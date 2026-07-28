@@ -442,8 +442,8 @@ export function CompressPage({
 
         <section
           className={cn(
-            "mt-4 shrink-0 rounded-2xl border border-dashed bg-card p-4",
-            dragOver && "dropzone-drag"
+            "mt-4 shrink-0 rounded-2xl border border-dashed p-4",
+            dragOver ? "dropzone-drag" : "workbench-dropzone border-border"
           )}
           aria-label="压缩来源"
         >
@@ -547,7 +547,7 @@ export function CompressPage({
           ) : null}
         </section>
 
-        <section className="mt-3 shrink-0 rounded-xl border border-border bg-card px-3 py-2.5">
+        <section className="workbench-panel mt-3 shrink-0 rounded-2xl border border-border/80 bg-card px-3 py-2.5">
           <div className="flex min-w-0 items-center gap-2">
             <div
               role="group"
@@ -557,7 +557,7 @@ export function CompressPage({
               <span
                 aria-hidden
                 className={cn(
-                  "motion-safe-only absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded bg-foreground transition-transform duration-200",
+                  "motion-safe-only absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded bg-primary transition-transform duration-200",
                   outputMode === "custom" && "translate-x-full"
                 )}
               />
@@ -610,7 +610,7 @@ export function CompressPage({
           </div>
         </section>
 
-        <section className="mt-3 shrink-0 rounded-xl border border-border bg-card p-3">
+        <section className="workbench-panel mt-3 shrink-0 rounded-2xl border border-border/80 bg-card p-3">
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_176px]">
             <div className="space-y-1.5">
               <Label htmlFor="archive-name">归档基础名称</Label>
@@ -709,7 +709,7 @@ export function CompressPage({
             {useAiRename && (!activeAiProfile || aiError) ? (
               <div
                 role="alert"
-                className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px] text-amber-800 dark:text-amber-200"
+                className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2 text-[11px] text-warning-foreground"
               >
                 <span className="min-w-0 flex-1">
                   {aiError ?? "尚未配置可用的 AI 模型，请先前往设置。"}
@@ -900,9 +900,9 @@ function CompressionTaskCard({
   return (
     <section
       className={cn(
-        "mt-3 shrink-0 overflow-hidden rounded-xl border bg-card",
+        "workbench-panel mt-3 shrink-0 overflow-hidden rounded-2xl border bg-card",
         task.success
-          ? "border-emerald-500/35"
+          ? "border-success/35"
           : task.phase === "failed"
             ? "border-destructive/35"
             : "border-border"
@@ -918,7 +918,7 @@ function CompressionTaskCard({
           aria-valuenow={progress}
         >
           <div
-            className="motion-safe-only h-full bg-foreground transition-[width] duration-300"
+            className="motion-safe-only h-full bg-primary transition-[width] duration-300"
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -929,7 +929,7 @@ function CompressionTaskCard({
             {task.running ? (
               <LoaderCircle className="size-4 shrink-0 animate-spin" />
             ) : task.success ? (
-              <Check className="size-4 shrink-0 text-emerald-600" />
+              <Check className="size-4 shrink-0 text-success-foreground" />
             ) : (
               <CircleAlert
                 className={cn(
@@ -1020,7 +1020,7 @@ function SegmentButton({
       className={cn(
         "motion-safe-only relative z-10 min-w-20 rounded px-2 text-[11px] font-medium transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50",
         active
-          ? "text-background"
+          ? "text-primary-foreground"
           : "text-muted-foreground hover:text-foreground"
       )}
     >
@@ -1082,9 +1082,7 @@ function SwitchControl({
       <span
         className={cn(
           "motion-safe-only relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors duration-200",
-          checked
-            ? "border-foreground bg-foreground"
-            : "border-border bg-muted",
+          checked ? "border-primary bg-primary" : "border-border bg-muted",
           disabled && "opacity-50"
         )}
       >

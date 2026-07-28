@@ -459,9 +459,9 @@ export function ExtractPage() {
             setDragOver(false)
           }}
           className={cn(
-            "flex shrink-0 flex-col items-center justify-center rounded-xl border border-dashed px-5 text-center transition-all",
+            "flex shrink-0 flex-col items-center justify-center rounded-2xl border border-dashed px-5 text-center transition-all",
             analysis ? "min-h-32 py-4" : "min-h-56 flex-1 py-6",
-            dragOver ? "dropzone-drag" : "border-border bg-muted/35"
+            dragOver ? "dropzone-drag" : "workbench-dropzone border-border"
           )}
         >
           <div
@@ -515,7 +515,7 @@ export function ExtractPage() {
           ) : null}
         </section>
 
-        <section className="mt-3 shrink-0 rounded-xl border border-border bg-card px-3 py-2">
+        <section className="workbench-panel mt-3 shrink-0 rounded-2xl border border-border/80 bg-card px-3 py-2">
           <div className="flex min-w-0 items-center gap-2">
             <div
               role="group"
@@ -525,7 +525,7 @@ export function ExtractPage() {
               <span
                 aria-hidden
                 className={cn(
-                  "absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded bg-foreground transition-transform duration-200",
+                  "absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded bg-primary transition-transform duration-200",
                   outputMode === "custom" && "translate-x-full"
                 )}
               />
@@ -588,7 +588,7 @@ export function ExtractPage() {
                 className={cn(
                   "relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors",
                   openWhenDone
-                    ? "border-foreground bg-foreground"
+                    ? "border-primary bg-primary"
                     : "border-border bg-muted"
                 )}
               >
@@ -623,7 +623,7 @@ export function ExtractPage() {
                 className={cn(
                   "relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors",
                   recursive
-                    ? "border-foreground bg-foreground"
+                    ? "border-primary bg-primary"
                     : "border-border bg-muted"
                 )}
               >
@@ -660,7 +660,7 @@ export function ExtractPage() {
                 <span
                   aria-hidden
                   className={cn(
-                    "absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded bg-foreground transition-transform duration-200",
+                    "absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded bg-primary transition-transform duration-200",
                     computeMode === "cpuOnly" && "translate-x-full"
                   )}
                 />
@@ -709,9 +709,7 @@ export function ExtractPage() {
                     aria-hidden
                     className={cn(
                       "size-1.5 rounded-full",
-                      method.available
-                        ? "bg-emerald-500"
-                        : "bg-muted-foreground/35"
+                      method.available ? "bg-success" : "bg-muted-foreground/35"
                     )}
                   />
                   {method.label}
@@ -754,7 +752,7 @@ export function ExtractPage() {
               />
             </div>
 
-            <div className="rounded-xl border border-border bg-card p-3">
+            <div className="workbench-panel rounded-2xl border border-border/80 bg-card p-3">
               <div className="mb-1 flex items-center justify-between gap-2">
                 <label
                   htmlFor="known-password"
@@ -891,13 +889,13 @@ function TaskResult({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border bg-card",
+        "workbench-panel overflow-hidden rounded-2xl border bg-card",
         task.success
-          ? "border-emerald-500/35"
+          ? "border-success/35"
           : task.phase === "failed"
             ? "border-destructive/35"
             : task.phase === "exhausted"
-              ? "border-amber-500/40"
+              ? "border-warning/40"
               : "border-border"
       )}
     >
@@ -911,7 +909,7 @@ function TaskResult({
           aria-valuenow={progress}
         >
           <div
-            className="h-full bg-foreground transition-[width] duration-300"
+            className="h-full bg-primary transition-[width] duration-300"
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -922,14 +920,14 @@ function TaskResult({
             {task.running ? (
               <LoaderCircle className="size-4 shrink-0 animate-spin" />
             ) : task.success ? (
-              <Check className="size-4 shrink-0 text-emerald-600" />
+              <Check className="size-4 shrink-0 text-success-foreground" />
             ) : (
               <CircleAlert
                 className={cn(
                   "size-4 shrink-0",
                   task.phase === "failed"
                     ? "text-destructive"
-                    : "text-amber-600"
+                    : "text-warning-foreground"
                 )}
               />
             )}
@@ -972,7 +970,7 @@ function TaskResult({
                 </p>
               ) : null}
               {task.depthLimitReached || task.countLimitReached ? (
-                <p className="text-amber-600">
+                <p className="text-warning-foreground">
                   已达到递归安全限制，剩余嵌套归档未继续处理。
                 </p>
               ) : null}
@@ -1003,7 +1001,7 @@ function TaskResult({
                 aria-label={passwordCopied ? "恢复密码已复制" : "复制恢复密码"}
               >
                 {passwordCopied ? (
-                  <Check className="size-3.5 text-emerald-600" />
+                  <Check className="size-3.5 text-success-foreground" />
                 ) : (
                   <Copy className="size-3.5" />
                 )}
@@ -1072,7 +1070,7 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
                 className={cn(
                   "rounded-full px-2 py-0.5 text-[10px] font-medium",
                   task.running
-                    ? "bg-foreground text-background"
+                    ? "bg-primary text-primary-foreground"
                     : "bg-muted text-muted-foreground"
                 )}
               >
@@ -1111,13 +1109,13 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
                     </time>
                     <span className="relative z-10 flex justify-center pt-0.5">
                       {current ? (
-                        <span className="flex size-4 items-center justify-center rounded-full bg-foreground text-background">
+                        <span className="flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground">
                           <LoaderCircle className="size-2.5 animate-spin" />
                         </span>
                       ) : event.phase === "failed" ||
                         event.phase === "cancelled" ||
                         event.phase === "exhausted" ? (
-                        <span className="flex size-4 items-center justify-center rounded-full bg-amber-100 text-amber-700">
+                        <span className="flex size-4 items-center justify-center rounded-full bg-warning/15 text-warning-foreground">
                           <CircleAlert className="size-2.5" />
                         </span>
                       ) : (
@@ -1232,7 +1230,7 @@ function SegmentButton({
         "relative z-10 inline-flex h-full min-h-0 items-center justify-center gap-1 rounded px-2.5 text-xs leading-none font-semibold transition-colors duration-200 outline-none",
         "focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60",
         active
-          ? "text-background"
+          ? "text-primary-foreground"
           : "text-muted-foreground hover:text-foreground"
       )}
     >
@@ -1290,7 +1288,7 @@ function StatusCard({
   icon: React.ReactNode
 }) {
   return (
-    <div className="rounded-xl border border-border bg-card px-3 py-2 transition-colors">
+    <div className="workbench-panel rounded-2xl border border-border/80 bg-card px-3 py-2 transition-colors">
       <div className="flex items-center justify-between gap-2">
         <p className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
           {icon}
