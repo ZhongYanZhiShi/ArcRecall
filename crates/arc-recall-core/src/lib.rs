@@ -18,8 +18,8 @@ pub use paths::{APP_DATA_FOLDER_NAME, AppPaths};
 pub use settings::{
     AiProfile, AiProviderKind, AiSettings, AppLogLevel, AppSettings, CURRENT_SETTINGS_VERSION,
     DEFAULT_AI_RENAME_PROMPT, DEFAULT_LOG_MAX_DISK_MIB, DatabaseInfo, EngineSettings,
-    LoggingSettings, MAX_LOG_MAX_DISK_MIB, MIN_LOG_MAX_DISK_MIB, SettingsError, SettingsStore,
-    resolve_tools_directory,
+    LoggingSettings, MAX_LOG_MAX_DISK_MIB, MIN_LOG_MAX_DISK_MIB, RecoverySettings, SettingsError,
+    SettingsStore, resolve_tools_directory,
 };
 pub use tools::{
     ArchiveAnalysis, ArchiveFormat, CancellationToken, CompressionError, CompressionFormat,
@@ -28,11 +28,12 @@ pub use tools::{
     ENGINE_BUNDLE_TARGET, EngineBundleError, EngineComponentStatus, FullEngineBundleInstallResult,
     FullEngineBundleManager, FullEngineBundleStatus, HASHCAT_GITHUB_REPO, HASHCAT_MANIFEST_VERSION,
     HashcatInstallResult, HashcatStatus, HashcatToolDownloader, HashcatToolError, JOHN_VERSION,
-    JohnPerlStatus, PERL_VERSION, PreparedCompressionJob, RecoveredArchive, RecoveryDictionary,
-    RecoveryError, RecoveryJob, RecoveryPhase, RecoveryResult, RecoveryToolPaths, RecoveryUpdate,
+    JohnPerlStatus, PERL_VERSION, PreparedCompressionJob, RecoveredArchive, RecoveryCapabilities,
+    RecoveryComputeDevice, RecoveryComputeMode, RecoveryDictionary, RecoveryError, RecoveryJob,
+    RecoveryMethodCapability, RecoveryPhase, RecoveryResult, RecoveryToolPaths, RecoveryUpdate,
     RecursiveRecoveryOptions, RecursiveRecoveryResult, SEVEN_ZIP_VERSION, analyze_archive,
     compress_archive, fingerprint_file_sha256, path_for_display, prepare_compression,
-    probe_john_perl, recover_and_extract, recover_and_extract_lazy,
+    probe_john_perl, probe_recovery_capabilities, recover_and_extract, recover_and_extract_lazy,
     recover_and_extract_recursive_lazy, resolve_available_archive_path, sanitize_archive_base_name,
 };
 

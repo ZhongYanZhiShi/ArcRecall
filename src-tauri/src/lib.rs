@@ -16,13 +16,13 @@ use arc_recall_core::{
     DictionaryListResult, FullEngineBundleInstallResult, FullEngineBundleManager,
     FullEngineBundleStatus, HashcatInstallResult, HashcatStatus, HashcatToolDownloader,
     JohnPerlStatus, LoggingSettings, MAX_LOG_MAX_DISK_MIB, MIN_LOG_MAX_DISK_MIB,
-    RecoveryDictionary, RecoveryError, RecoveryHistoryListResult, RecoveryHistoryQuery,
-    RecoveryHistoryRecord, RecoveryHistoryStore, RecoveryJob, RecoveryPhase, RecoveryToolPaths,
-    RecoveryUpdate, RecursiveRecoveryOptions, SERVICE_NAME, SettingsStore, analyze_archive,
-    compress_archive, fingerprint_file_sha256, generate_archive_name, health_status,
-    list_ai_models, path_for_display, prepare_compression, probe_john_perl,
-    recover_and_extract_recursive_lazy, resolve_tools_directory, test_ai_connection,
-    validate_ai_base_url,
+    RecoveryCapabilities, RecoveryComputeMode, RecoveryDictionary, RecoveryError,
+    RecoveryHistoryListResult, RecoveryHistoryQuery, RecoveryHistoryRecord, RecoveryHistoryStore,
+    RecoveryJob, RecoveryPhase, RecoveryToolPaths, RecoveryUpdate, RecursiveRecoveryOptions,
+    SERVICE_NAME, SettingsStore, analyze_archive, compress_archive, fingerprint_file_sha256,
+    generate_archive_name, health_status, list_ai_models, path_for_display, prepare_compression,
+    probe_john_perl, probe_recovery_capabilities, recover_and_extract_recursive_lazy,
+    resolve_tools_directory, test_ai_connection, validate_ai_base_url,
 };
 use logging::{LogExportResult, LogLevel, LogListResult, LogQuery, LogStore};
 use serde::{Deserialize, Serialize};
@@ -79,6 +79,8 @@ struct RecoveryStartRequest {
     avoid_output_collision: bool,
     #[serde(default = "default_recursive_recovery")]
     recursive: bool,
+    #[serde(default)]
+    compute_mode: RecoveryComputeMode,
 }
 
 #[derive(Debug, Deserialize)]
@@ -200,6 +202,7 @@ struct RecoveryTaskStatus {
     elapsed_ms: u64,
     recovered_password: Option<String>,
     output_directory: String,
+    compute_mode: RecoveryComputeMode,
     recursive_enabled: bool,
     recursive_depth: u32,
     current_archive_path: Option<String>,
@@ -1141,6 +1144,20 @@ async fn tool_full_bundle_status(
 }
 
 #[tauri::command]
+async fn recovery_capabilities(state: State<'_, AppState>) -> Result<RecoveryCapabilities, String> {
+    let manager = full_bundle_manager(&state)?;
+    let tools = RecoveryToolPaths {
+        seven_zip: manager.seven_zip_executable(),
+        hashcat: manager.hashcat_executable(),
+        john_tools_directory: manager.john_tools_directory(),
+        perl: manager.perl_executable(),
+    };
+    tauri::async_runtime::spawn_blocking(move || probe_recovery_capabilities(&tools))
+        .await
+        .map_err(|error| format!("解密能力探测任务失败：{error}"))
+}
+
+#[tauri::command]
 async fn tool_full_bundle_install(
     state: State<'_, AppState>,
 ) -> Result<FullEngineBundleInstallResult, String> {
@@ -1726,6 +1743,7 @@ async fn recovery_start(
         elapsed_ms: 0,
         recovered_password: None,
         output_directory: path_for_display(&output_directory),
+        compute_mode: request.compute_mode,
         recursive_enabled: request.recursive,
         recursive_depth: 0,
         current_archive_path: Some(analysis.archive_path.clone()),
@@ -1794,6 +1812,7 @@ async fn recovery_start(
                 enabled: initial.recursive_enabled,
                 max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
                 max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
+                compute_mode: initial.compute_mode,
             },
             move || {
                 if dictionary_cancellation.is_cancelled() {
@@ -2272,6 +2291,7 @@ pub fn run() {
             ai_connection_test,
             ai_generate_archive_name,
             tool_full_bundle_status,
+            recovery_capabilities,
             tool_full_bundle_install,
             tool_hashcat_status,
             tool_hashcat_download,
@@ -2401,6 +2421,7 @@ mod tests {
             elapsed_ms: 0,
             recovered_password: None,
             output_directory: "output".into(),
+            compute_mode: RecoveryComputeMode::GpuPreferred,
             recursive_enabled: true,
             recursive_depth: 0,
             current_archive_path: Some("archive.7z".into()),

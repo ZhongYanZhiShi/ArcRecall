@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::tools::RecoveryComputeMode;
+
 pub const DEFAULT_LOG_MAX_DISK_MIB: u16 = 25;
 pub const MIN_LOG_MAX_DISK_MIB: u16 = 5;
 pub const MAX_LOG_MAX_DISK_MIB: u16 = 500;
@@ -71,6 +73,13 @@ pub struct EngineSettings {
     /// Absolute path to perl.exe (for 7z2john.pl).
     #[serde(default)]
     pub perl_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoverySettings {
+    #[serde(default)]
+    pub compute_mode: RecoveryComputeMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -189,6 +198,8 @@ pub struct AppSettings {
     pub logging: LoggingSettings,
     #[serde(default)]
     pub ai: AiSettings,
+    #[serde(default)]
+    pub recovery: RecoverySettings,
 }
 
 impl Default for AppSettings {
@@ -198,6 +209,7 @@ impl Default for AppSettings {
             engine: EngineSettings::default(),
             logging: LoggingSettings::default(),
             ai: AiSettings::default(),
+            recovery: RecoverySettings::default(),
         }
     }
 }

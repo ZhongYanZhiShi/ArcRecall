@@ -68,6 +68,49 @@ pub enum RecoveryPhase {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum RecoveryComputeMode {
+    #[default]
+    GpuPreferred,
+    CpuOnly,
+}
+
+impl RecoveryComputeMode {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::GpuPreferred => "GPU 优先",
+            Self::CpuOnly => "仅 CPU",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecoveryComputeDevice {
+    Gpu,
+    Cpu,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryMethodCapability {
+    pub id: String,
+    pub label: String,
+    pub device: RecoveryComputeDevice,
+    pub supported: bool,
+    pub available: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryCapabilities {
+    pub gpu_available: bool,
+    pub cpu_available: bool,
+    pub methods: Vec<RecoveryMethodCapability>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArchiveAnalysis {
@@ -183,6 +226,7 @@ pub struct RecursiveRecoveryOptions {
     pub enabled: bool,
     pub max_depth: u32,
     pub max_nested_archives: u32,
+    pub compute_mode: RecoveryComputeMode,
 }
 
 impl Default for RecursiveRecoveryOptions {
@@ -191,6 +235,7 @@ impl Default for RecursiveRecoveryOptions {
             enabled: true,
             max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
             max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
+            compute_mode: RecoveryComputeMode::default(),
         }
     }
 }
@@ -550,6 +595,7 @@ pub fn recover_and_extract_lazy(
         job,
         tools,
         cancellation,
+        RecoveryComputeMode::default(),
         &mut || {
             let prepare = prepare_dictionary
                 .take()
@@ -603,6 +649,7 @@ pub fn recover_and_extract_recursive_lazy(
         job,
         tools,
         cancellation,
+        options.compute_mode,
         &mut dictionary_provider,
         &mut report,
     )?;
@@ -736,6 +783,7 @@ pub fn recover_and_extract_recursive_lazy(
             &nested_job,
             tools,
             cancellation,
+            state.options.compute_mode,
             &mut dictionary_provider,
             &mut |update| {
                 report(update.with_recursive_context(
@@ -1004,6 +1052,7 @@ fn recover_single_archive(
     job: &RecoveryJob,
     tools: &RecoveryToolPaths,
     cancellation: &CancellationToken,
+    compute_mode: RecoveryComputeMode,
     prepare_dictionary: &mut impl FnMut() -> Result<RecoveryDictionary, RecoveryError>,
     report: &mut impl FnMut(RecoveryUpdate),
 ) -> Result<RecoveryResult, RecoveryError> {
@@ -1088,6 +1137,7 @@ fn recover_single_archive(
         tools,
         analysis.format,
         cancellation,
+        compute_mode,
         report,
     )?;
     Ok(attach_recovered_archive(
@@ -1102,6 +1152,7 @@ fn recover_with_dictionary(
     tools: &RecoveryToolPaths,
     format: ArchiveFormat,
     cancellation: &CancellationToken,
+    compute_mode: RecoveryComputeMode,
     report: &mut impl FnMut(RecoveryUpdate),
 ) -> Result<RecoveryResult, RecoveryError> {
     let mut fallback_reasons = Vec::new();
@@ -1136,7 +1187,7 @@ fn recover_with_dictionary(
     let mut hashcat_completed = false;
     if let Some(records) = records.as_ref() {
         if tools.hashcat.is_file() {
-            for (device_type, engine) in [("2", "Hashcat GPU"), ("1", "Hashcat CPU")] {
+            for &(device_type, engine) in hashcat_device_plan(compute_mode) {
                 for (record_index, record) in records.iter().enumerate() {
                     ensure_not_cancelled(cancellation)?;
                     let hash_file = job
@@ -1293,6 +1344,112 @@ fn converter_name(format: ArchiveFormat) -> &'static str {
         ArchiveFormat::Zip => "zip2john",
         ArchiveFormat::Rar3 | ArchiveFormat::Rar5 => "rar2john",
     }
+}
+
+fn hashcat_device_plan(mode: RecoveryComputeMode) -> &'static [(&'static str, &'static str)] {
+    const GPU_PREFERRED: [(&str, &str); 2] = [("2", "Hashcat GPU"), ("1", "Hashcat CPU")];
+    const CPU_ONLY: [(&str, &str); 1] = [("1", "Hashcat CPU")];
+    match mode {
+        RecoveryComputeMode::GpuPreferred => &GPU_PREFERRED,
+        RecoveryComputeMode::CpuOnly => &CPU_ONLY,
+    }
+}
+
+pub fn probe_recovery_capabilities(tools: &RecoveryToolPaths) -> RecoveryCapabilities {
+    let (hashcat_gpu, hashcat_cpu, hashcat_message) = probe_hashcat_devices(&tools.hashcat);
+    let john_available = tools.john_tools_directory.join("john.exe").is_file();
+    let seven_zip_available = tools.seven_zip.is_file();
+    let cpu_available = hashcat_cpu || john_available || seven_zip_available;
+
+    RecoveryCapabilities {
+        gpu_available: hashcat_gpu,
+        cpu_available,
+        methods: vec![
+            RecoveryMethodCapability {
+                id: "hashcatGpu".into(),
+                label: "Hashcat GPU".into(),
+                device: RecoveryComputeDevice::Gpu,
+                supported: true,
+                available: hashcat_gpu,
+                message: hashcat_message.clone(),
+            },
+            RecoveryMethodCapability {
+                id: "hashcatCpu".into(),
+                label: "Hashcat CPU".into(),
+                device: RecoveryComputeDevice::Cpu,
+                supported: true,
+                available: hashcat_cpu,
+                message: hashcat_message,
+            },
+            RecoveryMethodCapability {
+                id: "johnCpu".into(),
+                label: "John CPU".into(),
+                device: RecoveryComputeDevice::Cpu,
+                supported: true,
+                available: john_available,
+                message: if john_available {
+                    "John CPU 引擎已就绪。".into()
+                } else {
+                    "John CPU 引擎尚未安装。".into()
+                },
+            },
+            RecoveryMethodCapability {
+                id: "sevenZipCpu".into(),
+                label: "7-Zip CPU".into(),
+                device: RecoveryComputeDevice::Cpu,
+                supported: true,
+                available: seven_zip_available,
+                message: if seven_zip_available {
+                    "7-Zip CPU 兼容验密已就绪。".into()
+                } else {
+                    "7-Zip CPU 引擎尚未安装。".into()
+                },
+            },
+        ],
+    }
+}
+
+fn probe_hashcat_devices(hashcat: &Path) -> (bool, bool, String) {
+    if !hashcat.is_file() {
+        return (false, false, "Hashcat 尚未安装。".into());
+    }
+    let mut request = ProcessRequest::new(hashcat);
+    request.args = vec![OsString::from("-I")];
+    request.current_dir = hashcat.parent().map(Path::to_path_buf);
+    request.timeout = Duration::from_secs(15);
+    request.max_output_bytes = 512 * 1024;
+    match run_process(&request, None) {
+        Ok(output) => {
+            let combined = format!("{}\n{}", output.stdout, output.stderr);
+            let (gpu, cpu) = parse_hashcat_device_types(&combined);
+            let message = match (gpu, cpu) {
+                (true, true) => "Hashcat 已检测到 GPU 与 CPU 计算设备。",
+                (true, false) => "Hashcat 已检测到 GPU 计算设备。",
+                (false, true) => "Hashcat 已检测到 CPU 计算设备。",
+                (false, false) => "Hashcat 可启动，但未检测到可用计算设备。",
+            };
+            (gpu, cpu, message.into())
+        }
+        Err(error) => (false, false, format!("Hashcat 计算设备探测失败：{error}")),
+    }
+}
+
+fn parse_hashcat_device_types(output: &str) -> (bool, bool) {
+    let mut gpu = false;
+    let mut cpu = false;
+    for line in output.lines() {
+        let Some((field, value)) = line.split_once(':') else {
+            continue;
+        };
+        let field = field.trim().trim_end_matches('.').to_ascii_lowercase();
+        if field != "type" {
+            continue;
+        }
+        let value = value.trim().to_ascii_lowercase();
+        gpu |= value.split_whitespace().any(|part| part == "gpu");
+        cpu |= value.split_whitespace().any(|part| part == "cpu");
+    }
+    (gpu, cpu)
 }
 
 fn run_internal_dictionary(
@@ -1864,6 +2021,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn compute_mode_selects_expected_hashcat_devices() {
+        assert_eq!(
+            hashcat_device_plan(RecoveryComputeMode::GpuPreferred),
+            [("2", "Hashcat GPU"), ("1", "Hashcat CPU")]
+        );
+        assert_eq!(
+            hashcat_device_plan(RecoveryComputeMode::CpuOnly),
+            [("1", "Hashcat CPU")]
+        );
+    }
+
+    #[test]
+    fn parses_hashcat_device_types_from_backend_info() {
+        let output = r#"
+Device ID #1
+  Type...........: GPU
+Device ID #2
+  Type...........: CPU
+"#;
+        assert_eq!(parse_hashcat_device_types(output), (true, true));
+        assert_eq!(
+            parse_hashcat_device_types("Type...........: GPU"),
+            (true, false)
+        );
+        assert_eq!(parse_hashcat_device_types("no devices"), (false, false));
+    }
+
+    #[test]
     fn signature_detection_does_not_depend_on_extension() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("without-extension");
@@ -2368,6 +2553,7 @@ mod tests {
                 enabled: true,
                 max_depth: 1,
                 max_nested_archives: 100,
+                compute_mode: RecoveryComputeMode::GpuPreferred,
             },
             || panic!("plain archives must avoid dictionary preparation"),
             |_| {},
