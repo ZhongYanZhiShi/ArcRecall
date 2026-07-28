@@ -3,7 +3,7 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import {
   Check,
-  ChevronDown,
+  ChevronRight,
   CircleAlert,
   Copy,
   Cpu,
@@ -11,6 +11,7 @@ import {
   EyeOff,
   FolderPlus,
   KeyRound,
+  ListTree,
   LoaderCircle,
   PackageOpen,
   ShieldCheck,
@@ -22,6 +23,13 @@ import * as React from "react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { countDictionary, isDesktopRuntime } from "@/lib/dictionary"
 import {
   analyzeArchive,
@@ -970,11 +978,7 @@ function TaskResult({
               ) : null}
             </div>
           ) : null}
-          <RecoveryProcessDetails
-            key={`${task.taskId}:${task.running ? "running" : "settled"}`}
-            events={task.events ?? []}
-            running={task.running}
-          />
+          <RecoveryProcessDetails key={task.taskId} task={task} />
           {task.recoveredPassword != null ? (
             <div className="mt-2 flex items-center gap-2">
               <code className="max-w-full truncate rounded bg-muted px-2 py-1 text-xs">
@@ -1022,91 +1026,145 @@ function TaskResult({
   )
 }
 
-function RecoveryProcessDetails({
-  events,
-  running,
-}: {
-  events: RecoveryTaskEvent[]
-  running: boolean
-}) {
-  const [open, setOpen] = React.useState(running)
+function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
+  const [open, setOpen] = React.useState(false)
+  const events = task.events ?? []
 
   if (events.length === 0) {
     return null
   }
 
+  const latest = events[0]!
+
   return (
-    <details
-      className="group mt-2 overflow-hidden rounded-lg border border-border/70 bg-muted/20"
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-2.5 py-2 text-[11px] font-medium outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
-        <span className="flex items-center gap-1.5">
-          <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />
-          详细过程
-        </span>
-        <span className="font-normal text-muted-foreground">
-          最近 {events.length} 条 · 最新在前
-        </span>
-      </summary>
-      <div className="border-t border-border/70">
-        <ol className="max-h-56 overflow-y-auto px-2.5 py-1">
-          {events.map((event, index) => {
-            const current = running && index === 0
-            const metadata = recoveryEventMetadata(event)
-            return (
-              <li
-                key={event.sequence}
-                className="grid grid-cols-[42px_12px_minmax(0,1fr)] gap-1.5 border-b border-border/50 py-2 last:border-b-0"
-              >
-                <time className="pt-0.5 text-[10px] text-muted-foreground tabular-nums">
-                  {formatCompactElapsed(event.elapsedMs)}
-                </time>
-                <span className="flex justify-center pt-0.5">
-                  {current ? (
-                    <LoaderCircle className="size-3 animate-spin" />
-                  ) : event.phase === "failed" ||
-                    event.phase === "cancelled" ||
-                    event.phase === "exhausted" ? (
-                    <CircleAlert className="size-3 text-amber-600" />
-                  ) : (
-                    <span className="mt-1 size-1.5 rounded-full bg-muted-foreground/55" />
-                  )}
-                </span>
-                <div className="min-w-0">
-                  <p
-                    className="truncate text-[11px] font-medium"
-                    title={
-                      event.archivePath
-                        ? pathForDisplay(event.archivePath)
-                        : undefined
-                    }
-                  >
-                    {PHASE_LABELS[event.phase]}
-                    {event.engine ? ` · ${event.engine}` : ""}
-                    {event.archivePath
-                      ? ` · ${archiveNameFromPath(event.archivePath)}`
-                      : ""}
-                  </p>
-                  <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
-                    {event.message}
-                  </p>
-                  {metadata ? (
-                    <p className="mt-0.5 text-[10px] text-muted-foreground tabular-nums">
-                      {metadata}
-                    </p>
-                  ) : null}
-                </div>
-              </li>
-            )
-          })}
-        </ol>
-        <p className="border-t border-border/50 px-2.5 py-1.5 text-[10px] text-muted-foreground">
-          为保护密码安全，仅展示候选进度，不展示具体候选内容。
+    <>
+      <div className="mt-2 flex min-w-0 items-center gap-2 rounded-lg border border-border/70 bg-muted/20 px-2.5 py-1.5">
+        <ListTree className="size-3.5 shrink-0 text-muted-foreground" />
+        <p className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
+          最近：{PHASE_LABELS[latest.phase]}
+          {latest.engine ? ` · ${latest.engine}` : ""} ·{" "}
+          {formatCompactElapsed(latest.elapsedMs)}
         </p>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 shrink-0 rounded-md px-2 text-[11px]"
+          onClick={() => setOpen(true)}
+        >
+          详细过程
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] tabular-nums">
+            {events.length}
+          </span>
+          <ChevronRight className="size-3.5" />
+        </Button>
       </div>
-    </details>
+
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent
+          side="right"
+          className="data-[side=right]:w-full data-[side=right]:max-w-none data-[side=right]:sm:max-w-[520px]"
+        >
+          <SheetHeader className="shrink-0 border-b border-border/80 px-5 py-4 pr-14">
+            <div className="flex flex-wrap items-center gap-2">
+              <SheetTitle>解密详细过程</SheetTitle>
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-[10px] font-medium",
+                  task.running
+                    ? "bg-foreground text-background"
+                    : "bg-muted text-muted-foreground"
+                )}
+              >
+                {task.running ? "实时更新" : PHASE_LABELS[task.phase]}
+              </span>
+            </div>
+            <SheetDescription className="text-xs leading-relaxed">
+              最新事件置顶，共 {events.length} 条；关闭抽屉不会中断恢复任务。
+            </SheetDescription>
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
+                计划：
+                {task.computeMode === "cpuOnly" ? "仅 CPU" : "GPU 优先"}
+              </span>
+              <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
+                当前：{task.engine || "7-Zip CPU 基础校验"}
+              </span>
+              <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground tabular-nums">
+                用时：{formatElapsed(task.elapsedMs)}
+              </span>
+            </div>
+          </SheetHeader>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-2">
+            <ol aria-label="解密事件时间线">
+              {events.map((event, index) => {
+                const current = task.running && index === 0
+                const metadata = recoveryEventMetadata(event)
+                return (
+                  <li
+                    key={event.sequence}
+                    className="relative grid grid-cols-[50px_18px_minmax(0,1fr)] gap-2 py-3 before:absolute before:top-8 before:bottom-0 before:left-[60px] before:w-px before:bg-border last:before:hidden"
+                  >
+                    <time className="pt-0.5 text-[10px] text-muted-foreground tabular-nums">
+                      {formatCompactElapsed(event.elapsedMs)}
+                    </time>
+                    <span className="relative z-10 flex justify-center pt-0.5">
+                      {current ? (
+                        <span className="flex size-4 items-center justify-center rounded-full bg-foreground text-background">
+                          <LoaderCircle className="size-2.5 animate-spin" />
+                        </span>
+                      ) : event.phase === "failed" ||
+                        event.phase === "cancelled" ||
+                        event.phase === "exhausted" ? (
+                        <span className="flex size-4 items-center justify-center rounded-full bg-amber-100 text-amber-700">
+                          <CircleAlert className="size-2.5" />
+                        </span>
+                      ) : (
+                        <span className="mt-1 size-2 rounded-full border-2 border-background bg-muted-foreground/60 ring-1 ring-border" />
+                      )}
+                    </span>
+                    <div
+                      className={cn(
+                        "min-w-0 pb-3",
+                        index < events.length - 1 && "border-b border-border/50"
+                      )}
+                    >
+                      <p
+                        className="truncate text-xs font-medium"
+                        title={
+                          event.archivePath
+                            ? pathForDisplay(event.archivePath)
+                            : undefined
+                        }
+                      >
+                        {PHASE_LABELS[event.phase]}
+                        {event.engine ? ` · ${event.engine}` : ""}
+                        {event.archivePath
+                          ? ` · ${archiveNameFromPath(event.archivePath)}`
+                          : ""}
+                      </p>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                        {event.message}
+                      </p>
+                      {metadata ? (
+                        <p className="mt-1 text-[10px] text-muted-foreground tabular-nums">
+                          {metadata}
+                        </p>
+                      ) : null}
+                    </div>
+                  </li>
+                )
+              })}
+            </ol>
+          </div>
+
+          <p className="shrink-0 border-t border-border/80 px-5 py-3 text-[10px] text-muted-foreground">
+            为保护密码安全，仅展示候选进度，不展示或记录具体候选内容。
+          </p>
+        </SheetContent>
+      </Sheet>
+    </>
   )
 }
 
