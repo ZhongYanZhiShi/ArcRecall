@@ -1042,6 +1042,32 @@ fn full_bundle_manager(state: &AppState) -> Result<FullEngineBundleManager, Stri
     ))
 }
 
+fn recovery_tool_paths(state: &AppState) -> Result<RecoveryToolPaths, String> {
+    let manager = full_bundle_manager(state)?;
+    let engine = {
+        let settings = state.settings.lock().map_err(|error| error.to_string())?;
+        settings.load().map_err(|error| error.to_string())?.engine
+    };
+    Ok(RecoveryToolPaths {
+        seven_zip: manager.seven_zip_executable(),
+        hashcat: configured_path_or(manager.hashcat_executable(), &engine.hashcat_path),
+        john_tools_directory: configured_path_or(
+            manager.john_tools_directory(),
+            &engine.john_tools_directory,
+        ),
+        perl: configured_path_or(manager.perl_executable(), &engine.perl_path),
+    })
+}
+
+fn configured_path_or(default: PathBuf, configured: &str) -> PathBuf {
+    let configured = configured.trim();
+    if configured.is_empty() {
+        default
+    } else {
+        PathBuf::from(configured)
+    }
+}
+
 fn load_ai_settings_view(state: &AppState) -> Result<AiSettingsView, String> {
     let ai = {
         let store = state.settings.lock().map_err(|error| error.to_string())?;
@@ -1145,13 +1171,7 @@ async fn tool_full_bundle_status(
 
 #[tauri::command]
 async fn recovery_capabilities(state: State<'_, AppState>) -> Result<RecoveryCapabilities, String> {
-    let manager = full_bundle_manager(&state)?;
-    let tools = RecoveryToolPaths {
-        seven_zip: manager.seven_zip_executable(),
-        hashcat: manager.hashcat_executable(),
-        john_tools_directory: manager.john_tools_directory(),
-        perl: manager.perl_executable(),
-    };
+    let tools = recovery_tool_paths(&state)?;
     tauri::async_runtime::spawn_blocking(move || probe_recovery_capabilities(&tools))
         .await
         .map_err(|error| format!("解密能力探测任务失败：{error}"))
@@ -1695,17 +1715,12 @@ async fn recovery_start(
     if !bundle_status.seven_zip.runnable {
         if bundle_status.bundled {
             return Err(
-                "7-Zip 尚未部署，请先在“设置 → 外部引擎”中安装完整包（至少部署 7-Zip）。".into(),
+                "7-Zip 尚未部署，请先在“设置 → 解密引擎”中安装完整包（至少部署 7-Zip）。".into(),
             );
         }
         return Err("当前构建未提供 7-Zip 资源，请使用完整发行构建并安装引擎包。".into());
     }
-    let tools = RecoveryToolPaths {
-        seven_zip: manager.seven_zip_executable(),
-        hashcat: manager.hashcat_executable(),
-        john_tools_directory: manager.john_tools_directory(),
-        perl: manager.perl_executable(),
-    };
+    let tools = recovery_tool_paths(&state)?;
 
     let task_id = next_recovery_task_id();
     let work_directory = state.paths.temp.join("recovery").join(&task_id);
@@ -2344,6 +2359,21 @@ mod tests {
         assert!(!is_safe_ai_profile_id(""));
         assert!(!is_safe_ai_profile_id("profile/with/path"));
         assert!(!is_safe_ai_profile_id("配置"));
+    }
+
+    #[test]
+    fn configured_recovery_path_overrides_bundle_default() {
+        assert_eq!(
+            configured_path_or(
+                PathBuf::from(r"C:\ArcRecall\tools\hashcat.exe"),
+                r" D:\Shared\hashcat.exe "
+            ),
+            PathBuf::from(r"D:\Shared\hashcat.exe")
+        );
+        assert_eq!(
+            configured_path_or(PathBuf::from(r"C:\ArcRecall\tools\john"), "  "),
+            PathBuf::from(r"C:\ArcRecall\tools\john")
+        );
     }
 
     #[test]
