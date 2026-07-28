@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_recall_core::{
-    APP_DATA_FOLDER_NAME, AppLogLevel, AppPaths, AppSettings, ArchiveAnalysis, ArchiveFormat,
+    APP_DATA_FOLDER_NAME, AiClientConfig, AiConnectionTestResult, AiModelInfo, AiProfile,
+    AiProviderKind, AiSettings, AppLogLevel, AppPaths, AppSettings, ArchiveAnalysis, ArchiveFormat,
     CancellationToken, CompressionError, CompressionFormat, CompressionJob, CompressionPhase,
     CompressionUpdate, DEFAULT_RECURSIVE_MAX_ARCHIVES, DEFAULT_RECURSIVE_MAX_DEPTH, DatabaseInfo,
     DictionaryCandidateAddSummary, DictionaryCandidateQuery, DictionaryCandidateStore,
@@ -18,9 +19,10 @@ use arc_recall_core::{
     RecoveryDictionary, RecoveryError, RecoveryHistoryListResult, RecoveryHistoryQuery,
     RecoveryHistoryRecord, RecoveryHistoryStore, RecoveryJob, RecoveryPhase, RecoveryToolPaths,
     RecoveryUpdate, RecursiveRecoveryOptions, SERVICE_NAME, SettingsStore, analyze_archive,
-    compress_archive, fingerprint_file_sha256, health_status, path_for_display,
-    prepare_compression, probe_john_perl, recover_and_extract_recursive_lazy,
-    resolve_tools_directory,
+    compress_archive, fingerprint_file_sha256, generate_archive_name, health_status,
+    list_ai_models, path_for_display, prepare_compression, probe_john_perl,
+    recover_and_extract_recursive_lazy, resolve_tools_directory, test_ai_connection,
+    validate_ai_base_url,
 };
 use logging::{LogExportResult, LogLevel, LogListResult, LogQuery, LogStore};
 use serde::{Deserialize, Serialize};
@@ -28,9 +30,12 @@ use tauri::{AppHandle, Manager, State};
 
 static RECOVERY_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static COMPRESSION_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static AI_PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static DATABASE_BACKUP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const MIB_BYTES: u64 = 1024 * 1024;
 const RECOVERY_EVENT_LIMIT: usize = 80;
+const AI_KEYRING_SERVICE: &str = "ArcRecall AI";
+const MAX_AI_PROFILES: usize = 20;
 
 struct AppState {
     paths: AppPaths,
@@ -106,6 +111,44 @@ struct CompressionTaskStatus {
     started_at_ms: u64,
     elapsed_ms: u64,
     output_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiProfileView {
+    #[serde(flatten)]
+    profile: AiProfile,
+    has_api_key: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiSettingsView {
+    profiles: Vec<AiProfileView>,
+    active_profile_id: String,
+    rename_prompt: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiProfileUpsertRequest {
+    id: Option<String>,
+    name: String,
+    provider: AiProviderKind,
+    base_url: String,
+    model: String,
+    api_key: Option<String>,
+    #[serde(default)]
+    clear_api_key: bool,
+    #[serde(default)]
+    make_active: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiSettingsUpdateRequest {
+    active_profile_id: String,
+    rename_prompt: String,
 }
 
 const fn default_compression_level() -> u8 {
@@ -703,6 +746,277 @@ fn settings_set(state: State<'_, AppState>, settings: AppSettings) -> Result<App
     result
 }
 
+#[tauri::command]
+fn ai_profiles_list(state: State<'_, AppState>) -> Result<AiSettingsView, String> {
+    load_ai_settings_view(&state)
+}
+
+#[tauri::command]
+fn ai_profile_upsert(
+    state: State<'_, AppState>,
+    request: AiProfileUpsertRequest,
+) -> Result<AiSettingsView, String> {
+    let id = request
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(next_ai_profile_id);
+    if !is_safe_ai_profile_id(&id) {
+        return Err("AI 配置标识无效。".into());
+    }
+    let mut profile = AiProfile {
+        id: id.clone(),
+        name: request.name,
+        provider: request.provider,
+        base_url: request.base_url,
+        model: request.model,
+    };
+    profile.normalize();
+    if profile.name.is_empty() {
+        return Err("AI 配置名称不能为空。".into());
+    }
+    if profile.name.chars().count() > 64 {
+        return Err("AI 配置名称不能超过 64 个字符。".into());
+    }
+    if profile.base_url.is_empty() {
+        profile.base_url = profile.provider.default_base_url().into();
+    }
+    profile.base_url =
+        validate_ai_base_url(&profile.base_url).map_err(|error| error.to_string())?;
+    if profile.model.is_empty() {
+        profile.model = profile.provider.default_model().into();
+    }
+
+    {
+        let store = state.settings.lock().map_err(|error| error.to_string())?;
+        let mut settings = store.load().map_err(|error| error.to_string())?;
+        if let Some(existing) = settings
+            .ai
+            .profiles
+            .iter_mut()
+            .find(|candidate| candidate.id == id)
+        {
+            *existing = profile;
+        } else {
+            if settings.ai.profiles.len() >= MAX_AI_PROFILES {
+                return Err(format!("最多可保存 {MAX_AI_PROFILES} 个 AI 配置。"));
+            }
+            settings.ai.profiles.push(profile);
+        }
+        if request.make_active || settings.ai.active_profile_id.is_empty() {
+            settings.ai.active_profile_id = id.clone();
+        }
+        store.save(&settings).map_err(|error| error.to_string())?;
+    }
+
+    if request.clear_api_key {
+        delete_ai_api_key(&id)?;
+    } else if let Some(api_key) = request.api_key {
+        let api_key = api_key.trim();
+        if !api_key.is_empty() {
+            set_ai_api_key(&id, api_key)?;
+        }
+    }
+    write_log(
+        &state.logger,
+        LogLevel::Info,
+        "ai",
+        "ai.profile_saved",
+        "AI 配置已保存。",
+        [("profile_id".into(), id)],
+    );
+    load_ai_settings_view(&state)
+}
+
+#[tauri::command]
+fn ai_profile_delete(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<AiSettingsView, String> {
+    let profile_id = profile_id.trim();
+    if profile_id.is_empty() {
+        return Err("AI 配置标识不能为空。".into());
+    }
+    {
+        let store = state.settings.lock().map_err(|error| error.to_string())?;
+        let mut settings = store.load().map_err(|error| error.to_string())?;
+        let original_count = settings.ai.profiles.len();
+        settings
+            .ai
+            .profiles
+            .retain(|profile| profile.id != profile_id);
+        if settings.ai.profiles.len() == original_count {
+            return Err("未找到要删除的 AI 配置。".into());
+        }
+        if settings.ai.active_profile_id == profile_id {
+            settings.ai.active_profile_id = settings
+                .ai
+                .profiles
+                .first()
+                .map(|profile| profile.id.clone())
+                .unwrap_or_default();
+        }
+        store.save(&settings).map_err(|error| error.to_string())?;
+    }
+    delete_ai_api_key(profile_id)?;
+    write_log(
+        &state.logger,
+        LogLevel::Info,
+        "ai",
+        "ai.profile_deleted",
+        "AI 配置已删除。",
+        [("profile_id".into(), profile_id.into())],
+    );
+    load_ai_settings_view(&state)
+}
+
+#[tauri::command]
+fn ai_settings_update(
+    state: State<'_, AppState>,
+    request: AiSettingsUpdateRequest,
+) -> Result<AiSettingsView, String> {
+    let prompt = request.rename_prompt.trim();
+    if prompt.is_empty() {
+        return Err("AI 重命名提示词不能为空。".into());
+    }
+    if prompt.chars().count() > 2_000 {
+        return Err("AI 重命名提示词不能超过 2000 个字符。".into());
+    }
+    {
+        let store = state.settings.lock().map_err(|error| error.to_string())?;
+        let mut settings = store.load().map_err(|error| error.to_string())?;
+        let active_id = request.active_profile_id.trim();
+        if !active_id.is_empty()
+            && !settings
+                .ai
+                .profiles
+                .iter()
+                .any(|profile| profile.id == active_id)
+        {
+            return Err("选择的 AI 配置不存在。".into());
+        }
+        settings.ai.active_profile_id = active_id.into();
+        settings.ai.rename_prompt = prompt.into();
+        store.save(&settings).map_err(|error| error.to_string())?;
+    }
+    write_log(
+        &state.logger,
+        LogLevel::Info,
+        "ai",
+        "ai.settings_saved",
+        "AI 重命名设置已保存。",
+        std::iter::empty(),
+    );
+    load_ai_settings_view(&state)
+}
+
+#[tauri::command]
+async fn ai_models_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<Vec<AiModelInfo>, String> {
+    let config = resolve_ai_client_config(&state, Some(&profile_id))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        list_ai_models(&config).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("AI 模型列表任务失败：{error}"))?
+}
+
+#[tauri::command]
+async fn ai_connection_test(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<AiConnectionTestResult, String> {
+    let config = resolve_ai_client_config(&state, Some(&profile_id))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        test_ai_connection(&config).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("AI 连接测试任务失败：{error}"))?
+}
+
+#[tauri::command]
+async fn ai_generate_archive_name(
+    state: State<'_, AppState>,
+    base_name: String,
+    profile_id: Option<String>,
+    prompt: Option<String>,
+) -> Result<String, String> {
+    let (config, rename_prompt, provider) = {
+        let store = state.settings.lock().map_err(|error| error.to_string())?;
+        let settings = store.load().map_err(|error| error.to_string())?;
+        let selected_id = profile_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .unwrap_or(&settings.ai.active_profile_id);
+        let profile = settings
+            .ai
+            .profiles
+            .iter()
+            .find(|profile| profile.id == selected_id)
+            .ok_or_else(|| "尚未配置可用的 AI 模型，请先前往设置。".to_string())?;
+        let api_key = get_ai_api_key(&profile.id)?;
+        if profile.provider == AiProviderKind::DeepSeek && api_key.is_none() {
+            return Err("当前 DeepSeek 配置缺少 API Key，请先前往设置。".into());
+        }
+        (
+            AiClientConfig {
+                base_url: profile.base_url.clone(),
+                model: profile.model.clone(),
+                api_key,
+            },
+            prompt
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(&settings.ai.rename_prompt)
+                .to_string(),
+            profile.provider,
+        )
+    };
+    let input_character_count = base_name.chars().count();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        generate_archive_name(&config, &base_name, &rename_prompt)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("AI 重命名任务失败：{error}"))?;
+    write_log(
+        &state.logger,
+        if result.is_ok() {
+            LogLevel::Info
+        } else {
+            LogLevel::Warn
+        },
+        "ai",
+        if result.is_ok() {
+            "ai.rename_completed"
+        } else {
+            "ai.rename_failed"
+        },
+        if result.is_ok() {
+            "AI 归档重命名已完成。"
+        } else {
+            "AI 归档重命名失败。"
+        },
+        [
+            (
+                "provider".into(),
+                format!("{provider:?}").to_ascii_lowercase(),
+            ),
+            (
+                "input_character_count".into(),
+                input_character_count.to_string(),
+            ),
+        ],
+    );
+    result
+}
+
 fn hashcat_downloader(state: &AppState) -> Result<HashcatToolDownloader, String> {
     let settings = state.settings.lock().map_err(|e| e.to_string())?;
     let loaded = settings.load().map_err(|e| e.to_string())?;
@@ -723,6 +1037,97 @@ fn full_bundle_manager(state: &AppState) -> Result<FullEngineBundleManager, Stri
         state.resource_dir.clone(),
         tools,
     ))
+}
+
+fn load_ai_settings_view(state: &AppState) -> Result<AiSettingsView, String> {
+    let ai = {
+        let store = state.settings.lock().map_err(|error| error.to_string())?;
+        store.load().map_err(|error| error.to_string())?.ai
+    };
+    ai_settings_view(ai)
+}
+
+fn ai_settings_view(ai: AiSettings) -> Result<AiSettingsView, String> {
+    let profiles = ai
+        .profiles
+        .into_iter()
+        .map(|profile| {
+            let has_api_key = get_ai_api_key(&profile.id)?.is_some();
+            Ok(AiProfileView {
+                profile,
+                has_api_key,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(AiSettingsView {
+        profiles,
+        active_profile_id: ai.active_profile_id,
+        rename_prompt: ai.rename_prompt,
+    })
+}
+
+fn resolve_ai_client_config(
+    state: &AppState,
+    profile_id: Option<&str>,
+) -> Result<AiClientConfig, String> {
+    let profile = {
+        let store = state.settings.lock().map_err(|error| error.to_string())?;
+        let settings = store.load().map_err(|error| error.to_string())?;
+        let selected_id = profile_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .unwrap_or(&settings.ai.active_profile_id);
+        settings
+            .ai
+            .profiles
+            .into_iter()
+            .find(|profile| profile.id == selected_id)
+            .ok_or_else(|| "未找到可用的 AI 配置。".to_string())?
+    };
+    let api_key = get_ai_api_key(&profile.id)?;
+    if profile.provider == AiProviderKind::DeepSeek && api_key.is_none() {
+        return Err("当前 DeepSeek 配置缺少 API Key。".into());
+    }
+    Ok(AiClientConfig {
+        base_url: profile.base_url,
+        model: profile.model,
+        api_key,
+    })
+}
+
+fn ai_keyring_entry(profile_id: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(AI_KEYRING_SERVICE, profile_id)
+        .map_err(|error| format!("无法访问系统凭据存储：{error}"))
+}
+
+fn get_ai_api_key(profile_id: &str) -> Result<Option<String>, String> {
+    match ai_keyring_entry(profile_id)?.get_password() {
+        Ok(value) if value.trim().is_empty() => Ok(None),
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!("无法读取系统凭据存储：{error}")),
+    }
+}
+
+fn set_ai_api_key(profile_id: &str, api_key: &str) -> Result<(), String> {
+    ai_keyring_entry(profile_id)?
+        .set_password(api_key)
+        .map_err(|error| format!("无法写入系统凭据存储：{error}"))
+}
+
+fn delete_ai_api_key(profile_id: &str) -> Result<(), String> {
+    match ai_keyring_entry(profile_id)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(format!("无法删除系统凭据：{error}")),
+    }
+}
+
+fn is_safe_ai_profile_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 96
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 #[tauri::command]
@@ -1774,6 +2179,12 @@ fn next_compression_task_id() -> String {
     format!("compression-{timestamp}-{sequence}")
 }
 
+fn next_ai_profile_id() -> String {
+    let timestamp = current_time_ms();
+    let sequence = AI_PROFILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("ai-{timestamp}-{sequence}")
+}
+
 /// Data root: `{LocalAppData}/ArcRecall` (not the reverse-domain identifier).
 fn resolve_app_paths(app: &AppHandle) -> Result<AppPaths, String> {
     let local = app
@@ -1853,6 +2264,13 @@ pub fn run() {
             database_info,
             settings_get,
             settings_set,
+            ai_profiles_list,
+            ai_profile_upsert,
+            ai_profile_delete,
+            ai_settings_update,
+            ai_models_list,
+            ai_connection_test,
+            ai_generate_archive_name,
             tool_full_bundle_status,
             tool_full_bundle_install,
             tool_hashcat_status,
@@ -1898,6 +2316,14 @@ mod tests {
         let preferred = directory.path().join("archive");
 
         assert_eq!(resolve_available_output_directory(&preferred), preferred);
+    }
+
+    #[test]
+    fn validates_ai_profile_identifiers() {
+        assert!(is_safe_ai_profile_id("ai-123_local"));
+        assert!(!is_safe_ai_profile_id(""));
+        assert!(!is_safe_ai_profile_id("profile/with/path"));
+        assert!(!is_safe_ai_profile_id("配置"));
     }
 
     #[test]

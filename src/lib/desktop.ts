@@ -10,6 +10,25 @@ export function getDesktopHealth(): Promise<HealthResponse> {
 }
 
 export {
+  AI_PROVIDER_DEFAULTS,
+  DEFAULT_AI_RENAME_PROMPT,
+  deleteAiProfile,
+  generateAiArchiveName,
+  listAiModels,
+  listAiProfiles,
+  testAiConnection,
+  updateAiSettings,
+  upsertAiProfile,
+  type AiConnectionTestResult,
+  type AiModelInfo,
+  type AiProfile,
+  type AiProfileUpsertRequest,
+  type AiProviderKind,
+  type AiSettings,
+  type AiSettingsUpdateRequest,
+} from "@/lib/ai"
+
+export {
   addDictionaryCandidates,
   countDictionary,
   deleteDictionaryCandidates,

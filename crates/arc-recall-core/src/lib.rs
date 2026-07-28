@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod dictionary;
 pub mod history;
 pub mod paths;
@@ -15,7 +16,8 @@ pub use history::{
 };
 pub use paths::{APP_DATA_FOLDER_NAME, AppPaths};
 pub use settings::{
-    AppLogLevel, AppSettings, DEFAULT_LOG_MAX_DISK_MIB, DatabaseInfo, EngineSettings,
+    AiProfile, AiProviderKind, AiSettings, AppLogLevel, AppSettings, CURRENT_SETTINGS_VERSION,
+    DEFAULT_AI_RENAME_PROMPT, DEFAULT_LOG_MAX_DISK_MIB, DatabaseInfo, EngineSettings,
     LoggingSettings, MAX_LOG_MAX_DISK_MIB, MIN_LOG_MAX_DISK_MIB, SettingsError, SettingsStore,
     resolve_tools_directory,
 };
@@ -39,3 +41,7 @@ pub const SERVICE_NAME: &str = "arc-recall-core";
 pub fn health_status() -> &'static str {
     "ok"
 }
+pub use ai::{
+    AiClientConfig, AiConnectionTestResult, AiError, AiModelInfo, generate_archive_name,
+    list_ai_models, test_ai_connection, validate_ai_base_url,
+};
