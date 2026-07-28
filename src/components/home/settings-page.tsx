@@ -2,16 +2,19 @@
 
 import {
   Archive,
+  ArrowLeft,
   Cpu,
   Database,
   Download,
   ExternalLink,
   HardDrive,
   Package,
+  Sparkles,
   Settings2,
 } from "lucide-react"
 import * as React from "react"
 
+import { AiSettingsPanel } from "@/components/home/ai-settings-panel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -48,7 +51,7 @@ import {
 } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 
-type SettingsCategory = "compress" | "engine" | "app" | "data"
+export type SettingsCategory = "compress" | "ai" | "engine" | "app" | "data"
 
 const CATEGORIES: {
   id: SettingsCategory
@@ -63,10 +66,16 @@ const CATEGORIES: {
     description: "默认格式、级别、密码与文件名加密",
   },
   {
+    id: "ai",
+    label: "AI 模型",
+    icon: Sparkles,
+    description: "模型服务、系统凭据、模型列表与重命名提示词",
+  },
+  {
     id: "engine",
-    label: "引擎",
+    label: "解密引擎",
     icon: Cpu,
-    description: "外部 hashcat 等工具的安装与路径",
+    description: "7-Zip、Hashcat、John 与 CPU / GPU 能力",
   },
   {
     id: "app",
@@ -95,8 +104,15 @@ const LOG_LEVELS: {
 
 const LOG_CAPACITY_PRESETS = [25, 100, 250, 500] as const
 
-export function SettingsPage() {
-  const [category, setCategory] = React.useState<SettingsCategory>("engine")
+export function SettingsPage({
+  initialCategory = "engine",
+  onReturnToCompression,
+}: {
+  initialCategory?: SettingsCategory
+  onReturnToCompression?: () => void
+}) {
+  const [category, setCategory] =
+    React.useState<SettingsCategory>(initialCategory)
   const [dbInfo, setDbInfo] = React.useState<DatabaseInfo | null>(null)
   const [fullBundle, setFullBundle] =
     React.useState<FullEngineBundleStatus | null>(null)
@@ -431,16 +447,31 @@ export function SettingsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="mx-auto flex h-full min-h-0 w-full max-w-[720px] flex-col gap-2 px-5 pt-6 pb-2">
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-[900px] flex-col gap-2 px-5 pt-6 pb-2">
         <header className="shrink-0">
-          <div className="min-w-0">
-            <p className="text-[11px] font-medium tracking-[0.16em] text-muted-foreground uppercase">
-              Preferences
-            </p>
-            <h1 className="mt-1 text-lg font-semibold tracking-tight">设置</h1>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {activeMeta.description}
-            </p>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium tracking-[0.16em] text-muted-foreground uppercase">
+                Preferences
+              </p>
+              <h1 className="mt-1 text-lg font-semibold tracking-tight">
+                设置
+              </h1>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {activeMeta.description}
+              </p>
+            </div>
+            {onReturnToCompression ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={onReturnToCompression}
+              >
+                <ArrowLeft data-icon="inline-start" />
+                返回压缩
+              </Button>
+            ) : null}
           </div>
         </header>
 
@@ -476,6 +507,10 @@ export function SettingsPage() {
                 title="压缩默认值"
                 body="默认格式（7z / ZIP）、压缩级别、默认密码与 7z 文件名加密将在此配置。"
               />
+            </TabsContent>
+
+            <TabsContent value="ai" className="mt-0 outline-none">
+              <AiSettingsPanel />
             </TabsContent>
 
             <TabsContent value="engine" className="mt-0 space-y-2 outline-none">

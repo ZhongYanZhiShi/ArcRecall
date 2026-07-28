@@ -17,11 +17,17 @@ import {
   PackagePlus,
   Square,
   Trash2,
+  WandSparkles,
 } from "lucide-react"
 import * as React from "react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import {
+  generateAiArchiveName,
+  listAiProfiles,
+  type AiSettings,
+} from "@/lib/ai"
 import { Label } from "@/components/ui/label"
 import {
   cancelCompression,
@@ -40,6 +46,34 @@ import { cn } from "@/lib/utils"
 type OutputMode = "sibling" | "custom"
 type CompressionLevel = 0 | 1 | 3 | 5 | 7 | 9
 
+export type CompressionDraft = {
+  sources: string[]
+  outputMode: OutputMode
+  outputDirectory: string | null
+  baseName: string
+  format: CompressionFormat
+  level: CompressionLevel
+  password: string
+  encryptFileNames: boolean
+  openWhenDone: boolean
+  useAiRename: boolean
+}
+
+export function createCompressionDraft(): CompressionDraft {
+  return {
+    sources: [],
+    outputMode: "sibling",
+    outputDirectory: null,
+    baseName: "",
+    format: "sevenZip",
+    level: 5,
+    password: "",
+    encryptFileNames: false,
+    openWhenDone: true,
+    useAiRename: false,
+  }
+}
+
 const LEVELS: {
   value: CompressionLevel
   label: string
@@ -55,22 +89,33 @@ const LEVELS: {
 
 const COUNT_FORMATTER = new Intl.NumberFormat("zh-CN")
 
-export function CompressPage() {
-  const [sources, setSources] = React.useState<string[]>([])
-  const [outputMode, setOutputMode] = React.useState<OutputMode>("sibling")
-  const [outputDirectory, setOutputDirectory] = React.useState<string | null>(
-    null
-  )
-  const [baseName, setBaseName] = React.useState("")
-  const [format, setFormat] = React.useState<CompressionFormat>("sevenZip")
-  const [level, setLevel] = React.useState<CompressionLevel>(5)
-  const [password, setPassword] = React.useState("")
+export function CompressPage({
+  draft,
+  onDraftChange,
+  onOpenAiSettings,
+}: {
+  draft: CompressionDraft
+  onDraftChange: React.Dispatch<React.SetStateAction<CompressionDraft>>
+  onOpenAiSettings: () => void
+}) {
+  const {
+    sources,
+    outputMode,
+    outputDirectory,
+    baseName,
+    format,
+    level,
+    password,
+    encryptFileNames,
+    openWhenDone,
+    useAiRename,
+  } = draft
   const [showPassword, setShowPassword] = React.useState(false)
-  const [encryptFileNames, setEncryptFileNames] = React.useState(false)
-  const [openWhenDone, setOpenWhenDone] = React.useState(true)
   const [dragOver, setDragOver] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  const [aiError, setAiError] = React.useState<string | null>(null)
+  const [aiSettings, setAiSettings] = React.useState<AiSettings | null>(null)
   const [task, setTask] = React.useState<CompressionTaskStatus | null>(null)
   const openedTasks = React.useRef(new Set<string>())
   const running = Boolean(task?.running)
@@ -80,21 +125,59 @@ export function CompressPage() {
     runningRef.current = running
   }, [running])
 
-  const appendSources = React.useCallback((paths: string[]) => {
-    setSources((current) => {
-      const seen = new Set(current.map(sourceIdentity))
-      const next = [...current]
-      for (const path of paths) {
-        const normalized = normalizeSourcePath(path)
-        if (!normalized || seen.has(sourceIdentity(normalized))) {
-          continue
-        }
-        seen.add(sourceIdentity(normalized))
-        next.push(normalized)
-      }
-      return next
-    })
+  const setSources = React.useCallback(
+    (update: React.SetStateAction<string[]>) => {
+      onDraftChange((current) => ({
+        ...current,
+        sources:
+          typeof update === "function" ? update(current.sources) : update,
+      }))
+    },
+    [onDraftChange]
+  )
+
+  const updateDraft = React.useCallback(
+    <Key extends keyof CompressionDraft>(
+      key: Key,
+      value: CompressionDraft[Key]
+    ) => {
+      onDraftChange((current) => ({ ...current, [key]: value }))
+    },
+    [onDraftChange]
+  )
+
+  const refreshAiSettings = React.useCallback(() => {
+    void listAiProfiles()
+      .then((next) => {
+        setAiSettings(next)
+        setAiError(null)
+      })
+      .catch((reason) => {
+        setAiSettings(null)
+        setAiError(toErrorMessage(reason))
+      })
   }, [])
+
+  React.useEffect(refreshAiSettings, [refreshAiSettings])
+
+  const appendSources = React.useCallback(
+    (paths: string[]) => {
+      setSources((current) => {
+        const seen = new Set(current.map(sourceIdentity))
+        const next = [...current]
+        for (const path of paths) {
+          const normalized = normalizeSourcePath(path)
+          if (!normalized || seen.has(sourceIdentity(normalized))) {
+            continue
+          }
+          seen.add(sourceIdentity(normalized))
+          next.push(normalized)
+        }
+        return next
+      })
+    },
+    [setSources]
+  )
 
   React.useEffect(() => {
     if (!isDesktopRuntime()) {
@@ -225,13 +308,13 @@ export function CompressPage() {
     try {
       const path = await pickCompressionOutputDirectory()
       if (path) {
-        setOutputDirectory(path)
-        setOutputMode("custom")
+        updateDraft("outputDirectory", path)
+        updateDraft("outputMode", "custom")
       }
     } catch (reason) {
       setError(toErrorMessage(reason))
     }
-  }, [])
+  }, [updateDraft])
 
   const handleMoveSource = React.useCallback(
     (index: number, direction: -1 | 1) => {
@@ -245,55 +328,85 @@ export function CompressPage() {
         return next
       })
     },
-    []
+    [setSources]
   )
 
-  const handleStart = React.useCallback(async () => {
-    if (sources.length === 0) {
-      setError("请先添加至少一个文件或文件夹。")
-      return
-    }
-    if (!baseName.trim()) {
-      setError("请输入归档基础名称。")
-      return
-    }
-    if (encryptFileNames && !password) {
-      setError("开启文件名加密前需要设置密码。")
-      return
-    }
-    if (outputMode === "custom" && !outputDirectory) {
-      setError("请选择自定义输出目录。")
-      return
-    }
+  const activeAiProfile =
+    aiSettings?.profiles.find(
+      (profile) => profile.id === aiSettings.activeProfileId
+    ) ?? null
 
-    setBusy(true)
-    setError(null)
-    try {
-      const next = await startCompression({
-        sources,
-        outputDirectory: outputMode === "custom" ? outputDirectory : undefined,
-        baseName: baseName.trim(),
-        format,
-        level,
-        password: password || undefined,
-        encryptFileNames,
-      })
-      setTask(next)
-    } catch (reason) {
-      setError(toErrorMessage(reason))
-    } finally {
-      setBusy(false)
-    }
-  }, [
-    baseName,
-    encryptFileNames,
-    format,
-    level,
-    outputDirectory,
-    outputMode,
-    password,
-    sources,
-  ])
+  const handleStart = React.useCallback(
+    async (skipAiRename = false) => {
+      if (sources.length === 0) {
+        setError("请先添加至少一个文件或文件夹。")
+        return
+      }
+      if (!baseName.trim()) {
+        setError("请输入归档基础名称。")
+        return
+      }
+      if (encryptFileNames && !password) {
+        setError("开启文件名加密前需要设置密码。")
+        return
+      }
+      if (outputMode === "custom" && !outputDirectory) {
+        setError("请选择自定义输出目录。")
+        return
+      }
+      if (useAiRename && !skipAiRename && !activeAiProfile) {
+        setAiError("尚未配置可用的 AI 模型，请先前往设置。")
+        return
+      }
+
+      setBusy(true)
+      setError(null)
+      setAiError(null)
+      try {
+        let resolvedName = baseName.trim()
+        if (useAiRename && !skipAiRename) {
+          resolvedName = await generateAiArchiveName(
+            resolvedName,
+            activeAiProfile?.id
+          )
+          updateDraft("baseName", resolvedName)
+        }
+        const next = await startCompression({
+          sources,
+          outputDirectory:
+            outputMode === "custom" ? outputDirectory : undefined,
+          baseName: resolvedName,
+          format,
+          level,
+          password: password || undefined,
+          encryptFileNames,
+        })
+        setTask(next)
+      } catch (reason) {
+        const message = toErrorMessage(reason)
+        if (useAiRename && !skipAiRename) {
+          setAiError(message)
+        } else {
+          setError(message)
+        }
+      } finally {
+        setBusy(false)
+      }
+    },
+    [
+      activeAiProfile,
+      baseName,
+      encryptFileNames,
+      format,
+      level,
+      outputDirectory,
+      outputMode,
+      password,
+      sources,
+      updateDraft,
+      useAiRename,
+    ]
+  )
 
   const handleCancel = React.useCallback(async () => {
     if (!task?.running) {
@@ -450,14 +563,14 @@ export function CompressPage() {
               />
               <SegmentButton
                 active={outputMode === "sibling"}
-                onClick={() => setOutputMode("sibling")}
+                onClick={() => updateDraft("outputMode", "sibling")}
                 disabled={running}
               >
                 来源同级
               </SegmentButton>
               <SegmentButton
                 active={outputMode === "custom"}
-                onClick={() => setOutputMode("custom")}
+                onClick={() => updateDraft("outputMode", "custom")}
                 disabled={running}
               >
                 自定义目录
@@ -489,7 +602,9 @@ export function CompressPage() {
             ) : null}
             <SwitchControl
               checked={openWhenDone}
-              onCheckedChange={setOpenWhenDone}
+              onCheckedChange={(checked) =>
+                updateDraft("openWhenDone", checked)
+              }
               label="完成后打开"
             />
           </div>
@@ -503,7 +618,9 @@ export function CompressPage() {
                 <Input
                   id="archive-name"
                   value={baseName}
-                  onChange={(event) => setBaseName(event.target.value)}
+                  onChange={(event) =>
+                    updateDraft("baseName", event.target.value)
+                  }
                   placeholder="例如：项目交付资料"
                   disabled={running}
                   className="pr-12"
@@ -526,7 +643,7 @@ export function CompressPage() {
               <div className="grid h-9 grid-cols-2 rounded-lg border border-border bg-muted/50 p-0.5">
                 <FormatButton
                   active={format === "sevenZip"}
-                  onClick={() => setFormat("sevenZip")}
+                  onClick={() => updateDraft("format", "sevenZip")}
                   disabled={running}
                 >
                   7z
@@ -534,8 +651,8 @@ export function CompressPage() {
                 <FormatButton
                   active={format === "zip"}
                   onClick={() => {
-                    setFormat("zip")
-                    setEncryptFileNames(false)
+                    updateDraft("format", "zip")
+                    updateDraft("encryptFileNames", false)
                   }}
                   disabled={running}
                 >
@@ -550,6 +667,90 @@ export function CompressPage() {
             </fieldset>
           </div>
 
+          <div className="mt-3 rounded-xl border border-border/80 bg-muted/30 px-3 py-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-background text-muted-foreground">
+                  <WandSparkles className="size-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <p className="text-xs font-medium">使用 AI 优化名称</p>
+                    {activeAiProfile ? (
+                      <span className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {activeAiProfile.name} ·{" "}
+                        {activeAiProfile.model || "未选择模型"}
+                      </span>
+                    ) : (
+                      <span className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        未配置
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                    只发送你填写的基础名称与提示词，不读取来源文件、路径或内容。
+                  </p>
+                </div>
+              </div>
+              <SwitchControl
+                checked={useAiRename}
+                onCheckedChange={(checked) => {
+                  updateDraft("useAiRename", checked)
+                  setAiError(
+                    checked && !activeAiProfile
+                      ? "尚未配置可用的 AI 模型，请先前往设置。"
+                      : null
+                  )
+                }}
+                label="AI 重命名"
+                disabled={running}
+              />
+            </div>
+            {useAiRename && (!activeAiProfile || aiError) ? (
+              <div
+                role="alert"
+                className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px] text-amber-800 dark:text-amber-200"
+              >
+                <span className="min-w-0 flex-1">
+                  {aiError ?? "尚未配置可用的 AI 模型，请先前往设置。"}
+                </span>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {activeAiProfile && aiError ? (
+                    <>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => void handleStart(false)}
+                      >
+                        重试
+                      </Button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => void handleStart(true)}
+                      >
+                        使用原名称
+                      </Button>
+                    </>
+                  ) : null}
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={onOpenAiSettings}
+                  >
+                    前往 AI 设置
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
           <div className="mt-3 grid gap-3 border-t border-border/70 pt-3 md:grid-cols-[176px_minmax(0,1fr)]">
             <div className="space-y-1.5">
               <Label htmlFor="compression-level">压缩级别</Label>
@@ -558,7 +759,10 @@ export function CompressPage() {
                 value={level}
                 disabled={running}
                 onChange={(event) =>
-                  setLevel(Number(event.target.value) as CompressionLevel)
+                  updateDraft(
+                    "level",
+                    Number(event.target.value) as CompressionLevel
+                  )
                 }
                 className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -583,7 +787,9 @@ export function CompressPage() {
                     id="compression-password"
                     type={showPassword ? "text" : "password"}
                     value={password}
-                    onChange={(event) => setPassword(event.target.value)}
+                    onChange={(event) =>
+                      updateDraft("password", event.target.value)
+                    }
                     placeholder="留空则创建无密码归档"
                     disabled={running}
                     autoComplete="off"
@@ -604,7 +810,9 @@ export function CompressPage() {
                 </div>
                 <SwitchControl
                   checked={encryptFileNames}
-                  onCheckedChange={setEncryptFileNames}
+                  onCheckedChange={(checked) =>
+                    updateDraft("encryptFileNames", checked)
+                  }
                   label="加密文件名"
                   disabled={running || format !== "sevenZip"}
                   title={
@@ -634,7 +842,7 @@ export function CompressPage() {
             ) : (
               <Button
                 type="button"
-                onClick={handleStart}
+                onClick={() => void handleStart(false)}
                 disabled={busy || sources.length === 0}
               >
                 {busy ? (
