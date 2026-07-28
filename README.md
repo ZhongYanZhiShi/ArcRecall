@@ -24,6 +24,24 @@ ArcRecall reads file contents to determine the actual format, restores or correc
 - Inspect and unpack nested archives one layer at a time
 - Detect encryption and verify passwords locally
 - Keep processing records for later review
+- Keep local structured runtime logs with diagnostic export and SQLite backup
+
+## Logging and diagnostics
+
+The desktop app writes structured JSONL logs under
+`%LocalAppData%\ArcRecall\logs` on Windows (or the corresponding local-data
+directory on other platforms). Each file is capped at 5 MiB and up to five
+files are retained by default, for a 25 MiB total limit. The total limit can be
+set from 5 to 500 MiB under Settings → Application; the oldest shards are
+removed automatically when it is reached. The Logs page supports
+human-readable summaries with expandable technical details, level/text
+filters, automatic refresh, export, clearing, opening the log directory, and
+consistent SQLite snapshots that include committed WAL data.
+
+The default verbosity is `info`; switch between `error`, `warn`, `info`, and
+`debug` in the same settings card. Passwords, dictionary candidate contents,
+and user paths are never intentionally logged, and sensitive context fields
+are redacted before persistence.
 
 ## Repository structure
 

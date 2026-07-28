@@ -10,7 +10,8 @@ pub use dictionary::{
 };
 pub use paths::{APP_DATA_FOLDER_NAME, AppPaths};
 pub use settings::{
-    AppSettings, DatabaseInfo, EngineSettings, SettingsError, SettingsStore,
+    AppLogLevel, AppSettings, DEFAULT_LOG_MAX_DISK_MIB, DatabaseInfo, EngineSettings,
+    LoggingSettings, MAX_LOG_MAX_DISK_MIB, MIN_LOG_MAX_DISK_MIB, SettingsError, SettingsStore,
     resolve_tools_directory,
 };
 pub use tools::{

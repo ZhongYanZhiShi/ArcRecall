@@ -34,6 +34,7 @@ export {
   setSettings,
   setToolsDirectory,
   type AppSettings,
+  type AppLogLevel,
   type DatabaseInfo,
   type EngineComponentStatus,
   type FullEngineBundleInstallResult,
@@ -41,7 +42,25 @@ export {
   type HashcatInstallResult,
   type HashcatStatus,
   type JohnPerlStatus,
+  type LoggingSettings,
 } from "@/lib/settings"
+
+export {
+  backupDatabase,
+  clearLogs,
+  exportLogs,
+  listLogs,
+  openLogDirectory,
+  writeClientLog,
+  type ClientLogRequest,
+  type DatabaseBackupResult,
+  type LogEntry,
+  type LogExportResult,
+  type LogLevel,
+  type LogListResult,
+  type LogQuery,
+  type LogStats,
+} from "@/lib/logging"
 
 export {
   analyzeArchive,

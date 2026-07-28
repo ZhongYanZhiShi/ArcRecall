@@ -1,4 +1,6 @@
-use std::collections::VecDeque;
+mod logging;
+
+use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -6,20 +8,24 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_recall_core::{
-    APP_DATA_FOLDER_NAME, AppPaths, AppSettings, ArchiveAnalysis, ArchiveFormat, CancellationToken,
-    DEFAULT_RECURSIVE_MAX_ARCHIVES, DEFAULT_RECURSIVE_MAX_DEPTH, DatabaseInfo,
+    APP_DATA_FOLDER_NAME, AppLogLevel, AppPaths, AppSettings, ArchiveAnalysis, ArchiveFormat,
+    CancellationToken, DEFAULT_RECURSIVE_MAX_ARCHIVES, DEFAULT_RECURSIVE_MAX_DEPTH, DatabaseInfo,
     DictionaryCandidateAddSummary, DictionaryCandidateQuery, DictionaryCandidateStore,
     DictionaryListResult, FullEngineBundleInstallResult, FullEngineBundleManager,
     FullEngineBundleStatus, HashcatInstallResult, HashcatStatus, HashcatToolDownloader,
-    JohnPerlStatus, RecoveryDictionary, RecoveryError, RecoveryJob, RecoveryPhase,
-    RecoveryToolPaths, RecoveryUpdate, RecursiveRecoveryOptions, SERVICE_NAME, SettingsStore,
-    analyze_archive, health_status, path_for_display, probe_john_perl,
-    recover_and_extract_recursive_lazy, resolve_tools_directory,
+    JohnPerlStatus, LoggingSettings, MAX_LOG_MAX_DISK_MIB, MIN_LOG_MAX_DISK_MIB,
+    RecoveryDictionary, RecoveryError, RecoveryJob, RecoveryPhase, RecoveryToolPaths,
+    RecoveryUpdate, RecursiveRecoveryOptions, SERVICE_NAME, SettingsStore, analyze_archive,
+    health_status, path_for_display, probe_john_perl, recover_and_extract_recursive_lazy,
+    resolve_tools_directory,
 };
+use logging::{LogExportResult, LogLevel, LogListResult, LogQuery, LogStore};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 static RECOVERY_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static DATABASE_BACKUP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+const MIB_BYTES: u64 = 1024 * 1024;
 const RECOVERY_EVENT_LIMIT: usize = 80;
 
 struct AppState {
@@ -27,6 +33,7 @@ struct AppState {
     resource_dir: PathBuf,
     dictionary: Mutex<DictionaryCandidateStore>,
     settings: Mutex<SettingsStore>,
+    logger: Arc<LogStore>,
     engine_install: Arc<Mutex<()>>,
     recovery_task: Mutex<Option<RecoveryTaskHandle>>,
 }
@@ -212,11 +219,174 @@ fn recovery_progress_bucket(attempted: u64, total: u64) -> u64 {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientLogRequest {
+    level: LogLevel,
+    event: String,
+    message: String,
+    #[serde(default)]
+    context: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DatabaseBackupResult {
+    path: String,
+    byte_count: u64,
+    created_at_ms: u64,
+}
+
+fn configured_log_level(level: AppLogLevel) -> LogLevel {
+    match level {
+        AppLogLevel::Error => LogLevel::Error,
+        AppLogLevel::Warn => LogLevel::Warn,
+        AppLogLevel::Info => LogLevel::Info,
+        AppLogLevel::Debug => LogLevel::Debug,
+    }
+}
+
+fn apply_logging_settings(logger: &LogStore, settings: &LoggingSettings) -> Result<(), String> {
+    logger.set_max_level(configured_log_level(settings.level));
+    logger.set_max_total_bytes(u64::from(settings.max_disk_mib) * MIB_BYTES)
+}
+
+fn write_log(
+    logger: &LogStore,
+    level: LogLevel,
+    source: &str,
+    event: &str,
+    message: &str,
+    context: impl IntoIterator<Item = (String, String)>,
+) {
+    let _ = logger.write(level, source, event, message, context.into_iter().collect());
+}
+
+fn install_panic_logger(logger: Arc<LogStore>) {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        write_log(
+            &logger,
+            LogLevel::Error,
+            "desktop",
+            "app.panic",
+            "应用发生未处理异常。",
+            std::iter::empty(),
+        );
+        previous_hook(panic_info);
+    }));
+}
+
 #[tauri::command]
 fn health() -> HealthResponse {
     HealthResponse {
         service: SERVICE_NAME,
         status: health_status(),
+    }
+}
+
+#[tauri::command]
+fn log_write(state: State<'_, AppState>, request: ClientLogRequest) -> Result<(), String> {
+    state
+        .logger
+        .write(
+            request.level,
+            "frontend",
+            &request.event,
+            &request.message,
+            request.context,
+        )
+        .map(|_| ())
+}
+
+#[tauri::command]
+fn log_list(state: State<'_, AppState>, query: LogQuery) -> Result<LogListResult, String> {
+    state.logger.list(&query)
+}
+
+#[tauri::command]
+fn log_export(state: State<'_, AppState>) -> Result<LogExportResult, String> {
+    let result = state.logger.export(&state.paths.exports);
+    match &result {
+        Ok(export) => write_log(
+            &state.logger,
+            LogLevel::Info,
+            "logs",
+            "logs.exported",
+            "日志已导出。",
+            [
+                ("entry_count".into(), export.entry_count.to_string()),
+                ("byte_count".into(), export.byte_count.to_string()),
+            ],
+        ),
+        Err(_) => write_log(
+            &state.logger,
+            LogLevel::Error,
+            "logs",
+            "logs.export_failed",
+            "日志导出失败。",
+            std::iter::empty(),
+        ),
+    }
+    result
+}
+
+#[tauri::command]
+fn log_clear(state: State<'_, AppState>) -> Result<usize, String> {
+    let removed = state.logger.clear()?;
+    write_log(
+        &state.logger,
+        LogLevel::Info,
+        "logs",
+        "logs.cleared",
+        "历史日志已清空。",
+        [("removed_file_count".into(), removed.to_string())],
+    );
+    Ok(removed)
+}
+
+#[tauri::command]
+fn log_open_directory(state: State<'_, AppState>) -> Result<(), String> {
+    open_directory(state.logger.directory())
+}
+
+#[tauri::command]
+fn database_backup(state: State<'_, AppState>) -> Result<DatabaseBackupResult, String> {
+    let created_at_ms = current_time_ms();
+    let destination = unique_database_backup_path(&state.paths.exports, created_at_ms)?;
+    let result = {
+        let store = state.dictionary.lock().map_err(|error| error.to_string())?;
+        store
+            .backup(&destination)
+            .map_err(|error| error.to_string())
+    };
+    match result {
+        Ok(byte_count) => {
+            write_log(
+                &state.logger,
+                LogLevel::Info,
+                "database",
+                "database.backup_completed",
+                "SQLite 备份已创建。",
+                [("byte_count".into(), byte_count.to_string())],
+            );
+            Ok(DatabaseBackupResult {
+                path: destination.display().to_string(),
+                byte_count,
+                created_at_ms,
+            })
+        }
+        Err(error) => {
+            write_log(
+                &state.logger,
+                LogLevel::Error,
+                "database",
+                "database.backup_failed",
+                "SQLite 备份创建失败。",
+                std::iter::empty(),
+            );
+            Err(error)
+        }
     }
 }
 
@@ -240,8 +410,40 @@ fn dictionary_add(
     state: State<'_, AppState>,
     candidates: Vec<String>,
 ) -> Result<DictionaryCandidateAddSummary, String> {
-    let store = state.dictionary.lock().map_err(|e| e.to_string())?;
-    store.add_candidates(candidates).map_err(|e| e.to_string())
+    let result = {
+        let store = state.dictionary.lock().map_err(|e| e.to_string())?;
+        store.add_candidates(candidates).map_err(|e| e.to_string())
+    };
+    match &result {
+        Ok(summary) => write_log(
+            &state.logger,
+            LogLevel::Info,
+            "dictionary",
+            "dictionary.candidates_added",
+            "候选字典已更新。",
+            [
+                (
+                    "submitted_count".into(),
+                    summary.submitted_count.to_string(),
+                ),
+                ("added_count".into(), summary.added_count.to_string()),
+                (
+                    "duplicate_count".into(),
+                    summary.duplicate_count.to_string(),
+                ),
+                ("invalid_count".into(), summary.invalid_count.to_string()),
+            ],
+        ),
+        Err(_) => write_log(
+            &state.logger,
+            LogLevel::Error,
+            "dictionary",
+            "dictionary.add_failed",
+            "候选字典更新失败。",
+            std::iter::empty(),
+        ),
+    }
+    result
 }
 
 #[tauri::command]
@@ -249,14 +451,67 @@ fn dictionary_import_file(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<DictionaryCandidateAddSummary, String> {
-    let store = state.dictionary.lock().map_err(|e| e.to_string())?;
-    store.import_file(path).map_err(|e| e.to_string())
+    let result = {
+        let store = state.dictionary.lock().map_err(|e| e.to_string())?;
+        store.import_file(path).map_err(|e| e.to_string())
+    };
+    match &result {
+        Ok(summary) => write_log(
+            &state.logger,
+            LogLevel::Info,
+            "dictionary",
+            "dictionary.file_imported",
+            "字典文件已导入。",
+            [
+                (
+                    "submitted_count".into(),
+                    summary.submitted_count.to_string(),
+                ),
+                ("added_count".into(), summary.added_count.to_string()),
+                ("invalid_count".into(), summary.invalid_count.to_string()),
+            ],
+        ),
+        Err(_) => write_log(
+            &state.logger,
+            LogLevel::Error,
+            "dictionary",
+            "dictionary.import_failed",
+            "字典文件导入失败。",
+            std::iter::empty(),
+        ),
+    }
+    result
 }
 
 #[tauri::command]
 fn dictionary_delete(state: State<'_, AppState>, ids: Vec<i64>) -> Result<u64, String> {
-    let store = state.dictionary.lock().map_err(|e| e.to_string())?;
-    store.delete(&ids).map_err(|e| e.to_string())
+    let requested_count = ids.len();
+    let result = {
+        let store = state.dictionary.lock().map_err(|e| e.to_string())?;
+        store.delete(&ids).map_err(|e| e.to_string())
+    };
+    match &result {
+        Ok(deleted_count) => write_log(
+            &state.logger,
+            LogLevel::Info,
+            "dictionary",
+            "dictionary.candidates_deleted",
+            "候选字典条目已删除。",
+            [
+                ("requested_count".into(), requested_count.to_string()),
+                ("deleted_count".into(), deleted_count.to_string()),
+            ],
+        ),
+        Err(_) => write_log(
+            &state.logger,
+            LogLevel::Error,
+            "dictionary",
+            "dictionary.delete_failed",
+            "候选字典删除失败。",
+            std::iter::empty(),
+        ),
+    }
+    result
 }
 
 #[tauri::command]
@@ -269,6 +524,7 @@ fn database_info(state: State<'_, AppState>) -> Result<DatabaseInfo, String> {
         candidate_count: count,
         settings_path: state.paths.settings.display().to_string(),
         root_path: state.paths.root.display().to_string(),
+        logs_path: state.paths.logs.display().to_string(),
         tools_path: state.paths.tools.display().to_string(),
     })
 }
@@ -281,9 +537,45 @@ fn settings_get(state: State<'_, AppState>) -> Result<AppSettings, String> {
 
 #[tauri::command]
 fn settings_set(state: State<'_, AppState>, settings: AppSettings) -> Result<AppSettings, String> {
-    let store = state.settings.lock().map_err(|e| e.to_string())?;
-    store.save(&settings).map_err(|e| e.to_string())?;
-    store.load().map_err(|e| e.to_string())
+    if !settings.logging.has_valid_disk_limit() {
+        return Err(format!(
+            "日志最大占用必须在 {MIN_LOG_MAX_DISK_MIB}–{MAX_LOG_MAX_DISK_MIB} MiB 之间。"
+        ));
+    }
+    let logging = settings.logging.clone();
+    let result = {
+        let store = state.settings.lock().map_err(|e| e.to_string())?;
+        store.save(&settings).map_err(|e| e.to_string())?;
+        store.load().map_err(|e| e.to_string())
+    };
+    match &result {
+        Ok(_) => {
+            apply_logging_settings(&state.logger, &logging)?;
+            write_log(
+                &state.logger,
+                LogLevel::Info,
+                "settings",
+                "settings.saved",
+                "应用设置已保存。",
+                [
+                    (
+                        "log_level".into(),
+                        format!("{:?}", logging.level).to_lowercase(),
+                    ),
+                    ("log_max_disk_mib".into(), logging.max_disk_mib.to_string()),
+                ],
+            );
+        }
+        Err(_) => write_log(
+            &state.logger,
+            LogLevel::Error,
+            "settings",
+            "settings.save_failed",
+            "应用设置保存失败。",
+            std::iter::empty(),
+        ),
+    }
+    result
 }
 
 fn hashcat_downloader(state: &AppState) -> Result<HashcatToolDownloader, String> {
@@ -322,6 +614,14 @@ async fn tool_full_bundle_status(
 async fn tool_full_bundle_install(
     state: State<'_, AppState>,
 ) -> Result<FullEngineBundleInstallResult, String> {
+    write_log(
+        &state.logger,
+        LogLevel::Info,
+        "engine",
+        "engine.bundle_install_started",
+        "完整引擎部署已开始。",
+        std::iter::empty(),
+    );
     let manager = full_bundle_manager(&state)?;
     let install_lock = Arc::clone(&state.engine_install);
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -341,6 +641,26 @@ async fn tool_full_bundle_install(
         settings.engine.perl_path = result.perl_path.clone();
         store.save(&settings).map_err(|e| e.to_string())?;
     }
+    write_log(
+        &state.logger,
+        if result.success {
+            LogLevel::Info
+        } else {
+            LogLevel::Warn
+        },
+        "engine",
+        if result.success {
+            "engine.bundle_install_completed"
+        } else {
+            "engine.bundle_install_incomplete"
+        },
+        if result.success {
+            "完整引擎部署已完成。"
+        } else {
+            "完整引擎部署未完成。"
+        },
+        std::iter::empty(),
+    );
     Ok(result)
 }
 
@@ -359,6 +679,14 @@ fn tool_hashcat_status(state: State<'_, AppState>) -> Result<HashcatStatus, Stri
 
 #[tauri::command]
 fn tool_hashcat_download(state: State<'_, AppState>) -> Result<HashcatInstallResult, String> {
+    write_log(
+        &state.logger,
+        LogLevel::Info,
+        "engine",
+        "engine.hashcat_install_started",
+        "Hashcat 安装已开始。",
+        std::iter::empty(),
+    );
     let downloader = hashcat_downloader(&state)?;
     let result = downloader.install().map_err(|e| e.to_string())?;
     if result.success && !result.executable_path.is_empty() {
@@ -367,6 +695,26 @@ fn tool_hashcat_download(state: State<'_, AppState>) -> Result<HashcatInstallRes
             .save_hashcat_path(&result.executable_path)
             .map_err(|e| e.to_string())?;
     }
+    write_log(
+        &state.logger,
+        if result.success {
+            LogLevel::Info
+        } else {
+            LogLevel::Warn
+        },
+        "engine",
+        if result.success {
+            "engine.hashcat_install_completed"
+        } else {
+            "engine.hashcat_install_incomplete"
+        },
+        if result.success {
+            "Hashcat 安装已完成。"
+        } else {
+            "Hashcat 安装未完成。"
+        },
+        std::iter::empty(),
+    );
     Ok(result)
 }
 
@@ -437,8 +785,27 @@ fn tool_set_john_perl(
 }
 
 #[tauri::command]
-fn archive_analyze(path: String) -> Result<ArchiveAnalysis, String> {
-    analyze_archive(path).map_err(|error| error.to_string())
+fn archive_analyze(state: State<'_, AppState>, path: String) -> Result<ArchiveAnalysis, String> {
+    let result = analyze_archive(path).map_err(|error| error.to_string());
+    match &result {
+        Ok(analysis) => write_log(
+            &state.logger,
+            LogLevel::Debug,
+            "recovery",
+            "archive.analyzed",
+            "归档分析已完成。",
+            [("format".into(), analysis.format_label.clone())],
+        ),
+        Err(_) => write_log(
+            &state.logger,
+            LogLevel::Warn,
+            "recovery",
+            "archive.analysis_failed",
+            "归档分析失败。",
+            std::iter::empty(),
+        ),
+    }
+    result
 }
 
 #[tauri::command]
@@ -446,6 +813,21 @@ async fn recovery_start(
     state: State<'_, AppState>,
     request: RecoveryStartRequest,
 ) -> Result<RecoveryTaskStatus, String> {
+    write_log(
+        &state.logger,
+        LogLevel::Debug,
+        "recovery",
+        "recovery.requested",
+        "收到恢复任务请求。",
+        [(
+            "mode".into(),
+            if request.known_password.is_some() {
+                "known".into()
+            } else {
+                "dictionary".into()
+            },
+        )],
+    );
     {
         let current = state
             .recovery_task
@@ -558,6 +940,24 @@ async fn recovery_start(
     }
 
     let initial = status.lock().map_err(|error| error.to_string())?.clone();
+    write_log(
+        &state.logger,
+        LogLevel::Info,
+        "recovery",
+        "recovery.started",
+        "恢复任务已启动。",
+        [
+            ("task_id".into(), initial.task_id.clone()),
+            (
+                "archive_format".into(),
+                initial.archive_format_label.clone(),
+            ),
+            (
+                "candidate_count".into(),
+                initial.candidate_count.to_string(),
+            ),
+        ],
+    );
     let job = RecoveryJob {
         archive_path,
         output_directory,
@@ -571,7 +971,10 @@ async fn recovery_start(
     let dictionary_database_path = state.paths.database.clone();
     let dictionary_cancellation = cancellation.clone();
     let success_database_path = state.paths.database.clone();
+    let logger_for_worker = Arc::clone(&state.logger);
+    let worker_task_id = initial.task_id.clone();
     std::thread::spawn(move || {
+        let mut last_logged_phase = None;
         let outcome = recover_and_extract_recursive_lazy(
             &job,
             &tools,
@@ -602,7 +1005,21 @@ async fn recovery_start(
             },
             |update| {
                 let event_update = update.clone();
-
+                if last_logged_phase != Some(update.phase) {
+                    write_log(
+                        &logger_for_worker,
+                        LogLevel::Debug,
+                        "recovery",
+                        "recovery.phase_changed",
+                        "恢复任务阶段已切换。",
+                        [
+                            ("task_id".into(), worker_task_id.clone()),
+                            ("phase".into(), format!("{:?}", update.phase).to_lowercase()),
+                            ("engine".into(), update.engine.clone().unwrap_or_default()),
+                        ],
+                    );
+                    last_logged_phase = Some(update.phase);
+                }
                 if let Ok(mut task_status) = status_for_worker.lock() {
                     task_status.phase = update.phase;
                     task_status.engine = update.engine;
@@ -674,17 +1091,73 @@ async fn recovery_start(
                             let _ = store.increment_success(password);
                         }
                     }
+                    write_log(
+                        &logger_for_worker,
+                        if result.root.success {
+                            LogLevel::Info
+                        } else if result.root.cancelled {
+                            LogLevel::Warn
+                        } else {
+                            LogLevel::Warn
+                        },
+                        "recovery",
+                        if result.root.success {
+                            "recovery.completed"
+                        } else if result.root.cancelled {
+                            "recovery.cancelled"
+                        } else {
+                            "recovery.unsuccessful"
+                        },
+                        if result.root.success {
+                            "恢复任务已完成。"
+                        } else if result.root.cancelled {
+                            "恢复任务已取消。"
+                        } else {
+                            "恢复任务已结束，但当前候选未找到可用密码。"
+                        },
+                        [
+                            ("task_id".into(), worker_task_id.clone()),
+                            (
+                                "engine".into(),
+                                result.root.engine.clone().unwrap_or_default(),
+                            ),
+                            (
+                                "nested_extracted".into(),
+                                result.extracted_nested_archives.to_string(),
+                            ),
+                            (
+                                "nested_skipped".into(),
+                                result.skipped_nested_archives.to_string(),
+                            ),
+                        ],
+                    );
                 }
                 Err(arc_recall_core::RecoveryError::Cancelled) => {
                     task_status.cancelled = true;
                     task_status.phase = RecoveryPhase::Cancelled;
                     task_status.message = "密码恢复任务已取消。".into();
                     append_current_recovery_event(&mut task_status);
+                    write_log(
+                        &logger_for_worker,
+                        LogLevel::Warn,
+                        "recovery",
+                        "recovery.cancelled",
+                        "恢复任务已取消。",
+                        [("task_id".into(), worker_task_id.clone())],
+                    );
                 }
                 Err(error) => {
                     task_status.phase = RecoveryPhase::Failed;
                     task_status.message = error.to_string();
                     append_current_recovery_event(&mut task_status);
+                    write_log(
+                        &logger_for_worker,
+                        LogLevel::Error,
+                        "recovery",
+                        "recovery.failed",
+                        "恢复任务执行失败。",
+                        [("task_id".into(), worker_task_id.clone())],
+                    );
                 }
             }
         }
@@ -738,6 +1211,14 @@ fn recovery_cancel(state: State<'_, AppState>, task_id: String) -> Result<bool, 
     if let Ok(mut status) = task.status.lock() {
         status.message = "正在停止外部引擎…".into();
     }
+    write_log(
+        &state.logger,
+        LogLevel::Warn,
+        "recovery",
+        "recovery.cancel_requested",
+        "已请求停止恢复任务。",
+        [("task_id".into(), task_id)],
+    );
     Ok(true)
 }
 
@@ -746,6 +1227,38 @@ fn open_output_directory(path: String) -> Result<(), String> {
     let directory = PathBuf::from(path);
     if !directory.is_dir() {
         return Err("输出目录不存在。".into());
+    }
+    open_directory(&directory)
+}
+
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return Err("路径不存在。".into());
+    }
+    if path.is_dir() {
+        return open_directory(&path);
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg("/select,")
+            .arg(path)
+            .spawn()
+            .map_err(|error| format!("无法在资源管理器中定位文件：{error}"))?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err("当前平台暂不支持自动定位文件。".into())
+    }
+}
+
+fn open_directory(directory: &Path) -> Result<(), String> {
+    if !directory.is_dir() {
+        return Err("目录不存在。".into());
     }
     #[cfg(windows)]
     {
@@ -762,30 +1275,20 @@ fn open_output_directory(path: String) -> Result<(), String> {
     }
 }
 
-#[tauri::command]
-fn open_path(path: String) -> Result<(), String> {
-    let path = PathBuf::from(path);
-    if !path.exists() {
-        return Err("路径不存在。".into());
-    }
-    #[cfg(windows)]
-    {
-        let mut command = std::process::Command::new("explorer.exe");
-        if path.is_dir() {
-            command.arg(&path);
-        } else {
-            command.arg("/select,").arg(&path);
+fn unique_database_backup_path(
+    exports_directory: &Path,
+    created_at_ms: u64,
+) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(exports_directory).map_err(|error| error.to_string())?;
+    for _ in 0..100 {
+        let sequence = DATABASE_BACKUP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path =
+            exports_directory.join(format!("arcrecall-database-{created_at_ms}-{sequence}.db"));
+        if !path.exists() {
+            return Ok(path);
         }
-        command
-            .spawn()
-            .map_err(|error| format!("无法在资源管理器中打开路径：{error}"))?;
-        Ok(())
     }
-    #[cfg(not(windows))]
-    {
-        let _ = path;
-        Err("当前平台暂不支持自动打开路径。".into())
-    }
+    Err("无法创建唯一的数据库备份文件。".into())
 }
 
 fn resolve_available_output_directory(preferred: &Path) -> PathBuf {
@@ -818,10 +1321,7 @@ fn current_time_ms() -> u64 {
 }
 
 fn next_recovery_task_id() -> String {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default();
+    let timestamp = current_time_ms();
     let sequence = RECOVERY_TASK_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     format!("recovery-{timestamp}-{sequence}")
 }
@@ -853,11 +1353,29 @@ pub fn run() {
                 .map_err(|e| format!("open dictionary store: {e}"))?;
             let settings = SettingsStore::open(&paths.settings)
                 .map_err(|e| format!("open settings store: {e}"))?;
+            let loaded_settings = settings.load().map_err(|e| format!("load settings: {e}"))?;
+            let logger =
+                Arc::new(LogStore::new(&paths.logs).map_err(|e| format!("open log store: {e}"))?);
+            apply_logging_settings(&logger, &loaded_settings.logging)
+                .map_err(|e| format!("configure log store: {e}"))?;
+            install_panic_logger(Arc::clone(&logger));
+            write_log(
+                &logger,
+                LogLevel::Info,
+                "desktop",
+                "app.started",
+                "ArcRecall 桌面应用已启动。",
+                [
+                    ("version".into(), env!("CARGO_PKG_VERSION").into()),
+                    ("platform".into(), std::env::consts::OS.into()),
+                ],
+            );
             app.manage(AppState {
                 paths,
                 resource_dir,
                 dictionary: Mutex::new(dictionary),
                 settings: Mutex::new(settings),
+                logger,
                 engine_install: Arc::new(Mutex::new(())),
                 recovery_task: Mutex::new(None),
             });
@@ -865,6 +1383,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             health,
+            log_write,
+            log_list,
+            log_export,
+            log_clear,
+            log_open_directory,
+            database_backup,
             dictionary_list,
             dictionary_count,
             dictionary_add,

@@ -3,6 +3,55 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_LOG_MAX_DISK_MIB: u16 = 25;
+pub const MIN_LOG_MAX_DISK_MIB: u16 = 5;
+pub const MAX_LOG_MAX_DISK_MIB: u16 = 500;
+
+/// Maximum log verbosity persisted by the desktop application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AppLogLevel {
+    Error,
+    Warn,
+    #[default]
+    Info,
+    Debug,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoggingSettings {
+    #[serde(default)]
+    pub level: AppLogLevel,
+    #[serde(default = "default_log_max_disk_mib")]
+    pub max_disk_mib: u16,
+}
+
+impl Default for LoggingSettings {
+    fn default() -> Self {
+        Self {
+            level: AppLogLevel::default(),
+            max_disk_mib: DEFAULT_LOG_MAX_DISK_MIB,
+        }
+    }
+}
+
+impl LoggingSettings {
+    pub fn has_valid_disk_limit(&self) -> bool {
+        (MIN_LOG_MAX_DISK_MIB..=MAX_LOG_MAX_DISK_MIB).contains(&self.max_disk_mib)
+    }
+
+    fn normalize(&mut self) {
+        self.max_disk_mib = self
+            .max_disk_mib
+            .clamp(MIN_LOG_MAX_DISK_MIB, MAX_LOG_MAX_DISK_MIB);
+    }
+}
+
+const fn default_log_max_disk_mib() -> u16 {
+    DEFAULT_LOG_MAX_DISK_MIB
+}
+
 /// External cracking / engine tool paths.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +79,8 @@ pub struct AppSettings {
     pub version: u32,
     #[serde(default)]
     pub engine: EngineSettings,
+    #[serde(default)]
+    pub logging: LoggingSettings,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -74,7 +125,9 @@ impl SettingsStore {
             self.save(&defaults)?;
             return Ok(defaults);
         }
-        Ok(serde_json::from_str(&raw)?)
+        let mut settings = serde_json::from_str::<AppSettings>(&raw)?;
+        settings.logging.normalize();
+        Ok(settings)
     }
 
     pub fn save(&self, settings: &AppSettings) -> Result<(), SettingsError> {
@@ -134,6 +187,7 @@ pub struct DatabaseInfo {
     pub candidate_count: u64,
     pub settings_path: String,
     pub root_path: String,
+    pub logs_path: String,
     pub tools_path: String,
 }
 
@@ -149,6 +203,39 @@ mod tests {
         assert!(path.is_file());
         let loaded = store.load().unwrap();
         assert!(loaded.engine.hashcat_path.is_empty());
+        assert_eq!(loaded.logging.level, AppLogLevel::Info);
+        assert_eq!(loaded.logging.max_disk_mib, DEFAULT_LOG_MAX_DISK_MIB);
+    }
+
+    #[test]
+    fn loads_default_log_capacity_from_older_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"version":0,"engine":{},"logging":{"level":"debug"}}"#,
+        )
+        .unwrap();
+
+        let loaded = SettingsStore::open(&path).unwrap().load().unwrap();
+
+        assert_eq!(loaded.logging.level, AppLogLevel::Debug);
+        assert_eq!(loaded.logging.max_disk_mib, DEFAULT_LOG_MAX_DISK_MIB);
+    }
+
+    #[test]
+    fn clamps_manually_edited_log_capacity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"version":0,"engine":{},"logging":{"maxDiskMib":65535}}"#,
+        )
+        .unwrap();
+
+        let loaded = SettingsStore::open(&path).unwrap().load().unwrap();
+
+        assert_eq!(loaded.logging.max_disk_mib, MAX_LOG_MAX_DISK_MIB);
     }
 
     #[test]

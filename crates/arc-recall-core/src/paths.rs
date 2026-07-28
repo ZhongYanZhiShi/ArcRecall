@@ -15,6 +15,7 @@ pub struct AppPaths {
     pub database: PathBuf,
     pub settings: PathBuf,
     pub exports: PathBuf,
+    pub logs: PathBuf,
     pub tools: PathBuf,
     pub temp: PathBuf,
 }
@@ -26,6 +27,7 @@ impl AppPaths {
             database: root.join("arcrecall.db"),
             settings: root.join("settings.json"),
             exports: root.join("exports"),
+            logs: root.join("logs"),
             tools: root.join("tools"),
             temp: root.join("temp"),
             root,
@@ -40,6 +42,7 @@ impl AppPaths {
     pub fn ensure_dirs(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.root)?;
         std::fs::create_dir_all(&self.exports)?;
+        std::fs::create_dir_all(&self.logs)?;
         std::fs::create_dir_all(&self.tools)?;
         std::fs::create_dir_all(&self.temp)?;
         Ok(())

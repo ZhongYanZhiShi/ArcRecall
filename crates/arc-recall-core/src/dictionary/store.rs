@@ -281,6 +281,22 @@ impl DictionaryCandidateStore {
         })
     }
 
+    /// Create a consistent SQLite snapshot, including committed WAL contents.
+    ///
+    /// `VACUUM INTO` requires the destination to be absent and leaves the live
+    /// database untouched.
+    pub fn backup(&self, destination: impl AsRef<Path>) -> Result<u64, DictionaryError> {
+        let destination = destination.as_ref();
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let _guard = self.write_lock.lock().expect("dictionary write lock");
+        self.with_connection(|conn| {
+            conn.execute("VACUUM INTO ?1;", [destination.display().to_string()])?;
+            Ok(std::fs::metadata(destination)?.len())
+        })
+    }
+
     /// Read a single candidate text by id (for tests / diagnostics).
     pub fn get_value(&self, id: i64) -> Result<Option<String>, DictionaryError> {
         self.with_connection(|conn| {
@@ -316,6 +332,19 @@ mod tests {
         let path = dir.path().join("arcrecall.db");
         let store = DictionaryCandidateStore::open(&path).expect("open store");
         (dir, store)
+    }
+
+    #[test]
+    fn backup_creates_consistent_database_snapshot() {
+        let (dir, store) = temp_db();
+        store.add_candidates(["alpha", "beta"]).unwrap();
+        let backup_path = dir.path().join("backup.db");
+
+        let size = store.backup(&backup_path).unwrap();
+        let backup = DictionaryCandidateStore::open(&backup_path).unwrap();
+
+        assert!(size > 0);
+        assert_eq!(backup.count().unwrap(), 2);
     }
 
     #[test]

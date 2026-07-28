@@ -10,9 +10,21 @@ export type EngineSettings = {
   perlPath?: string
 }
 
+export type AppLogLevel = "error" | "warn" | "info" | "debug"
+
+export const DEFAULT_LOG_MAX_DISK_MIB = 25
+export const MIN_LOG_MAX_DISK_MIB = 5
+export const MAX_LOG_MAX_DISK_MIB = 500
+
+export type LoggingSettings = {
+  level: AppLogLevel
+  maxDiskMib: number
+}
+
 export type AppSettings = {
   version?: number
   engine?: EngineSettings
+  logging?: LoggingSettings
 }
 
 export type DatabaseInfo = {
@@ -21,6 +33,7 @@ export type DatabaseInfo = {
   candidateCount: number
   settingsPath: string
   rootPath: string
+  logsPath: string
   toolsPath: string
 }
 
@@ -156,7 +169,14 @@ export async function installFullEngineBundle(): Promise<FullEngineBundleInstall
 
 export async function getSettings(): Promise<AppSettings> {
   if (!isDesktopRuntime()) {
-    return { version: 0, engine: { hashcatPath: "", toolsDirectory: "" } }
+    return {
+      version: 0,
+      engine: { hashcatPath: "", toolsDirectory: "" },
+      logging: {
+        level: "info",
+        maxDiskMib: DEFAULT_LOG_MAX_DISK_MIB,
+      },
+    }
   }
   return invoke<AppSettings>("settings_get")
 }
@@ -177,6 +197,7 @@ export async function getDatabaseInfo(): Promise<DatabaseInfo> {
       candidateCount,
       settingsPath: "（浏览器预览）",
       rootPath: "（浏览器预览）",
+      logsPath: "（浏览器预览：内存日志）",
       toolsPath: "（浏览器预览）",
     }
   }

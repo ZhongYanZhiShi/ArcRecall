@@ -3,14 +3,16 @@
 import * as React from "react"
 
 import { AppShell, NAV_ORDER, type NavId } from "@/components/app-shell"
+import { ClientLoggingBridge } from "@/components/client-logging-bridge"
 import { DictionaryPage } from "@/components/home/dictionary-page"
 import { ExtractPage } from "@/components/home/extract-page"
+import { LogsPage } from "@/components/home/logs-page"
 import { PlaceholderPage } from "@/components/home/placeholder-page"
 import { SettingsPage } from "@/components/home/settings-page"
 import { cn } from "@/lib/utils"
 
 const PLACEHOLDERS: Record<
-  Exclude<NavId, "extract" | "dictionary" | "settings">,
+  Exclude<NavId, "extract" | "dictionary" | "logs" | "settings">,
   { eyebrow: string; title: string; description: string }
 > = {
   compress: {
@@ -23,11 +25,6 @@ const PLACEHOLDERS: Record<
     eyebrow: "Recall",
     title: "历史",
     description: "按内容指纹查看已成功验密的归档摘要；不展示路径与明文密码。",
-  },
-  logs: {
-    eyebrow: "Operations",
-    title: "日志",
-    description: "查看最近运行日志、导出日志包，并备份本机 SQLite 数据库。",
   },
 }
 
@@ -49,6 +46,9 @@ function renderNavPage(nav: NavId) {
   }
   if (nav === "settings") {
     return <SettingsPage />
+  }
+  if (nav === "logs") {
+    return <LogsPage />
   }
   return <PlaceholderPage {...PLACEHOLDERS[nav]} />
 }
@@ -85,21 +85,24 @@ export default function Page() {
   )
 
   return (
-    <AppShell activeNav={activeNav} onNavChange={handleNavChange}>
-      <div className="relative h-full min-h-0 overflow-hidden">
-        <div
-          key={`${activeNav}-${transitionId}`}
-          className={cn(
-            "h-full min-h-0",
-            direction === "forward" &&
-              "animate-slide-in-from-right motion-safe-only",
-            direction === "backward" &&
-              "animate-slide-in-from-left motion-safe-only"
-          )}
-        >
-          {renderNavPage(activeNav)}
+    <>
+      <ClientLoggingBridge />
+      <AppShell activeNav={activeNav} onNavChange={handleNavChange}>
+        <div className="relative h-full min-h-0 overflow-hidden">
+          <div
+            key={`${activeNav}-${transitionId}`}
+            className={cn(
+              "h-full min-h-0",
+              direction === "forward" &&
+                "animate-slide-in-from-right motion-safe-only",
+              direction === "backward" &&
+                "animate-slide-in-from-left motion-safe-only"
+            )}
+          >
+            {renderNavPage(activeNav)}
+          </div>
         </div>
-      </div>
-    </AppShell>
+      </AppShell>
+    </>
   )
 }

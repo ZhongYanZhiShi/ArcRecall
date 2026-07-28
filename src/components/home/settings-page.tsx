@@ -25,18 +25,25 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
+  type AppLogLevel,
+  type AppSettings,
   type DatabaseInfo,
   type FullEngineBundleStatus,
   type HashcatStatus,
   type JohnPerlStatus,
+  DEFAULT_LOG_MAX_DISK_MIB,
+  MAX_LOG_MAX_DISK_MIB,
+  MIN_LOG_MAX_DISK_MIB,
   downloadHashcat,
   getDatabaseInfo,
   getFullEngineBundleStatus,
   getHashcatStatus,
   getJohnPerlStatus,
+  getSettings,
   installFullEngineBundle,
   openPath,
   setJohnPerl as saveJohnPerlPaths,
+  setSettings,
   setToolsDirectory,
 } from "@/lib/settings"
 import { cn } from "@/lib/utils"
@@ -65,7 +72,7 @@ const CATEGORIES: {
     id: "app",
     label: "应用",
     icon: Settings2,
-    description: "日志级别、7-Zip 诊断与快捷入口",
+    description: "日志级别、容量、7-Zip 诊断与快捷入口",
   },
   {
     id: "data",
@@ -75,6 +82,19 @@ const CATEGORIES: {
   },
 ]
 
+const LOG_LEVELS: {
+  value: AppLogLevel
+  label: string
+  description: string
+}[] = [
+  { value: "error", label: "错误", description: "仅保留失败事件" },
+  { value: "warn", label: "警告", description: "错误与风险提示" },
+  { value: "info", label: "信息", description: "推荐的日常运行记录" },
+  { value: "debug", label: "调试", description: "包含更细的界面诊断" },
+]
+
+const LOG_CAPACITY_PRESETS = [25, 100, 250, 500] as const
+
 export function SettingsPage() {
   const [category, setCategory] = React.useState<SettingsCategory>("engine")
   const [dbInfo, setDbInfo] = React.useState<DatabaseInfo | null>(null)
@@ -82,12 +102,20 @@ export function SettingsPage() {
     React.useState<FullEngineBundleStatus | null>(null)
   const [hashcat, setHashcat] = React.useState<HashcatStatus | null>(null)
   const [johnPerl, setJohnPerl] = React.useState<JohnPerlStatus | null>(null)
+  const [appSettings, setAppSettings] = React.useState<AppSettings | null>(null)
   const [toolsDirInput, setToolsDirInput] = React.useState("")
   const [johnDirInput, setJohnDirInput] = React.useState("")
   const [perlPathInput, setPerlPathInput] = React.useState("")
   const [engineBusy, setEngineBusy] = React.useState(false)
   const [engineMessage, setEngineMessage] = React.useState<string | null>(null)
   const [engineError, setEngineError] = React.useState(false)
+  const [logSettingsBusy, setLogSettingsBusy] = React.useState(false)
+  const [logSettingsMessage, setLogSettingsMessage] = React.useState<
+    string | null
+  >(null)
+  const [logMaxDiskInput, setLogMaxDiskInput] = React.useState(
+    String(DEFAULT_LOG_MAX_DISK_MIB)
+  )
 
   const refreshEngine = React.useCallback(async () => {
     try {
@@ -114,11 +142,12 @@ export function SettingsPage() {
     let cancelled = false
     void (async () => {
       try {
-        const [info, bundle, status, john] = await Promise.all([
+        const [info, bundle, status, john, settings] = await Promise.all([
           getDatabaseInfo(),
           getFullEngineBundleStatus(),
           getHashcatStatus(),
           getJohnPerlStatus(),
+          getSettings(),
         ])
         if (cancelled) {
           return
@@ -127,6 +156,10 @@ export function SettingsPage() {
         setFullBundle(bundle)
         setHashcat(status)
         setJohnPerl(john)
+        setAppSettings(settings)
+        setLogMaxDiskInput(
+          String(settings.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB)
+        )
         setToolsDirInput(status.configuredToolsDirectory || "")
         setJohnDirInput(john.johnToolsDirectory || "")
         setPerlPathInput(john.perlPath || "")
@@ -136,6 +169,7 @@ export function SettingsPage() {
           setFullBundle(null)
           setHashcat(null)
           setJohnPerl(null)
+          setAppSettings(null)
         }
       }
     })()
@@ -303,11 +337,90 @@ export function SettingsPage() {
     setEngineError(false)
     setEngineMessage(null)
     void openPath(path.trim()).catch((error) => {
-      const message =
-        error instanceof Error ? error.message : String(error ?? "未知错误")
       setEngineError(true)
-      setEngineMessage(`无法跳转到该路径：${message}`)
+      setEngineMessage(`无法跳转到该路径：${errorMessage(error)}`)
     })
+  }
+
+  const handleLogLevelChange = (level: AppLogLevel) => {
+    if (
+      logSettingsBusy ||
+      appSettings === null ||
+      appSettings.logging?.level === level
+    ) {
+      return
+    }
+    const previous = appSettings
+    const next: AppSettings = {
+      ...appSettings,
+      logging: {
+        level,
+        maxDiskMib: appSettings.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB,
+      },
+    }
+    setAppSettings(next)
+    setLogSettingsBusy(true)
+    setLogSettingsMessage("正在保存日志级别…")
+    void (async () => {
+      try {
+        const saved = await setSettings(next)
+        setAppSettings(saved)
+        setLogSettingsMessage(`日志级别已切换为“${logLevelLabel(level)}”。`)
+      } catch (error) {
+        setAppSettings(previous)
+        setLogSettingsMessage(`保存失败：${errorMessage(error)}`)
+      } finally {
+        setLogSettingsBusy(false)
+      }
+    })()
+  }
+
+  const handleSaveLogCapacity = () => {
+    if (logSettingsBusy || appSettings === null) {
+      return
+    }
+    const maxDiskMib = Number(logMaxDiskInput)
+    if (
+      !Number.isInteger(maxDiskMib) ||
+      maxDiskMib < MIN_LOG_MAX_DISK_MIB ||
+      maxDiskMib > MAX_LOG_MAX_DISK_MIB
+    ) {
+      setLogSettingsMessage(
+        `请输入 ${MIN_LOG_MAX_DISK_MIB}–${MAX_LOG_MAX_DISK_MIB} 之间的整数。`
+      )
+      return
+    }
+    if (
+      (appSettings.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB) ===
+      maxDiskMib
+    ) {
+      setLogSettingsMessage(`日志最大占用已是 ${maxDiskMib} MiB。`)
+      return
+    }
+
+    const next: AppSettings = {
+      ...appSettings,
+      logging: {
+        level: appSettings.logging?.level ?? "info",
+        maxDiskMib,
+      },
+    }
+    setLogSettingsBusy(true)
+    setLogSettingsMessage("正在保存日志容量…")
+    void (async () => {
+      try {
+        const saved = await setSettings(next)
+        const savedMaxDiskMib =
+          saved.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB
+        setAppSettings(saved)
+        setLogMaxDiskInput(String(savedMaxDiskMib))
+        setLogSettingsMessage(`日志最大占用已调整为 ${savedMaxDiskMib} MiB。`)
+      } catch (error) {
+        setLogSettingsMessage(`保存失败：${errorMessage(error)}`)
+      } finally {
+        setLogSettingsBusy(false)
+      }
+    })()
   }
 
   const activeMeta =
@@ -779,10 +892,133 @@ export function SettingsPage() {
 
             <TabsContent value="app" className="mt-0 outline-none">
               <div className="space-y-2">
-                <PlaceholderCategory
-                  title="应用日志"
-                  body="日志级别与诊断输出将在此配置；日志不会写入明文密码或完整 7-Zip 参数。"
-                />
+                <Card size="sm">
+                  <CardHeader className="border-b border-border/80">
+                    <div className="flex items-center gap-2">
+                      <CardTitle className="text-sm">应用日志</CardTitle>
+                      <Badge variant="outline" className="font-normal">
+                        {appSettings?.logging?.maxDiskMib ??
+                          DEFAULT_LOG_MAX_DISK_MIB}{" "}
+                        MiB 上限
+                      </Badge>
+                    </div>
+                    <CardDescription className="text-xs leading-relaxed">
+                      控制本机 JSONL
+                      日志的详细程度和最大磁盘占用。密码、候选内容和用户路径会在写入前隐藏。
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3 pt-4">
+                    <fieldset
+                      className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+                      disabled={logSettingsBusy || appSettings === null}
+                    >
+                      <legend className="sr-only">日志级别</legend>
+                      {LOG_LEVELS.map((item) => {
+                        const active =
+                          (appSettings?.logging?.level ?? "info") === item.value
+                        return (
+                          <button
+                            key={item.value}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => handleLogLevelChange(item.value)}
+                            className={cn(
+                              "rounded-xl border px-2.5 py-2 text-left transition-colors outline-none",
+                              "focus-visible:ring-2 focus-visible:ring-ring/30 disabled:opacity-50",
+                              active
+                                ? "border-foreground bg-foreground text-background"
+                                : "border-border bg-background hover:bg-muted/60"
+                            )}
+                          >
+                            <span className="block text-xs font-medium">
+                              {item.label}
+                            </span>
+                            <span
+                              className={cn(
+                                "mt-0.5 block text-[10px] leading-tight",
+                                active
+                                  ? "text-background/70"
+                                  : "text-muted-foreground"
+                              )}
+                            >
+                              {item.description}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </fieldset>
+                    <fieldset
+                      className="space-y-3 border-t border-border/80 pt-3"
+                      disabled={logSettingsBusy || appSettings === null}
+                    >
+                      <legend className="sr-only">日志容量</legend>
+                      <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                        <div className="space-y-1.5">
+                          <Label htmlFor="log-max-disk-mib">最大磁盘占用</Label>
+                          <div className="relative max-w-48">
+                            <Input
+                              id="log-max-disk-mib"
+                              type="number"
+                              inputMode="numeric"
+                              min={MIN_LOG_MAX_DISK_MIB}
+                              max={MAX_LOG_MAX_DISK_MIB}
+                              step={5}
+                              value={logMaxDiskInput}
+                              onChange={(event) =>
+                                setLogMaxDiskInput(event.target.value)
+                              }
+                              aria-describedby="log-max-disk-hint"
+                              className="pr-12"
+                            />
+                            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                              MiB
+                            </span>
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={handleSaveLogCapacity}
+                        >
+                          保存容量
+                        </Button>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {LOG_CAPACITY_PRESETS.map((capacity) => (
+                          <Button
+                            key={capacity}
+                            type="button"
+                            size="xs"
+                            variant={
+                              logMaxDiskInput === String(capacity)
+                                ? "secondary"
+                                : "outline"
+                            }
+                            aria-pressed={logMaxDiskInput === String(capacity)}
+                            onClick={() => setLogMaxDiskInput(String(capacity))}
+                          >
+                            {capacity} MiB
+                          </Button>
+                        ))}
+                      </div>
+                      <p
+                        id="log-max-disk-hint"
+                        className="text-[11px] leading-relaxed text-muted-foreground"
+                      >
+                        可设置 {MIN_LOG_MAX_DISK_MIB}–{MAX_LOG_MAX_DISK_MIB}{" "}
+                        MiB；日志按 5 MiB 分片，到达总上限后自动删除最旧文件。
+                      </p>
+                    </fieldset>
+                    {logSettingsMessage ? (
+                      <p
+                        aria-live="polite"
+                        className="rounded-xl bg-muted/50 px-2.5 py-2 text-xs text-muted-foreground"
+                      >
+                        {logSettingsMessage}
+                      </p>
+                    ) : null}
+                  </CardContent>
+                </Card>
                 <Card size="sm">
                   <CardHeader>
                     <div className="flex items-center gap-2">
@@ -853,6 +1089,11 @@ export function SettingsPage() {
                   />
                   <InfoRow
                     icon={<HardDrive className="size-3.5" />}
+                    label="日志目录"
+                    value={dbInfo?.logsPath ?? "—"}
+                  />
+                  <InfoRow
+                    icon={<HardDrive className="size-3.5" />}
                     label="外部工具目录"
                     value={dbInfo?.toolsPath ?? "—"}
                   />
@@ -911,4 +1152,12 @@ function InfoRow({
       </p>
     </div>
   )
+}
+
+function logLevelLabel(level: AppLogLevel) {
+  return LOG_LEVELS.find((item) => item.value === level)?.label ?? level
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error ?? "未知错误")
 }
