@@ -140,18 +140,41 @@ export function AiSettingsPanel() {
     setModels([])
   }
 
+  const validateDraft = (): string | null => {
+    if (!draft.name.trim()) {
+      return "请输入配置名称。"
+    }
+    if (!draft.baseUrl.trim()) {
+      return "请输入 OpenAI-compatible 服务地址。"
+    }
+    return null
+  }
+
+  const persistDraft = async (makeActive = false): Promise<string> => {
+    const shouldActivate = makeActive || draft.id === null
+    const next = await upsertAiProfile({
+      id: draft.id,
+      name: draft.name.trim(),
+      provider: draft.provider,
+      baseUrl: draft.baseUrl.trim(),
+      model: draft.model.trim(),
+      apiKey: draft.apiKey.trim() || undefined,
+      clearApiKey: draft.clearApiKey,
+      makeActive: shouldActivate,
+    })
+    const profileId = draft.id ?? next.activeProfileId
+    applySettings(next, profileId)
+    return profileId
+  }
+
   const handleSaveProfile = async (makeActive = false) => {
     if (busy) {
       return
     }
-    if (!draft.name.trim()) {
+    const validationError = validateDraft()
+    if (validationError) {
       setError(true)
-      setMessage("请输入配置名称。")
-      return
-    }
-    if (!draft.baseUrl.trim()) {
-      setError(true)
-      setMessage("请输入 OpenAI-compatible 服务地址。")
+      setMessage(validationError)
       return
     }
     setBusy(true)
@@ -159,18 +182,7 @@ export function AiSettingsPanel() {
     setMessage("正在保存 AI 配置…")
     try {
       const shouldActivate = makeActive || draft.id === null
-      const next = await upsertAiProfile({
-        id: draft.id,
-        name: draft.name.trim(),
-        provider: draft.provider,
-        baseUrl: draft.baseUrl.trim(),
-        model: draft.model.trim(),
-        apiKey: draft.apiKey.trim() || undefined,
-        clearApiKey: draft.clearApiKey,
-        makeActive: shouldActivate,
-      })
-      const preferredId = draft.id ?? next.activeProfileId
-      applySettings(next, preferredId)
+      await persistDraft(makeActive)
       setMessage(
         shouldActivate ? "配置已保存并设为当前 AI 模型。" : "AI 配置已保存。"
       )
@@ -186,16 +198,18 @@ export function AiSettingsPanel() {
     if (busy) {
       return
     }
-    if (!draft.id) {
+    const validationError = validateDraft()
+    if (validationError) {
       setError(true)
-      setMessage("请先保存配置，再从服务获取模型列表。")
+      setMessage(validationError)
       return
     }
     setBusy(true)
     setError(false)
-    setMessage("正在获取模型列表…")
+    setMessage("正在保存当前配置并获取模型列表…")
     try {
-      const next = await listAiModels(draft.id)
+      const profileId = await persistDraft()
+      const next = await listAiModels(profileId)
       setModels(next)
       setMessage(
         next.length > 0
@@ -214,16 +228,18 @@ export function AiSettingsPanel() {
     if (busy) {
       return
     }
-    if (!draft.id) {
+    const validationError = validateDraft()
+    if (validationError) {
       setError(true)
-      setMessage("请先保存配置，再测试连接。")
+      setMessage(validationError)
       return
     }
     setBusy(true)
     setError(false)
-    setMessage("正在测试 OpenAI-compatible 连接…")
+    setMessage("正在保存当前配置并测试 OpenAI-compatible 连接…")
     try {
-      const result = await testAiConnection(draft.id)
+      const profileId = await persistDraft()
+      const result = await testAiConnection(profileId)
       setError(!result.success)
       setMessage(result.message)
     } catch (reason) {
@@ -435,7 +451,7 @@ export function AiSettingsPanel() {
                   }
                   placeholder={
                     providerMeta.local
-                      ? "保存后获取本地模型，或手动填写"
+                      ? "获取本地模型，或手动填写"
                       : "例如：deepseek-chat"
                   }
                   spellCheck={false}
@@ -453,7 +469,7 @@ export function AiSettingsPanel() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={busy || !draft.id}
+                  disabled={busy}
                   onClick={handleLoadModels}
                 >
                   <RefreshCw data-icon="inline-start" />
@@ -463,7 +479,7 @@ export function AiSettingsPanel() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={busy || !draft.id}
+                  disabled={busy}
                   onClick={handleTest}
                 >
                   <Unplug data-icon="inline-start" />
