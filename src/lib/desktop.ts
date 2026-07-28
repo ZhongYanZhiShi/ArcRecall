@@ -29,6 +29,7 @@ export {
   getJohnPerlStatus,
   getSettings,
   installFullEngineBundle,
+  openPath,
   setJohnPerl,
   setSettings,
   setToolsDirectory,

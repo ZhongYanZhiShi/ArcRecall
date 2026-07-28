@@ -514,6 +514,32 @@ fn open_output_directory(path: String) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return Err("路径不存在。".into());
+    }
+    #[cfg(windows)]
+    {
+        let mut command = std::process::Command::new("explorer.exe");
+        if path.is_dir() {
+            command.arg(&path);
+        } else {
+            command.arg("/select,").arg(&path);
+        }
+        command
+            .spawn()
+            .map_err(|error| format!("无法在资源管理器中打开路径：{error}"))?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err("当前平台暂不支持自动打开路径。".into())
+    }
+}
+
 fn next_recovery_task_id() -> String {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -582,6 +608,7 @@ pub fn run() {
             recovery_status,
             recovery_cancel,
             open_output_directory,
+            open_path,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run ArcRecall");

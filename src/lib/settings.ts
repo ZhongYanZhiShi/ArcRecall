@@ -264,3 +264,10 @@ export async function setJohnPerl(
     perlPath,
   })
 }
+
+export async function openPath(path: string): Promise<void> {
+  if (!isDesktopRuntime()) {
+    throw new Error("浏览器预览无法打开本机路径。")
+  }
+  await invoke("open_path", { path })
+}

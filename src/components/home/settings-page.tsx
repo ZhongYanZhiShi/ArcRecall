@@ -35,6 +35,7 @@ import {
   getHashcatStatus,
   getJohnPerlStatus,
   installFullEngineBundle,
+  openPath,
   setJohnPerl as saveJohnPerlPaths,
   setToolsDirectory,
 } from "@/lib/settings"
@@ -295,6 +296,20 @@ export function SettingsPage() {
     })()
   }
 
+  const handleOpenPath = (path: string) => {
+    if (engineBusy || !path.trim()) {
+      return
+    }
+    setEngineError(false)
+    setEngineMessage(null)
+    void openPath(path.trim()).catch((error) => {
+      const message =
+        error instanceof Error ? error.message : String(error ?? "未知错误")
+      setEngineError(true)
+      setEngineMessage(`无法跳转到该路径：${message}`)
+    })
+  }
+
   const activeMeta =
     CATEGORIES.find((item) => item.id === category) ?? CATEGORIES[0]!
 
@@ -479,17 +494,43 @@ export function SettingsPage() {
                     >
                       公共目录（绝对路径）
                     </Label>
-                    <Input
-                      id="tools-dir"
-                      value={toolsDirInput}
-                      onChange={(event) => setToolsDirInput(event.target.value)}
-                      disabled={engineBusy}
-                      placeholder={
-                        hashcat?.defaultToolsDirectory ||
-                        "留空 = 使用默认 tools 目录"
-                      }
-                      className="h-9 rounded-xl font-mono text-xs"
-                    />
+                    <div className="flex gap-2">
+                      <Input
+                        id="tools-dir"
+                        value={toolsDirInput}
+                        onChange={(event) =>
+                          setToolsDirInput(event.target.value)
+                        }
+                        disabled={engineBusy}
+                        placeholder={
+                          hashcat?.defaultToolsDirectory ||
+                          "留空 = 使用默认 tools 目录"
+                        }
+                        className="h-9 min-w-0 flex-1 rounded-xl font-mono text-xs"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-9 rounded-xl"
+                        disabled={
+                          engineBusy ||
+                          !(
+                            toolsDirInput.trim() ||
+                            hashcat?.defaultToolsDirectory
+                          )
+                        }
+                        onClick={() =>
+                          handleOpenPath(
+                            toolsDirInput.trim() ||
+                              hashcat?.defaultToolsDirectory ||
+                              ""
+                          )
+                        }
+                      >
+                        <ExternalLink data-icon="inline-start" />
+                        跳转
+                      </Button>
+                    </div>
                     <p className="text-[11px] text-muted-foreground">
                       默认：{hashcat?.defaultToolsDirectory || "—"}
                     </p>
@@ -635,14 +676,28 @@ export function SettingsPage() {
                     >
                       John 工具目录
                     </Label>
-                    <Input
-                      id="john-dir"
-                      value={johnDirInput}
-                      onChange={(event) => setJohnDirInput(event.target.value)}
-                      disabled={engineBusy}
-                      placeholder="含 john / 7z2john / rar2john / zip2john 的目录"
-                      className="h-9 rounded-xl font-mono text-xs"
-                    />
+                    <div className="flex gap-2">
+                      <Input
+                        id="john-dir"
+                        value={johnDirInput}
+                        onChange={(event) =>
+                          setJohnDirInput(event.target.value)
+                        }
+                        disabled={engineBusy}
+                        placeholder="含 john / 7z2john / rar2john / zip2john 的目录"
+                        className="h-9 min-w-0 flex-1 rounded-xl font-mono text-xs"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-9 rounded-xl"
+                        disabled={engineBusy || !johnDirInput.trim()}
+                        onClick={() => handleOpenPath(johnDirInput)}
+                      >
+                        <ExternalLink data-icon="inline-start" />
+                        跳转
+                      </Button>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <Label
@@ -651,14 +706,28 @@ export function SettingsPage() {
                     >
                       perl.exe 路径
                     </Label>
-                    <Input
-                      id="perl-path"
-                      value={perlPathInput}
-                      onChange={(event) => setPerlPathInput(event.target.value)}
-                      disabled={engineBusy}
-                      placeholder="可选；使用 7z2john.pl 时需要"
-                      className="h-9 rounded-xl font-mono text-xs"
-                    />
+                    <div className="flex gap-2">
+                      <Input
+                        id="perl-path"
+                        value={perlPathInput}
+                        onChange={(event) =>
+                          setPerlPathInput(event.target.value)
+                        }
+                        disabled={engineBusy}
+                        placeholder="可选；使用 7z2john.pl 时需要"
+                        className="h-9 min-w-0 flex-1 rounded-xl font-mono text-xs"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-9 rounded-xl"
+                        disabled={engineBusy || !perlPathInput.trim()}
+                        onClick={() => handleOpenPath(perlPathInput)}
+                      >
+                        <ExternalLink data-icon="inline-start" />
+                        跳转
+                      </Button>
+                    </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     <Badge
