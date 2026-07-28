@@ -294,6 +294,7 @@ export function ExtractPage() {
     try {
       const started = await startRecovery({
         archivePath: analysis.archivePath,
+        fingerprintSha256: analysis.fingerprintSha256,
         outputDirectory:
           outputMode === "custom"
             ? outputDir
@@ -580,7 +581,13 @@ export function ExtractPage() {
               <StatusCard
                 title="归档分析"
                 body={`${analysis.formatLabel} · ${analysis.fileName}`}
-                hint="签名已识别"
+                hint={
+                  analysis.hasSavedPassword
+                    ? "历史密码可复用"
+                    : analysis.historyMatched
+                      ? "历史记录已命中"
+                      : "签名已识别"
+                }
                 icon={<ShieldCheck className="size-3.5" />}
               />
               <StatusCard
@@ -611,9 +618,18 @@ export function ExtractPage() {
                 id="recovery-route"
                 className="mb-2 text-[11px] leading-relaxed text-muted-foreground"
               >
-                免密检查 → 手动密码 → Hashcat / John → 7-Zip CPU 兼容兜底 →
-                安全解压{recursive ? " → 递归扫描" : ""}
+                免密检查 → 手动 / 历史密码 → Hashcat / John → 7-Zip CPU 兼容兜底
+                → 安全解压{recursive ? " → 递归扫描" : ""}
               </p>
+              {analysis.hasSavedPassword ? (
+                <p className="mb-2 rounded-lg bg-muted/60 px-2.5 py-1.5 text-[11px] text-foreground">
+                  已命中本机历史密码；留空时会优先自动复验，不会在任务开始前显示明文。
+                </p>
+              ) : analysis.historyMatched ? (
+                <p className="mb-2 rounded-lg bg-muted/60 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                  已找到相同内容的成功记录，但该记录没有保存密码。
+                </p>
+              ) : null}
               <div className="flex gap-2">
                 <div className="relative min-w-0 flex-1">
                   <Input
@@ -621,7 +637,7 @@ export function ExtractPage() {
                     type={showKnownPassword ? "text" : "password"}
                     value={knownPassword}
                     onChange={(event) => setKnownPassword(event.target.value)}
-                    placeholder="输入后优先复验；留空则直接进入智能恢复"
+                    placeholder="输入后优先复验；留空则尝试历史密码"
                     disabled={running}
                     className="pr-9"
                     autoComplete="off"

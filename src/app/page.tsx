@@ -6,13 +6,14 @@ import { AppShell, NAV_ORDER, type NavId } from "@/components/app-shell"
 import { ClientLoggingBridge } from "@/components/client-logging-bridge"
 import { DictionaryPage } from "@/components/home/dictionary-page"
 import { ExtractPage } from "@/components/home/extract-page"
+import { HistoryPage } from "@/components/home/history-page"
 import { LogsPage } from "@/components/home/logs-page"
 import { PlaceholderPage } from "@/components/home/placeholder-page"
 import { SettingsPage } from "@/components/home/settings-page"
 import { cn } from "@/lib/utils"
 
 const PLACEHOLDERS: Record<
-  Exclude<NavId, "extract" | "dictionary" | "logs" | "settings">,
+  Exclude<NavId, "extract" | "dictionary" | "history" | "logs" | "settings">,
   { eyebrow: string; title: string; description: string }
 > = {
   compress: {
@@ -20,11 +21,6 @@ const PLACEHOLDERS: Record<
     title: "压缩",
     description:
       "选择文件或文件夹创建 7z / ZIP 归档，可设置压缩级别、密码与文件名加密。",
-  },
-  history: {
-    eyebrow: "Recall",
-    title: "历史",
-    description: "按内容指纹查看已成功验密的归档摘要；不展示路径与明文密码。",
   },
 }
 
@@ -49,6 +45,9 @@ function renderNavPage(nav: NavId) {
   }
   if (nav === "logs") {
     return <LogsPage />
+  }
+  if (nav === "history") {
+    return <HistoryPage />
   }
   return <PlaceholderPage {...PLACEHOLDERS[nav]} />
 }

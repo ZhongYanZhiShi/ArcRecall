@@ -26,6 +26,9 @@ export type ArchiveAnalysis = {
   formatLabel: string
   fileSize: number
   suggestedOutputDirectory: string
+  fingerprintSha256: string
+  historyMatched: boolean
+  hasSavedPassword: boolean
 }
 
 export type RecoveryTaskEvent = {
@@ -73,6 +76,7 @@ export type RecoveryTaskStatus = {
 
 export type RecoveryStartRequest = {
   archivePath: string
+  fingerprintSha256?: string | null
   outputDirectory?: string | null
   knownPassword?: string | null
   avoidOutputCollision?: boolean

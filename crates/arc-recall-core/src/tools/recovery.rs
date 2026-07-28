@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::runner::{
     CancellationToken, ProcessOutput, ProcessRequest, ProcessRunnerError, run_process,
@@ -20,6 +21,9 @@ const SIGNATURE_SCAN_LIMIT: u64 = 4 * 1024 * 1024;
 const HEADER_PROBE_LIMIT: usize = 16;
 const NESTED_FALLBACK_SCAN_LIMIT: u64 = 64 * 1024;
 const SCAN_PROGRESS_INTERVAL_FILES: u64 = 128;
+const FINGERPRINT_FULL_READ_LIMIT: u64 = 1024 * 1024;
+const FINGERPRINT_SAMPLE_SIZE: u64 = 64 * 1024;
+const FINGERPRINT_SAMPLE_COUNT: u64 = 5;
 pub const DEFAULT_RECURSIVE_MAX_DEPTH: u32 = 5;
 pub const DEFAULT_RECURSIVE_MAX_ARCHIVES: u32 = 100;
 
@@ -192,6 +196,15 @@ impl Default for RecursiveRecoveryOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveredArchive {
+    pub fingerprint_sha256: String,
+    pub archive_format: ArchiveFormat,
+    pub file_size: u64,
+    pub volume_count: u32,
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryResult {
     pub success: bool,
     pub cancelled: bool,
@@ -199,6 +212,7 @@ pub struct RecoveryResult {
     pub engine: Option<String>,
     pub output_directory: PathBuf,
     pub message: String,
+    pub recovered_archive: Option<RecoveredArchive>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,6 +224,7 @@ pub struct RecursiveRecoveryResult {
     pub depth_limit_reached: bool,
     pub count_limit_reached: bool,
     pub recovered_passwords: Vec<String>,
+    pub recovered_archives: Vec<RecoveredArchive>,
     pub scanned_files: u64,
 }
 
@@ -360,6 +375,57 @@ pub fn analyze_archive(path: impl AsRef<Path>) -> Result<ArchiveAnalysis, Recove
         file_size: metadata.len(),
         suggested_output_directory: path_for_display(&suggested_output_directory),
     })
+}
+
+pub fn fingerprint_file_sha256(path: impl AsRef<Path>) -> Result<String, RecoveryError> {
+    let mut file = fs::File::open(path)?;
+    let file_size = file.metadata()?.len();
+    let mut hasher = Sha256::new();
+    hasher.update(b"arc-recall-content-fingerprint-v2\0");
+    hasher.update(file_size.to_le_bytes());
+
+    let ranges = fingerprint_sample_ranges(file_size);
+    let mut buffer = vec![0u8; FINGERPRINT_SAMPLE_SIZE as usize];
+    for (offset, length) in ranges {
+        file.seek(SeekFrom::Start(offset))?;
+        hasher.update(offset.to_le_bytes());
+        hasher.update((length as u64).to_le_bytes());
+        let mut read_total = 0;
+        while read_total < length {
+            let count = file.read(&mut buffer[..length - read_total])?;
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+            read_total += count;
+        }
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn fingerprint_sample_ranges(file_size: u64) -> Vec<(u64, usize)> {
+    if file_size == 0 {
+        return Vec::new();
+    }
+    if file_size <= FINGERPRINT_FULL_READ_LIMIT {
+        return vec![(0, file_size as usize)];
+    }
+
+    let max_offset = file_size.saturating_sub(FINGERPRINT_SAMPLE_SIZE);
+    let mut offsets = (0..FINGERPRINT_SAMPLE_COUNT)
+        .map(|index| max_offset.saturating_mul(index) / (FINGERPRINT_SAMPLE_COUNT - 1))
+        .collect::<Vec<_>>();
+    offsets.sort_unstable();
+    offsets.dedup();
+    offsets
+        .into_iter()
+        .map(|offset| {
+            (
+                offset,
+                FINGERPRINT_SAMPLE_SIZE.min(file_size - offset) as usize,
+            )
+        })
+        .collect()
 }
 
 pub fn detect_archive_format(path: &Path) -> Result<ArchiveFormat, RecoveryError> {
@@ -544,6 +610,11 @@ pub fn recover_and_extract_recursive_lazy(
     if let Some(password) = root.password.as_ref() {
         recovered_passwords.push(password.clone());
     }
+    let mut recovered_archives = root
+        .recovered_archive
+        .clone()
+        .into_iter()
+        .collect::<Vec<_>>();
     if !root.success || !options.enabled {
         return Ok(RecursiveRecoveryResult {
             root,
@@ -553,6 +624,7 @@ pub fn recover_and_extract_recursive_lazy(
             depth_limit_reached: false,
             count_limit_reached: false,
             recovered_passwords,
+            recovered_archives,
             scanned_files: 0,
         });
     }
@@ -677,6 +749,9 @@ pub fn recover_and_extract_recursive_lazy(
         match nested_result {
             Ok(result) if result.success => {
                 state.extracted_nested_archives = state.extracted_nested_archives.saturating_add(1);
+                if let Some(record) = result.recovered_archive.clone() {
+                    recovered_archives.push(record);
+                }
                 if let Some(password) = result.password.as_ref()
                     && !recovered_passwords.contains(password)
                 {
@@ -780,6 +855,7 @@ pub fn recover_and_extract_recursive_lazy(
         depth_limit_reached: state.depth_limit_reached,
         count_limit_reached: state.count_limit_reached,
         recovered_passwords,
+        recovered_archives,
         scanned_files: state.scanned_files,
     })
 }
@@ -943,11 +1019,10 @@ fn recover_single_archive(
     ));
     if verify_password(&job.archive_path, "", tools, cancellation)? {
         extract_with_password(job, tools, "", cancellation, report)?;
-        return Ok(success_result(
-            job,
-            None,
-            "7-Zip",
-            "归档无需密码，已直接解压。",
+        return Ok(attach_recovered_archive(
+            success_result(job, None, "7-Zip", "归档无需密码，已直接解压。"),
+            &analysis,
+            &job.archive_path,
         ));
     }
 
@@ -959,15 +1034,19 @@ fn recover_single_archive(
         report(RecoveryUpdate::stage(
             RecoveryPhase::Verifying,
             Some("7-Zip"),
-            "正在验证手动输入的密码。",
+            "正在验证手动输入或历史记录中的密码。",
         ));
         if verify_password(&job.archive_path, password, tools, cancellation)? {
             extract_with_password(job, tools, password, cancellation, report)?;
-            return Ok(success_result(
-                job,
-                Some(password.to_owned()),
-                "手动密码",
-                "手动密码验证通过，归档已解压。",
+            return Ok(attach_recovered_archive(
+                success_result(
+                    job,
+                    Some(password.to_owned()),
+                    "优先密码",
+                    "优先密码验证通过，归档已解压。",
+                ),
+                &analysis,
+                &job.archive_path,
             ));
         }
     }
@@ -1000,17 +1079,22 @@ fn recover_single_archive(
     if dictionary_job.dictionary_count == 0 {
         return Ok(exhausted_result(
             &dictionary_job,
-            "手动密码未通过，且全局字典中没有可用候选。",
+            "优先密码未通过，且全局字典中没有可用候选。",
         ));
     }
 
-    recover_with_dictionary(
+    let result = recover_with_dictionary(
         &dictionary_job,
         tools,
         analysis.format,
         cancellation,
         report,
-    )
+    )?;
+    Ok(attach_recovered_archive(
+        result,
+        &analysis,
+        &job.archive_path,
+    ))
 }
 
 fn recover_with_dictionary(
@@ -1627,6 +1711,7 @@ fn success_result(
         engine: Some(engine.into()),
         output_directory: job.output_directory.clone(),
         message: message.into(),
+        recovered_archive: None,
     }
 }
 
@@ -1638,7 +1723,28 @@ fn exhausted_result(job: &RecoveryJob, message: &str) -> RecoveryResult {
         engine: None,
         output_directory: job.output_directory.clone(),
         message: message.into(),
+        recovered_archive: None,
     }
+}
+
+fn attach_recovered_archive(
+    mut result: RecoveryResult,
+    analysis: &ArchiveAnalysis,
+    archive_path: &Path,
+) -> RecoveryResult {
+    if result.success {
+        result.recovered_archive =
+            fingerprint_file_sha256(archive_path)
+                .ok()
+                .map(|fingerprint_sha256| RecoveredArchive {
+                    fingerprint_sha256,
+                    archive_format: analysis.format,
+                    file_size: analysis.file_size,
+                    volume_count: 1,
+                    password: result.password.clone().filter(|value| !value.is_empty()),
+                });
+    }
+    result
 }
 
 fn process_failure(tool: &str, output: &ProcessOutput) -> RecoveryError {
@@ -1766,6 +1872,55 @@ mod tests {
         assert_eq!(
             detect_archive_format(&path).unwrap(),
             ArchiveFormat::SevenZip
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_is_stable_after_rename() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.bin");
+        let renamed = directory.path().join("renamed.jpg");
+        fs::write(&original, b"arc-recall fingerprint fixture").unwrap();
+
+        let before = fingerprint_file_sha256(&original).unwrap();
+        fs::rename(&original, &renamed).unwrap();
+        let after = fingerprint_file_sha256(&renamed).unwrap();
+
+        assert_eq!(before, after);
+        assert_eq!(before.len(), 64);
+    }
+
+    #[test]
+    fn large_file_fingerprint_reads_only_bounded_samples() {
+        let file_size = 8 * 1024 * 1024 * 1024u64;
+        let ranges = fingerprint_sample_ranges(file_size);
+
+        assert_eq!(ranges.len(), FINGERPRINT_SAMPLE_COUNT as usize);
+        assert_eq!(ranges.first().map(|range| range.0), Some(0));
+        assert_eq!(
+            ranges.last().map(|range| range.0),
+            Some(file_size - FINGERPRINT_SAMPLE_SIZE)
+        );
+        assert!(
+            ranges.iter().map(|range| range.1 as u64).sum::<u64>()
+                <= FINGERPRINT_SAMPLE_COUNT * FINGERPRINT_SAMPLE_SIZE
+        );
+    }
+
+    #[test]
+    fn sampled_fingerprint_changes_when_a_sample_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.bin");
+        let second = directory.path().join("second.bin");
+        let mut contents = vec![0u8; (2 * 1024 * 1024) as usize];
+        fs::write(&first, &contents).unwrap();
+        let sample_offset = fingerprint_sample_ranges(contents.len() as u64)[2].0 as usize;
+        contents[sample_offset] = 1;
+        fs::write(&second, &contents).unwrap();
+
+        assert_ne!(
+            fingerprint_file_sha256(&first).unwrap(),
+            fingerprint_file_sha256(&second).unwrap()
         );
     }
 

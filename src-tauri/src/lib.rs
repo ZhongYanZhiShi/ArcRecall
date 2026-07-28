@@ -14,10 +14,11 @@ use arc_recall_core::{
     DictionaryListResult, FullEngineBundleInstallResult, FullEngineBundleManager,
     FullEngineBundleStatus, HashcatInstallResult, HashcatStatus, HashcatToolDownloader,
     JohnPerlStatus, LoggingSettings, MAX_LOG_MAX_DISK_MIB, MIN_LOG_MAX_DISK_MIB,
-    RecoveryDictionary, RecoveryError, RecoveryJob, RecoveryPhase, RecoveryToolPaths,
+    RecoveryDictionary, RecoveryError, RecoveryHistoryListResult, RecoveryHistoryQuery,
+    RecoveryHistoryRecord, RecoveryHistoryStore, RecoveryJob, RecoveryPhase, RecoveryToolPaths,
     RecoveryUpdate, RecursiveRecoveryOptions, SERVICE_NAME, SettingsStore, analyze_archive,
-    health_status, path_for_display, probe_john_perl, recover_and_extract_recursive_lazy,
-    resolve_tools_directory,
+    fingerprint_file_sha256, health_status, path_for_display, probe_john_perl,
+    recover_and_extract_recursive_lazy, resolve_tools_directory,
 };
 use logging::{LogExportResult, LogLevel, LogListResult, LogQuery, LogStore};
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,7 @@ struct AppState {
     paths: AppPaths,
     resource_dir: PathBuf,
     dictionary: Mutex<DictionaryCandidateStore>,
+    history: Mutex<RecoveryHistoryStore>,
     settings: Mutex<SettingsStore>,
     logger: Arc<LogStore>,
     engine_install: Arc<Mutex<()>>,
@@ -55,12 +57,23 @@ struct HealthResponse {
 #[serde(rename_all = "camelCase")]
 struct RecoveryStartRequest {
     archive_path: String,
+    fingerprint_sha256: Option<String>,
     output_directory: Option<String>,
     known_password: Option<String>,
     #[serde(default)]
     avoid_output_collision: bool,
     #[serde(default = "default_recursive_recovery")]
     recursive: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArchiveAnalysisResponse {
+    #[serde(flatten)]
+    analysis: ArchiveAnalysis,
+    fingerprint_sha256: String,
+    history_matched: bool,
+    has_saved_password: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -515,6 +528,72 @@ fn dictionary_delete(state: State<'_, AppState>, ids: Vec<i64>) -> Result<u64, S
 }
 
 #[tauri::command]
+fn history_list(
+    state: State<'_, AppState>,
+    query: RecoveryHistoryQuery,
+) -> Result<RecoveryHistoryListResult, String> {
+    let store = state.history.lock().map_err(|error| error.to_string())?;
+    store.list(&query).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn history_reveal_password(state: State<'_, AppState>, id: i64) -> Result<Option<String>, String> {
+    let result = {
+        let store = state.history.lock().map_err(|error| error.to_string())?;
+        store.password_by_id(id).map_err(|error| error.to_string())
+    };
+    if result.as_ref().is_ok_and(Option::is_some) {
+        write_log(
+            &state.logger,
+            LogLevel::Info,
+            "history",
+            "history.password_revealed",
+            "用户查看了一条本机历史密码。",
+            std::iter::empty(),
+        );
+    }
+    result
+}
+
+#[tauri::command]
+fn history_delete(state: State<'_, AppState>, id: i64) -> Result<bool, String> {
+    let result = {
+        let store = state.history.lock().map_err(|error| error.to_string())?;
+        store.delete(id).map_err(|error| error.to_string())
+    };
+    if result.as_ref().is_ok_and(|deleted| *deleted) {
+        write_log(
+            &state.logger,
+            LogLevel::Info,
+            "history",
+            "history.entry_deleted",
+            "一条恢复历史已删除。",
+            std::iter::empty(),
+        );
+    }
+    result
+}
+
+#[tauri::command]
+fn history_clear(state: State<'_, AppState>) -> Result<u64, String> {
+    let result = {
+        let store = state.history.lock().map_err(|error| error.to_string())?;
+        store.clear().map_err(|error| error.to_string())
+    };
+    if let Ok(removed_count) = &result {
+        write_log(
+            &state.logger,
+            LogLevel::Info,
+            "history",
+            "history.cleared",
+            "恢复历史已清空。",
+            [("removed_count".into(), removed_count.to_string())],
+        );
+    }
+    result
+}
+
+#[tauri::command]
 fn database_info(state: State<'_, AppState>) -> Result<DatabaseInfo, String> {
     let store = state.dictionary.lock().map_err(|e| e.to_string())?;
     let count = store.count().map_err(|e| e.to_string())?;
@@ -785,16 +864,52 @@ fn tool_set_john_perl(
 }
 
 #[tauri::command]
-fn archive_analyze(state: State<'_, AppState>, path: String) -> Result<ArchiveAnalysis, String> {
-    let result = analyze_archive(path).map_err(|error| error.to_string());
+async fn archive_analyze(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<ArchiveAnalysisResponse, String> {
+    let analyzed = tauri::async_runtime::spawn_blocking(move || {
+        let analysis = analyze_archive(path).map_err(|error| error.to_string())?;
+        let fingerprint_sha256 =
+            fingerprint_file_sha256(&analysis.archive_path).map_err(|error| error.to_string())?;
+        Ok::<_, String>((analysis, fingerprint_sha256))
+    })
+    .await
+    .map_err(|error| error.to_string())
+    .and_then(|result| result);
+    let result = analyzed.and_then(|(analysis, fingerprint_sha256)| {
+        let (history_matched, has_saved_password) = {
+            let store = state.history.lock().map_err(|error| error.to_string())?;
+            let matched = store
+                .contains(&fingerprint_sha256)
+                .map_err(|error| error.to_string())?;
+            let has_password = store
+                .password_by_fingerprint(&fingerprint_sha256)
+                .map_err(|error| error.to_string())?
+                .is_some();
+            (matched, has_password)
+        };
+        Ok(ArchiveAnalysisResponse {
+            analysis,
+            fingerprint_sha256,
+            history_matched,
+            has_saved_password,
+        })
+    });
     match &result {
-        Ok(analysis) => write_log(
+        Ok(response) => write_log(
             &state.logger,
             LogLevel::Debug,
             "recovery",
             "archive.analyzed",
             "归档分析已完成。",
-            [("format".into(), analysis.format_label.clone())],
+            [
+                ("format".into(), response.analysis.format_label.clone()),
+                (
+                    "history_matched".into(),
+                    response.history_matched.to_string(),
+                ),
+            ],
         ),
         Err(_) => write_log(
             &state.logger,
@@ -844,6 +959,29 @@ async fn recovery_start(
     let archive_path = std::fs::canonicalize(PathBuf::from(&request.archive_path))
         .map_err(|error| format!("无法解析归档路径：{error}"))?;
     let analysis = analyze_archive(&archive_path).map_err(|error| error.to_string())?;
+    let fingerprint_sha256 = request
+        .fingerprint_sha256
+        .as_deref()
+        .filter(|value| is_sha256_fingerprint(value))
+        .map(|value| value.to_ascii_lowercase())
+        .map(Ok)
+        .unwrap_or_else(|| {
+            fingerprint_file_sha256(&archive_path).map_err(|error| error.to_string())
+        })?;
+    let manual_password = request
+        .known_password
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let history_password = if manual_password.is_none() {
+        let store = state.history.lock().map_err(|error| error.to_string())?;
+        store
+            .password_by_fingerprint(&fingerprint_sha256)
+            .map_err(|error| error.to_string())?
+    } else {
+        None
+    };
+    let preferred_password = manual_password.or(history_password);
     let mut output_directory = request
         .output_directory
         .as_deref()
@@ -963,7 +1101,7 @@ async fn recovery_start(
         output_directory,
         dictionary_path: dictionary_path.clone(),
         dictionary_count: 0,
-        known_password: request.known_password,
+        known_password: preferred_password,
         work_directory: work_directory.clone(),
     };
     let status_for_worker = Arc::clone(&status);
@@ -1058,6 +1196,37 @@ async fn recovery_start(
             task_status.elapsed_ms = current_time_ms().saturating_sub(task_status.started_at_ms);
             match outcome {
                 Ok(result) => {
+                    let history_saved_count = if result.root.success {
+                        RecoveryHistoryStore::open(&success_database_path)
+                            .ok()
+                            .map(|store| {
+                                let verified_at_ms = current_time_ms();
+                                result
+                                    .recovered_archives
+                                    .iter()
+                                    .filter(|archive| {
+                                        store
+                                            .upsert(&RecoveryHistoryRecord {
+                                                fingerprint_sha256: archive
+                                                    .fingerprint_sha256
+                                                    .clone(),
+                                                archive_format: archive
+                                                    .archive_format
+                                                    .label()
+                                                    .into(),
+                                                file_size: archive.file_size,
+                                                volume_count: archive.volume_count,
+                                                verified_at_ms,
+                                                password: archive.password.clone(),
+                                            })
+                                            .is_ok()
+                                    })
+                                    .count()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        0
+                    };
                     task_status.success = result.root.success;
                     task_status.cancelled = result.root.cancelled;
                     task_status.phase = if result.root.cancelled {
@@ -1129,6 +1298,7 @@ async fn recovery_start(
                                 "nested_skipped".into(),
                                 result.skipped_nested_archives.to_string(),
                             ),
+                            ("history_saved".into(), history_saved_count.to_string()),
                         ],
                     );
                 }
@@ -1320,6 +1490,10 @@ fn current_time_ms() -> u64 {
         .unwrap_or_default()
 }
 
+fn is_sha256_fingerprint(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn next_recovery_task_id() -> String {
     let timestamp = current_time_ms();
     let sequence = RECOVERY_TASK_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -1351,6 +1525,8 @@ pub fn run() {
                 .map_err(|e| format!("resolve resource dir: {e}"))?;
             let dictionary = DictionaryCandidateStore::open(&paths.database)
                 .map_err(|e| format!("open dictionary store: {e}"))?;
+            let history = RecoveryHistoryStore::open(&paths.database)
+                .map_err(|e| format!("open recovery history store: {e}"))?;
             let settings = SettingsStore::open(&paths.settings)
                 .map_err(|e| format!("open settings store: {e}"))?;
             let loaded_settings = settings.load().map_err(|e| format!("load settings: {e}"))?;
@@ -1374,6 +1550,7 @@ pub fn run() {
                 paths,
                 resource_dir,
                 dictionary: Mutex::new(dictionary),
+                history: Mutex::new(history),
                 settings: Mutex::new(settings),
                 logger,
                 engine_install: Arc::new(Mutex::new(())),
@@ -1394,6 +1571,10 @@ pub fn run() {
             dictionary_add,
             dictionary_import_file,
             dictionary_delete,
+            history_list,
+            history_reveal_password,
+            history_delete,
+            history_clear,
             database_info,
             settings_get,
             settings_set,

@@ -26,6 +26,22 @@ ArcRecall reads file contents to determine the actual format, restores or correc
 - Keep processing records for later review
 - Keep local structured runtime logs with diagnostic export and SQLite backup
 
+## Recovery history
+
+Successfully processed root and nested archives are stored in the local SQLite
+database using a fingerprint derived from file size and multiple content
+samples, so renaming a file does not break a match. Large files use a bounded
+number of samples instead of an additional full-file scan.
+The History page shows fingerprint prefixes, format, size, volume count, and
+verification times, with search, password reveal/copy, per-entry deletion, and
+clear-all actions. Source filenames, paths, and dictionary contents are not
+stored.
+
+Saved history passwords are plain text in the local database and are tried
+before the global dictionary when the same content is processed again. They
+are not written to runtime logs. Use this feature only in a trusted local user
+environment.
+
 ## Logging and diagnostics
 
 The desktop app writes structured JSONL logs under
