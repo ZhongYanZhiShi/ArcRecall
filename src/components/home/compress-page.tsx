@@ -709,7 +709,7 @@ export function CompressPage({
             {useAiRename && (!activeAiProfile || aiError) ? (
               <div
                 role="alert"
-                className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2 text-[11px] text-warning-foreground"
+                className="animate-reveal-down motion-safe-only mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2 text-[11px] text-warning-foreground"
               >
                 <span className="min-w-0 flex-1">
                   {aiError ?? "尚未配置可用的 AI 模型，请先前往设置。"}
@@ -900,7 +900,7 @@ function CompressionTaskCard({
   return (
     <section
       className={cn(
-        "workbench-panel mt-3 shrink-0 overflow-hidden rounded-2xl border bg-card",
+        "workbench-panel animate-task-card-enter motion-safe-only mt-3 shrink-0 overflow-hidden rounded-2xl border bg-card",
         task.success
           ? "border-success/35"
           : task.phase === "failed"
@@ -918,7 +918,7 @@ function CompressionTaskCard({
           aria-valuenow={progress}
         >
           <div
-            className="motion-safe-only h-full bg-primary transition-[width] duration-300"
+            className="progress-live motion-safe-only h-full transition-[width] duration-300"
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -929,7 +929,7 @@ function CompressionTaskCard({
             {task.running ? (
               <LoaderCircle className="size-4 shrink-0 animate-spin" />
             ) : task.success ? (
-              <Check className="size-4 shrink-0 text-success-foreground" />
+              <Check className="animate-success-pop motion-safe-only size-4 shrink-0 text-success-foreground" />
             ) : (
               <CircleAlert
                 className={cn(

@@ -694,12 +694,13 @@ export function ExtractPage() {
               <span className="mr-0.5 text-[10px] text-muted-foreground">
                 当前支持
               </span>
-              {capabilities?.methods.map((method) => (
+              {capabilities?.methods.map((method, index) => (
                 <span
                   key={method.id}
                   title={method.message}
+                  style={{ animationDelay: `${Math.min(index, 4) * 45}ms` }}
                   className={cn(
-                    "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px]",
+                    "animate-status-chip-enter motion-safe-only inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px]",
                     method.available
                       ? "border-foreground/15 bg-foreground/5 text-foreground"
                       : "border-border text-muted-foreground"
@@ -889,7 +890,7 @@ function TaskResult({
   return (
     <div
       className={cn(
-        "workbench-panel overflow-hidden rounded-2xl border bg-card",
+        "workbench-panel animate-task-card-enter motion-safe-only overflow-hidden rounded-2xl border bg-card",
         task.success
           ? "border-success/35"
           : task.phase === "failed"
@@ -909,7 +910,7 @@ function TaskResult({
           aria-valuenow={progress}
         >
           <div
-            className="h-full bg-primary transition-[width] duration-300"
+            className="progress-live motion-safe-only h-full transition-[width] duration-300"
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -920,7 +921,7 @@ function TaskResult({
             {task.running ? (
               <LoaderCircle className="size-4 shrink-0 animate-spin" />
             ) : task.success ? (
-              <Check className="size-4 shrink-0 text-success-foreground" />
+              <Check className="animate-success-pop motion-safe-only size-4 shrink-0 text-success-foreground" />
             ) : (
               <CircleAlert
                 className={cn(

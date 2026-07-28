@@ -643,12 +643,15 @@ export function SettingsPage({
                       当前支持的恢复方式
                     </p>
                     <div className="flex flex-wrap gap-1.5">
-                      {recoveryCapabilities?.methods.map((method) => (
+                      {recoveryCapabilities?.methods.map((method, index) => (
                         <Badge
                           key={method.id}
                           title={method.message}
+                          style={{
+                            animationDelay: `${Math.min(index, 4) * 45}ms`,
+                          }}
                           variant={method.available ? "default" : "outline"}
-                          className="font-normal"
+                          className="animate-status-chip-enter motion-safe-only font-normal"
                         >
                           {method.label} ·{" "}
                           {method.available ? "可用" : "未就绪"}
