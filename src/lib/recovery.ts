@@ -11,8 +11,11 @@ export type RecoveryPhase =
   | "converting"
   | "hashcat"
   | "john"
+  | "internal"
   | "extracting"
+  | "recursive"
   | "completed"
+  | "exhausted"
   | "cancelled"
   | "failed"
 
@@ -23,6 +26,19 @@ export type ArchiveAnalysis = {
   formatLabel: string
   fileSize: number
   suggestedOutputDirectory: string
+}
+
+export type RecoveryTaskEvent = {
+  sequence: number
+  elapsedMs: number
+  phase: RecoveryPhase
+  engine: string | null
+  message: string
+  archivePath: string | null
+  recursiveDepth: number
+  attemptedCount: number | null
+  totalCount: number | null
+  scannedFileCount: number | null
 }
 
 export type RecoveryTaskStatus = {
@@ -38,14 +54,29 @@ export type RecoveryTaskStatus = {
   engine: string | null
   message: string
   candidateCount: number
+  attemptedCount: number
+  startedAtMs: number
+  elapsedMs: number
   recoveredPassword: string | null
   outputDirectory: string
+  recursiveEnabled: boolean
+  recursiveDepth: number
+  currentArchivePath: string | null
+  nestedArchiveCount: number
+  extractedNestedArchiveCount: number
+  skippedNestedArchiveCount: number
+  scannedFileCount: number
+  depthLimitReached: boolean
+  countLimitReached: boolean
+  events: RecoveryTaskEvent[]
 }
 
 export type RecoveryStartRequest = {
   archivePath: string
   outputDirectory?: string | null
   knownPassword?: string | null
+  avoidOutputCollision?: boolean
+  recursive?: boolean
 }
 
 function requireDesktopRuntime(): void {
@@ -59,13 +90,12 @@ export async function pickArchivePath(): Promise<string | null> {
   const selected = await open({
     multiple: false,
     directory: false,
-    title: "选择压缩包",
+    title: "选择待分析文件",
     filters: [
       {
-        name: "支持的压缩包",
-        extensions: ["7z", "zip", "rar", "001", "exe"],
+        name: "所有文件（按内容识别）",
+        extensions: ["*"],
       },
-      { name: "所有文件", extensions: ["*"] },
     ],
   })
   return typeof selected === "string" ? selected : null

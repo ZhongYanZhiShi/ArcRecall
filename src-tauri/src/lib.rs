@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -5,17 +7,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_recall_core::{
     APP_DATA_FOLDER_NAME, AppPaths, AppSettings, ArchiveAnalysis, ArchiveFormat, CancellationToken,
-    DatabaseInfo, DictionaryCandidateAddSummary, DictionaryCandidateQuery,
-    DictionaryCandidateStore, DictionaryListResult, FullEngineBundleInstallResult,
-    FullEngineBundleManager, FullEngineBundleStatus, HashcatInstallResult, HashcatStatus,
-    HashcatToolDownloader, JohnPerlStatus, RecoveryJob, RecoveryPhase, RecoveryToolPaths,
-    SERVICE_NAME, SettingsStore, analyze_archive, health_status, probe_john_perl,
-    recover_and_extract, resolve_tools_directory,
+    DEFAULT_RECURSIVE_MAX_ARCHIVES, DEFAULT_RECURSIVE_MAX_DEPTH, DatabaseInfo,
+    DictionaryCandidateAddSummary, DictionaryCandidateQuery, DictionaryCandidateStore,
+    DictionaryListResult, FullEngineBundleInstallResult, FullEngineBundleManager,
+    FullEngineBundleStatus, HashcatInstallResult, HashcatStatus, HashcatToolDownloader,
+    JohnPerlStatus, RecoveryDictionary, RecoveryError, RecoveryJob, RecoveryPhase,
+    RecoveryToolPaths, RecoveryUpdate, RecursiveRecoveryOptions, SERVICE_NAME, SettingsStore,
+    analyze_archive, health_status, path_for_display, probe_john_perl,
+    recover_and_extract_recursive_lazy, resolve_tools_directory,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 static RECOVERY_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+const RECOVERY_EVENT_LIMIT: usize = 80;
 
 struct AppState {
     paths: AppPaths,
@@ -45,6 +50,25 @@ struct RecoveryStartRequest {
     archive_path: String,
     output_directory: Option<String>,
     known_password: Option<String>,
+    #[serde(default)]
+    avoid_output_collision: bool,
+    #[serde(default = "default_recursive_recovery")]
+    recursive: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryTaskEvent {
+    sequence: u64,
+    elapsed_ms: u64,
+    phase: RecoveryPhase,
+    engine: Option<String>,
+    message: String,
+    archive_path: Option<String>,
+    recursive_depth: u32,
+    attempted_count: Option<u64>,
+    total_count: Option<u64>,
+    scanned_file_count: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,8 +86,130 @@ struct RecoveryTaskStatus {
     engine: Option<String>,
     message: String,
     candidate_count: u64,
+    attempted_count: u64,
+    started_at_ms: u64,
+    elapsed_ms: u64,
     recovered_password: Option<String>,
     output_directory: String,
+    recursive_enabled: bool,
+    recursive_depth: u32,
+    current_archive_path: Option<String>,
+    nested_archive_count: u32,
+    extracted_nested_archive_count: u32,
+    skipped_nested_archive_count: u32,
+    scanned_file_count: u64,
+    depth_limit_reached: bool,
+    count_limit_reached: bool,
+    events: VecDeque<RecoveryTaskEvent>,
+}
+
+fn default_recursive_recovery() -> bool {
+    true
+}
+
+fn append_recovery_update_event(status: &mut RecoveryTaskStatus, update: &RecoveryUpdate) {
+    let archive_path = update
+        .current_archive_path
+        .as_deref()
+        .or(status.current_archive_path.as_deref())
+        .map(|path| path_for_display(Path::new(path)));
+    push_recovery_event(
+        status,
+        update.phase,
+        update.engine.clone(),
+        update.message.clone(),
+        archive_path,
+        update.recursive_depth.unwrap_or(status.recursive_depth),
+        update.attempted_count,
+        update.total_count,
+        update.scanned_file_count,
+    );
+}
+
+fn append_current_recovery_event(status: &mut RecoveryTaskStatus) {
+    let phase = status.phase;
+    let engine = status.engine.clone();
+    let message = status.message.clone();
+    let archive_path = status.current_archive_path.clone();
+    let recursive_depth = status.recursive_depth;
+    let attempted_count = (status.attempted_count > 0).then_some(status.attempted_count);
+    let total_count = (status.candidate_count > 0).then_some(status.candidate_count);
+    let scanned_file_count = (status.scanned_file_count > 0).then_some(status.scanned_file_count);
+    push_recovery_event(
+        status,
+        phase,
+        engine,
+        message,
+        archive_path,
+        recursive_depth,
+        attempted_count,
+        total_count,
+        scanned_file_count,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_recovery_event(
+    status: &mut RecoveryTaskStatus,
+    phase: RecoveryPhase,
+    engine: Option<String>,
+    message: String,
+    archive_path: Option<String>,
+    recursive_depth: u32,
+    attempted_count: Option<u64>,
+    total_count: Option<u64>,
+    scanned_file_count: Option<u64>,
+) {
+    if let Some(latest) = status.events.front()
+        && latest.phase == phase
+        && latest.engine == engine
+        && latest.archive_path == archive_path
+        && latest.recursive_depth == recursive_depth
+    {
+        if let (Some(attempted), Some(total), Some(previous_attempted), Some(previous_total)) = (
+            attempted_count,
+            total_count,
+            latest.attempted_count,
+            latest.total_count,
+        ) {
+            let bucket = recovery_progress_bucket(attempted, total);
+            let previous_bucket = recovery_progress_bucket(previous_attempted, previous_total);
+            if bucket == previous_bucket && attempted < total {
+                return;
+            }
+        } else if latest.message == message && latest.scanned_file_count == scanned_file_count {
+            return;
+        }
+    }
+
+    let sequence = status
+        .events
+        .front()
+        .map(|event| event.sequence.saturating_add(1))
+        .unwrap_or(1);
+    status.events.push_front(RecoveryTaskEvent {
+        sequence,
+        elapsed_ms: current_time_ms().saturating_sub(status.started_at_ms),
+        phase,
+        engine,
+        message,
+        archive_path,
+        recursive_depth,
+        attempted_count,
+        total_count,
+        scanned_file_count,
+    });
+    if status.events.len() > RECOVERY_EVENT_LIMIT {
+        status.events.pop_back();
+    }
+}
+
+fn recovery_progress_bucket(attempted: u64, total: u64) -> u64 {
+    if total == 0 {
+        attempted
+    } else {
+        attempted.saturating_mul(20) / total
+    }
 }
 
 #[tauri::command]
@@ -313,8 +459,10 @@ async fn recovery_start(
         }
     }
 
-    let analysis = analyze_archive(&request.archive_path).map_err(|error| error.to_string())?;
-    let output_directory = request
+    let archive_path = std::fs::canonicalize(PathBuf::from(&request.archive_path))
+        .map_err(|error| format!("无法解析归档路径：{error}"))?;
+    let analysis = analyze_archive(&archive_path).map_err(|error| error.to_string())?;
+    let mut output_directory = request
         .output_directory
         .as_deref()
         .filter(|path| !path.trim().is_empty())
@@ -322,6 +470,9 @@ async fn recovery_start(
         .unwrap_or_else(|| PathBuf::from(&analysis.suggested_output_directory));
     if !output_directory.is_absolute() {
         return Err("输出目录必须使用绝对路径。".into());
+    }
+    if request.avoid_output_collision {
+        output_directory = resolve_available_output_directory(&output_directory);
     }
     if output_directory.is_file() {
         return Err("输出位置已存在且不是目录。".into());
@@ -349,17 +500,20 @@ async fn recovery_start(
     let task_id = next_recovery_task_id();
     let work_directory = state.paths.temp.join("recovery").join(&task_id);
     let dictionary_path = work_directory.join("dictionary.txt");
-    let database_path = state.paths.database.clone();
-    let export_path = dictionary_path.clone();
-    let candidate_count = tauri::async_runtime::spawn_blocking(move || {
-        let store = DictionaryCandidateStore::open(database_path)
-            .map_err(|error| format!("打开全局字典失败：{error}"))?;
-        store
-            .export_wordlist(export_path)
-            .map_err(|error| format!("导出外部引擎字典失败：{error}"))
-    })
-    .await
-    .map_err(|error| format!("字典导出任务失败：{error}"))??;
+    let started_at_ms = current_time_ms();
+    let initial_message = "恢复任务已启动，正在优先检查免密与手动密码。".to_owned();
+    let initial_events = VecDeque::from([RecoveryTaskEvent {
+        sequence: 1,
+        elapsed_ms: 0,
+        phase: RecoveryPhase::Preparing,
+        engine: None,
+        message: initial_message.clone(),
+        archive_path: Some(analysis.archive_path.clone()),
+        recursive_depth: 0,
+        attempted_count: None,
+        total_count: None,
+        scanned_file_count: None,
+    }]);
 
     let status = Arc::new(Mutex::new(RecoveryTaskStatus {
         task_id: task_id.clone(),
@@ -372,10 +526,23 @@ async fn recovery_start(
         archive_format: analysis.format,
         archive_format_label: analysis.format_label.clone(),
         engine: None,
-        message: format!("已导出 {candidate_count} 条候选，正在启动恢复任务。"),
-        candidate_count,
+        message: initial_message,
+        candidate_count: 0,
+        attempted_count: 0,
+        started_at_ms,
+        elapsed_ms: 0,
         recovered_password: None,
-        output_directory: output_directory.display().to_string(),
+        output_directory: path_for_display(&output_directory),
+        recursive_enabled: request.recursive,
+        recursive_depth: 0,
+        current_archive_path: Some(analysis.archive_path.clone()),
+        nested_archive_count: 0,
+        extracted_nested_archive_count: 0,
+        skipped_nested_archive_count: 0,
+        scanned_file_count: 0,
+        depth_limit_reached: false,
+        count_limit_reached: false,
+        events: initial_events,
     }));
     let cancellation = CancellationToken::default();
     {
@@ -392,54 +559,132 @@ async fn recovery_start(
 
     let initial = status.lock().map_err(|error| error.to_string())?.clone();
     let job = RecoveryJob {
-        archive_path: PathBuf::from(analysis.archive_path),
+        archive_path,
         output_directory,
-        dictionary_path,
-        dictionary_count: candidate_count,
+        dictionary_path: dictionary_path.clone(),
+        dictionary_count: 0,
         known_password: request.known_password,
         work_directory: work_directory.clone(),
     };
     let status_for_worker = Arc::clone(&status);
+    let status_for_dictionary = Arc::clone(&status);
+    let dictionary_database_path = state.paths.database.clone();
+    let dictionary_cancellation = cancellation.clone();
     let success_database_path = state.paths.database.clone();
     std::thread::spawn(move || {
-        let outcome = recover_and_extract(&job, &tools, &cancellation, |update| {
-            if let Ok(mut task_status) = status_for_worker.lock() {
-                task_status.phase = update.phase;
-                task_status.engine = update.engine;
-                task_status.message = update.message;
-            }
-        });
+        let outcome = recover_and_extract_recursive_lazy(
+            &job,
+            &tools,
+            &cancellation,
+            RecursiveRecoveryOptions {
+                enabled: initial.recursive_enabled,
+                max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
+                max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
+            },
+            move || {
+                if dictionary_cancellation.is_cancelled() {
+                    return Err(RecoveryError::Cancelled);
+                }
+                let store =
+                    DictionaryCandidateStore::open(dictionary_database_path).map_err(|error| {
+                        RecoveryError::Message(format!("打开全局字典失败：{error}"))
+                    })?;
+                let candidate_count = store.export_wordlist(&dictionary_path).map_err(|error| {
+                    RecoveryError::Message(format!("准备恢复字典失败：{error}"))
+                })?;
+                if let Ok(mut task_status) = status_for_dictionary.lock() {
+                    task_status.candidate_count = candidate_count;
+                }
+                Ok(RecoveryDictionary {
+                    path: dictionary_path,
+                    candidate_count,
+                })
+            },
+            |update| {
+                let event_update = update.clone();
+
+                if let Ok(mut task_status) = status_for_worker.lock() {
+                    task_status.phase = update.phase;
+                    task_status.engine = update.engine;
+                    task_status.message = update.message;
+                    if let Some(attempted_count) = update.attempted_count {
+                        task_status.attempted_count = attempted_count;
+                    }
+                    if let Some(total_count) = update.total_count {
+                        task_status.candidate_count = total_count;
+                    }
+                    if let Some(recursive_depth) = update.recursive_depth {
+                        task_status.recursive_depth = recursive_depth;
+                    }
+                    if let Some(current_archive_path) = update.current_archive_path {
+                        task_status.current_archive_path = Some(current_archive_path);
+                    }
+                    if let Some(nested_archive_count) = update.nested_archive_count {
+                        task_status.nested_archive_count = nested_archive_count;
+                    }
+                    if let Some(extracted_count) = update.extracted_nested_archive_count {
+                        task_status.extracted_nested_archive_count = extracted_count;
+                    }
+                    if let Some(skipped_count) = update.skipped_nested_archive_count {
+                        task_status.skipped_nested_archive_count = skipped_count;
+                    }
+                    if let Some(scanned_file_count) = update.scanned_file_count {
+                        task_status.scanned_file_count = scanned_file_count;
+                    }
+                    append_recovery_update_event(&mut task_status, &event_update);
+                }
+            },
+        );
         if let Ok(mut task_status) = status_for_worker.lock() {
             task_status.running = false;
             task_status.completed = true;
+            task_status.elapsed_ms = current_time_ms().saturating_sub(task_status.started_at_ms);
             match outcome {
                 Ok(result) => {
-                    task_status.success = result.success;
-                    task_status.cancelled = result.cancelled;
-                    task_status.phase = if result.cancelled {
+                    task_status.success = result.root.success;
+                    task_status.cancelled = result.root.cancelled;
+                    task_status.phase = if result.root.cancelled {
                         RecoveryPhase::Cancelled
-                    } else {
+                    } else if result.root.success {
                         RecoveryPhase::Completed
+                    } else {
+                        RecoveryPhase::Exhausted
                     };
-                    task_status.engine = result.engine;
-                    task_status.message = result.message;
-                    task_status.recovered_password = result.password.clone();
-                    task_status.output_directory = result.output_directory.display().to_string();
-                    if result.success
-                        && let Some(password) = result.password
+                    task_status.engine = result.root.engine.clone();
+                    task_status.message = result.root.message;
+                    task_status.recovered_password = result
+                        .root
+                        .password
+                        .clone()
+                        .or_else(|| result.recovered_passwords.first().cloned());
+                    task_status.output_directory = path_for_display(&result.root.output_directory);
+                    task_status.nested_archive_count = result.discovered_nested_archives;
+                    task_status.extracted_nested_archive_count = result.extracted_nested_archives;
+                    task_status.skipped_nested_archive_count = result.skipped_nested_archives;
+                    task_status.scanned_file_count = result.scanned_files;
+                    task_status.depth_limit_reached = result.depth_limit_reached;
+                    task_status.count_limit_reached = result.count_limit_reached;
+                    task_status.current_archive_path = None;
+                    task_status.recursive_depth = 0;
+                    append_current_recovery_event(&mut task_status);
+                    if result.root.success
                         && let Ok(store) = DictionaryCandidateStore::open(&success_database_path)
                     {
-                        let _ = store.increment_success(&password);
+                        for password in &result.recovered_passwords {
+                            let _ = store.increment_success(password);
+                        }
                     }
                 }
                 Err(arc_recall_core::RecoveryError::Cancelled) => {
                     task_status.cancelled = true;
                     task_status.phase = RecoveryPhase::Cancelled;
                     task_status.message = "密码恢复任务已取消。".into();
+                    append_current_recovery_event(&mut task_status);
                 }
                 Err(error) => {
                     task_status.phase = RecoveryPhase::Failed;
                     task_status.message = error.to_string();
+                    append_current_recovery_event(&mut task_status);
                 }
             }
         }
@@ -464,11 +709,14 @@ fn recovery_status(
     if task_id.as_deref().is_some_and(|id| id != task.id) {
         return Ok(None);
     }
-    let status = task
+    let mut status = task
         .status
         .lock()
         .map_err(|error| error.to_string())?
         .clone();
+    if status.running {
+        status.elapsed_ms = current_time_ms().saturating_sub(status.started_at_ms);
+    }
     Ok(Some(status))
 }
 
@@ -538,6 +786,35 @@ fn open_path(path: String) -> Result<(), String> {
         let _ = path;
         Err("当前平台暂不支持自动打开路径。".into())
     }
+}
+
+fn resolve_available_output_directory(preferred: &Path) -> PathBuf {
+    if !preferred.exists() {
+        return preferred.to_path_buf();
+    }
+
+    let Some(parent) = preferred.parent() else {
+        return preferred.join(format!("ArcRecall 输出-{}", current_time_ms()));
+    };
+    let base_name = preferred
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("ArcRecall 输出");
+    for suffix in 2..=9_999 {
+        let candidate = parent.join(format!("{base_name} ({suffix})"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    parent.join(format!("{base_name}-{}", current_time_ms()))
+}
+
+fn current_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 fn next_recovery_task_id() -> String {
@@ -612,4 +889,119 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run ArcRecall");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_collision_uses_next_available_sibling_directory() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let preferred = directory.path().join("archive");
+        let second = directory.path().join("archive (2)");
+        std::fs::create_dir_all(&preferred).expect("preferred");
+        std::fs::create_dir_all(&second).expect("second");
+
+        assert_eq!(
+            resolve_available_output_directory(&preferred),
+            directory.path().join("archive (3)")
+        );
+    }
+
+    #[test]
+    fn output_without_collision_keeps_preferred_directory() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let preferred = directory.path().join("archive");
+
+        assert_eq!(resolve_available_output_directory(&preferred), preferred);
+    }
+
+    #[test]
+    fn recovery_event_history_is_bounded_and_latest_first() {
+        let mut status = test_recovery_status();
+        for index in 0..100 {
+            push_recovery_event(
+                &mut status,
+                RecoveryPhase::Preparing,
+                None,
+                format!("event-{index}"),
+                None,
+                0,
+                None,
+                None,
+                None,
+            );
+        }
+
+        assert_eq!(status.events.len(), RECOVERY_EVENT_LIMIT);
+        assert_eq!(
+            status.events.front().map(|event| event.message.as_str()),
+            Some("event-99")
+        );
+        assert_eq!(
+            status.events.back().map(|event| event.message.as_str()),
+            Some("event-20")
+        );
+    }
+
+    #[test]
+    fn recovery_candidate_events_are_recorded_in_five_percent_buckets() {
+        let mut status = test_recovery_status();
+        for attempted in [1, 2, 4, 5, 6, 9, 10] {
+            push_recovery_event(
+                &mut status,
+                RecoveryPhase::Internal,
+                Some("7-Zip CPU".into()),
+                format!("attempted {attempted}"),
+                Some("archive.7z".into()),
+                0,
+                Some(attempted),
+                Some(100),
+                None,
+            );
+        }
+
+        assert_eq!(status.events.len(), 3);
+        assert_eq!(
+            status
+                .events
+                .iter()
+                .map(|event| event.attempted_count)
+                .collect::<Vec<_>>(),
+            vec![Some(10), Some(5), Some(1)]
+        );
+    }
+
+    fn test_recovery_status() -> RecoveryTaskStatus {
+        RecoveryTaskStatus {
+            task_id: "test".into(),
+            phase: RecoveryPhase::Preparing,
+            running: true,
+            completed: false,
+            success: false,
+            cancelled: false,
+            archive_path: "archive.7z".into(),
+            archive_format: ArchiveFormat::SevenZip,
+            archive_format_label: "7z".into(),
+            engine: None,
+            message: "test".into(),
+            candidate_count: 0,
+            attempted_count: 0,
+            started_at_ms: current_time_ms(),
+            elapsed_ms: 0,
+            recovered_password: None,
+            output_directory: "output".into(),
+            recursive_enabled: true,
+            recursive_depth: 0,
+            current_archive_path: Some("archive.7z".into()),
+            nested_archive_count: 0,
+            extracted_nested_archive_count: 0,
+            skipped_nested_archive_count: 0,
+            scanned_file_count: 0,
+            depth_limit_reached: false,
+            count_limit_reached: false,
+            events: VecDeque::new(),
+        }
+    }
 }

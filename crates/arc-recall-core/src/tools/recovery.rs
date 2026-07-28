@@ -1,9 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::fs;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +17,11 @@ const RAR3_SIGNATURE: &[u8] = b"Rar!\x1a\x07\x00";
 const RAR5_SIGNATURE: &[u8] = b"Rar!\x1a\x07\x01\x00";
 const ZIP_SIGNATURES: [&[u8]; 3] = [b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"];
 const SIGNATURE_SCAN_LIMIT: u64 = 4 * 1024 * 1024;
+const HEADER_PROBE_LIMIT: usize = 16;
+const NESTED_FALLBACK_SCAN_LIMIT: u64 = 64 * 1024;
+const SCAN_PROGRESS_INTERVAL_FILES: u64 = 128;
+pub const DEFAULT_RECURSIVE_MAX_DEPTH: u32 = 5;
+pub const DEFAULT_RECURSIVE_MAX_ARCHIVES: u32 = 100;
 
 const HASHCAT_ARCHIVE_MODES: [u32; 13] = [
     11600, 12500, 13000, 13600, 17200, 17210, 17220, 17225, 17230, 17240, 17250, 23700, 23800,
@@ -50,8 +55,11 @@ pub enum RecoveryPhase {
     Converting,
     Hashcat,
     John,
+    Internal,
     Extracting,
+    Recursive,
     Completed,
+    Exhausted,
     Cancelled,
     Failed,
 }
@@ -73,6 +81,73 @@ pub struct RecoveryUpdate {
     pub phase: RecoveryPhase,
     pub engine: Option<String>,
     pub message: String,
+    pub attempted_count: Option<u64>,
+    pub total_count: Option<u64>,
+    pub recursive_depth: Option<u32>,
+    pub current_archive_path: Option<String>,
+    pub nested_archive_count: Option<u32>,
+    pub extracted_nested_archive_count: Option<u32>,
+    pub skipped_nested_archive_count: Option<u32>,
+    pub scanned_file_count: Option<u64>,
+}
+
+impl RecoveryUpdate {
+    fn stage(
+        phase: RecoveryPhase,
+        engine: Option<impl Into<String>>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            phase,
+            engine: engine.map(Into::into),
+            message: message.into(),
+            attempted_count: None,
+            total_count: None,
+            recursive_depth: None,
+            current_archive_path: None,
+            nested_archive_count: None,
+            extracted_nested_archive_count: None,
+            skipped_nested_archive_count: None,
+            scanned_file_count: None,
+        }
+    }
+
+    fn progress(
+        phase: RecoveryPhase,
+        engine: impl Into<String>,
+        message: impl Into<String>,
+        attempted_count: u64,
+        total_count: u64,
+    ) -> Self {
+        Self {
+            phase,
+            engine: Some(engine.into()),
+            message: message.into(),
+            attempted_count: Some(attempted_count),
+            total_count: Some(total_count),
+            recursive_depth: None,
+            current_archive_path: None,
+            nested_archive_count: None,
+            extracted_nested_archive_count: None,
+            skipped_nested_archive_count: None,
+            scanned_file_count: None,
+        }
+    }
+
+    fn with_recursive_context(
+        mut self,
+        depth: u32,
+        archive_path: &Path,
+        state: &RecursiveProgressSnapshot,
+    ) -> Self {
+        self.recursive_depth = Some(depth);
+        self.current_archive_path = Some(path_for_display(archive_path));
+        self.nested_archive_count = Some(state.discovered_nested_archives);
+        self.extracted_nested_archive_count = Some(state.extracted_nested_archives);
+        self.skipped_nested_archive_count = Some(state.skipped_nested_archives);
+        self.scanned_file_count = Some(state.scanned_files);
+        self
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +168,29 @@ pub struct RecoveryJob {
     pub work_directory: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+pub struct RecoveryDictionary {
+    pub path: PathBuf,
+    pub candidate_count: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecursiveRecoveryOptions {
+    pub enabled: bool,
+    pub max_depth: u32,
+    pub max_nested_archives: u32,
+}
+
+impl Default for RecursiveRecoveryOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
+            max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryResult {
     pub success: bool,
@@ -101,6 +199,18 @@ pub struct RecoveryResult {
     pub engine: Option<String>,
     pub output_directory: PathBuf,
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecursiveRecoveryResult {
+    pub root: RecoveryResult,
+    pub discovered_nested_archives: u32,
+    pub extracted_nested_archives: u32,
+    pub skipped_nested_archives: u32,
+    pub depth_limit_reached: bool,
+    pub count_limit_reached: bool,
+    pub recovered_passwords: Vec<String>,
+    pub scanned_files: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -115,6 +225,8 @@ pub enum RecoveryError {
     Process(String),
     #[error("外部恢复任务已取消")]
     Cancelled,
+    #[error("归档无法继续验密：{0}")]
+    InvalidArchive(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
@@ -134,10 +246,93 @@ enum CrackAttempt {
     Failed,
 }
 
+#[derive(Debug, Clone)]
+struct NestedArchiveTask {
+    archive_path: PathBuf,
+    depth: u32,
+    inherited_password: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct FileSnapshot {
+    length: u64,
+    modified: Option<std::time::SystemTime>,
+    created: Option<std::time::SystemTime>,
+}
+
+impl FileSnapshot {
+    fn has_changed_since(&self, previous: &Self) -> bool {
+        self.length != previous.length
+            || self.modified != previous.modified
+            || self.created != previous.created
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RecursiveProgressSnapshot {
+    discovered_nested_archives: u32,
+    extracted_nested_archives: u32,
+    skipped_nested_archives: u32,
+    scanned_files: u64,
+}
+
+struct RecursiveRecoveryState {
+    options: RecursiveRecoveryOptions,
+    processed_archives: HashSet<PathBuf>,
+    discovered_nested_archives: u32,
+    extracted_nested_archives: u32,
+    skipped_nested_archives: u32,
+    scanned_files: u64,
+    depth_limit_reached: bool,
+    count_limit_reached: bool,
+}
+
+impl RecursiveRecoveryState {
+    fn new(options: RecursiveRecoveryOptions) -> Self {
+        Self {
+            options,
+            processed_archives: HashSet::new(),
+            discovered_nested_archives: 0,
+            extracted_nested_archives: 0,
+            skipped_nested_archives: 0,
+            scanned_files: 0,
+            depth_limit_reached: false,
+            count_limit_reached: false,
+        }
+    }
+
+    fn collection_limit(&self) -> usize {
+        let remaining = self
+            .options
+            .max_nested_archives
+            .saturating_sub(self.discovered_nested_archives);
+        remaining.saturating_add(1) as usize
+    }
+
+    fn progress_snapshot(&self) -> RecursiveProgressSnapshot {
+        RecursiveProgressSnapshot {
+            discovered_nested_archives: self.discovered_nested_archives,
+            extracted_nested_archives: self.extracted_nested_archives,
+            skipped_nested_archives: self.skipped_nested_archives,
+            scanned_files: self.scanned_files,
+        }
+    }
+
+    fn update(
+        &self,
+        message: impl Into<String>,
+        depth: u32,
+        archive_path: &Path,
+    ) -> RecoveryUpdate {
+        RecoveryUpdate::stage(RecoveryPhase::Recursive, Some("递归解密"), message)
+            .with_recursive_context(depth, archive_path, &self.progress_snapshot())
+    }
+}
+
 pub fn analyze_archive(path: impl AsRef<Path>) -> Result<ArchiveAnalysis, RecoveryError> {
     let path = path.as_ref();
     if !path.is_file() {
-        return Err(RecoveryError::NotFound(path.display().to_string()));
+        return Err(RecoveryError::NotFound(path_for_display(path)));
     }
     let absolute = path.canonicalize()?;
     let format = detect_archive_format(&absolute)?;
@@ -158,62 +353,596 @@ pub fn analyze_archive(path: impl AsRef<Path>) -> Result<ArchiveAnalysis, Recove
         .join(output_name);
 
     Ok(ArchiveAnalysis {
-        archive_path: absolute.display().to_string(),
+        archive_path: path_for_display(&absolute),
         file_name,
         format,
         format_label: format.label().into(),
         file_size: metadata.len(),
-        suggested_output_directory: suggested_output_directory.display().to_string(),
+        suggested_output_directory: path_for_display(&suggested_output_directory),
     })
 }
 
 pub fn detect_archive_format(path: &Path) -> Result<ArchiveFormat, RecoveryError> {
-    if !path.is_file() {
-        return Err(RecoveryError::NotFound(path.display().to_string()));
-    }
-    let file = fs::File::open(path)?;
-    let mut buffer = Vec::new();
-    file.take(SIGNATURE_SCAN_LIMIT).read_to_end(&mut buffer)?;
+    detect_archive_format_with_limit(path, |_| SIGNATURE_SCAN_LIMIT)
+}
 
-    let mut matches = Vec::new();
-    if let Some(index) = find_signature(&buffer, SEVEN_ZIP_SIGNATURE) {
-        matches.push((index, ArchiveFormat::SevenZip));
+fn detect_nested_archive_format(path: &Path) -> Result<ArchiveFormat, RecoveryError> {
+    detect_archive_format_with_limit(path, nested_signature_scan_limit)
+}
+
+fn detect_archive_format_with_limit(
+    path: &Path,
+    scan_limit: impl FnOnce(&[u8]) -> u64,
+) -> Result<ArchiveFormat, RecoveryError> {
+    if !path.is_file() {
+        return Err(RecoveryError::NotFound(path_for_display(path)));
     }
-    if let Some(index) = find_signature(&buffer, RAR5_SIGNATURE) {
-        matches.push((index, ArchiveFormat::Rar5));
+    let mut file = fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    let mut prefix = [0u8; HEADER_PROBE_LIMIT];
+    let prefix_length = file.read(&mut prefix)?;
+    let prefix = &prefix[..prefix_length];
+    if let Some(format) = detect_format_in_buffer(prefix, true) {
+        return Ok(format);
     }
-    if let Some(index) = find_signature(&buffer, RAR3_SIGNATURE) {
-        matches.push((index, ArchiveFormat::Rar3));
+    let scan_limit = metadata.len().min(scan_limit(prefix)) as usize;
+    let mut buffer = Vec::with_capacity(scan_limit);
+    buffer.extend_from_slice(prefix);
+    file.take(scan_limit.saturating_sub(prefix_length) as u64)
+        .read_to_end(&mut buffer)?;
+    detect_format_in_buffer(&buffer, false).ok_or(RecoveryError::UnsupportedFormat)
+}
+
+fn detect_format_in_buffer(buffer: &[u8], require_start: bool) -> Option<ArchiveFormat> {
+    if require_start {
+        return detect_format_at_offset(buffer);
     }
-    for signature in ZIP_SIGNATURES {
-        if let Some(index) = find_signature(&buffer, signature) {
-            matches.push((index, ArchiveFormat::Zip));
+    (0..buffer.len()).find_map(|index| detect_format_at_offset(&buffer[index..]))
+}
+
+fn detect_format_at_offset(buffer: &[u8]) -> Option<ArchiveFormat> {
+    match buffer.first().copied()? {
+        0x37 if buffer.starts_with(SEVEN_ZIP_SIGNATURE) => Some(ArchiveFormat::SevenZip),
+        b'R' if buffer.starts_with(RAR5_SIGNATURE) => Some(ArchiveFormat::Rar5),
+        b'R' if buffer.starts_with(RAR3_SIGNATURE) => Some(ArchiveFormat::Rar3),
+        b'P' if ZIP_SIGNATURES
+            .iter()
+            .any(|signature| buffer.starts_with(signature)) =>
+        {
+            Some(ArchiveFormat::Zip)
         }
+        _ => None,
     }
-    matches.sort_by_key(|(index, _)| *index);
-    matches
-        .first()
-        .map(|(_, format)| *format)
-        .ok_or(RecoveryError::UnsupportedFormat)
+}
+
+fn nested_signature_scan_limit(prefix: &[u8]) -> u64 {
+    if looks_like_embedded_archive_carrier(prefix) {
+        SIGNATURE_SCAN_LIMIT
+    } else {
+        NESTED_FALLBACK_SCAN_LIMIT
+    }
+}
+
+fn looks_like_embedded_archive_carrier(prefix: &[u8]) -> bool {
+    prefix.starts_with(b"MZ")
+        || prefix.starts_with(b"\xff\xd8\xff")
+        || prefix.starts_with(b"\x89PNG\r\n\x1a\n")
+        || prefix.starts_with(b"GIF87a")
+        || prefix.starts_with(b"GIF89a")
+        || prefix.starts_with(b"BM")
+        || prefix.starts_with(b"%PDF")
+        || prefix.starts_with(b"ID3")
+        || prefix.starts_with(b"\x1aE\xdf\xa3")
+        || (prefix.len() >= 12 && &prefix[4..8] == b"ftyp")
+        || (prefix.len() >= 12 && prefix.starts_with(b"RIFF") && &prefix[8..12] == b"WEBP")
+        || prefix
+            .iter()
+            .all(|byte| byte.is_ascii_whitespace() || byte.is_ascii_graphic())
+}
+
+pub fn path_for_display(path: &Path) -> String {
+    strip_windows_verbatim_prefix(&path.to_string_lossy())
+}
+
+fn strip_windows_verbatim_prefix(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+        rest.to_owned()
+    } else {
+        path.to_owned()
+    }
 }
 
 pub fn recover_and_extract(
     job: &RecoveryJob,
     tools: &RecoveryToolPaths,
     cancellation: &CancellationToken,
+    report: impl FnMut(RecoveryUpdate),
+) -> Result<RecoveryResult, RecoveryError> {
+    let dictionary = RecoveryDictionary {
+        path: job.dictionary_path.clone(),
+        candidate_count: job.dictionary_count,
+    };
+    recover_and_extract_lazy(job, tools, cancellation, move || Ok(dictionary), report)
+}
+
+/// Recover and extract an archive while deferring dictionary materialization.
+///
+/// Empty-password and manually supplied password checks run before
+/// `prepare_dictionary` is called. This keeps the common path fast even when
+/// the global dictionary contains millions of candidates.
+pub fn recover_and_extract_lazy(
+    job: &RecoveryJob,
+    tools: &RecoveryToolPaths,
+    cancellation: &CancellationToken,
+    prepare_dictionary: impl FnOnce() -> Result<RecoveryDictionary, RecoveryError>,
     mut report: impl FnMut(RecoveryUpdate),
 ) -> Result<RecoveryResult, RecoveryError> {
-    validate_job_inputs(job, tools)?;
+    let mut prepare_dictionary = Some(prepare_dictionary);
+    recover_single_archive(
+        job,
+        tools,
+        cancellation,
+        &mut || {
+            let prepare = prepare_dictionary
+                .take()
+                .ok_or_else(|| RecoveryError::Message("恢复字典只能准备一次。".into()))?;
+            prepare()
+        },
+        &mut report,
+    )
+}
+
+pub fn recover_and_extract_recursive_lazy(
+    job: &RecoveryJob,
+    tools: &RecoveryToolPaths,
+    cancellation: &CancellationToken,
+    options: RecursiveRecoveryOptions,
+    prepare_dictionary: impl FnOnce() -> Result<RecoveryDictionary, RecoveryError>,
+    mut report: impl FnMut(RecoveryUpdate),
+) -> Result<RecursiveRecoveryResult, RecoveryError> {
+    let before_root_extraction = if options.enabled {
+        capture_file_snapshot(&job.output_directory, cancellation)?
+    } else {
+        HashMap::new()
+    };
+    let mut prepare_dictionary = Some(prepare_dictionary);
+    let mut dictionary_cache: Option<RecoveryDictionary> = None;
+    let mut dictionary_error: Option<String> = None;
+    let mut dictionary_provider = || {
+        if let Some(dictionary) = dictionary_cache.as_ref() {
+            return Ok(dictionary.clone());
+        }
+        if let Some(message) = dictionary_error.as_ref() {
+            return Err(RecoveryError::Message(message.clone()));
+        }
+        let prepare = prepare_dictionary
+            .take()
+            .ok_or_else(|| RecoveryError::Message("恢复字典只能准备一次。".into()))?;
+        match prepare() {
+            Ok(dictionary) => {
+                dictionary_cache = Some(dictionary.clone());
+                Ok(dictionary)
+            }
+            Err(error) => {
+                let message = error.to_string();
+                dictionary_error = Some(message.clone());
+                Err(RecoveryError::Message(message))
+            }
+        }
+    };
+
+    let mut root = recover_single_archive(
+        job,
+        tools,
+        cancellation,
+        &mut dictionary_provider,
+        &mut report,
+    )?;
+    let mut recovered_passwords = Vec::new();
+    if let Some(password) = root.password.as_ref() {
+        recovered_passwords.push(password.clone());
+    }
+    if !root.success || !options.enabled {
+        return Ok(RecursiveRecoveryResult {
+            root,
+            discovered_nested_archives: 0,
+            extracted_nested_archives: 0,
+            skipped_nested_archives: 0,
+            depth_limit_reached: false,
+            count_limit_reached: false,
+            recovered_passwords,
+            scanned_files: 0,
+        });
+    }
+
+    let mut state = RecursiveRecoveryState::new(options);
+    report(state.update(
+        "外层解压已完成，正在扫描第 1 层输出。",
+        1,
+        &job.output_directory,
+    ));
+    let initial_limit = state.collection_limit();
+    let initial_scan_base = state.scanned_files;
+    let nested_archives = find_new_or_changed_archives(
+        &job.output_directory,
+        &before_root_extraction,
+        initial_limit,
+        cancellation,
+        |scanned_files, found_archives| {
+            state.scanned_files = initial_scan_base.saturating_add(scanned_files);
+            report(state.update(
+                format!(
+                    "正在扫描第 1 层输出：已检查 {scanned_files} 个文件，发现 {found_archives} 个归档。"
+                ),
+                1,
+                &job.output_directory,
+            ));
+        },
+    )?;
+    let inherited_password = root
+        .password
+        .clone()
+        .or_else(|| job.known_password.clone())
+        .filter(|password| !password.is_empty());
+    let mut pending = nested_archives
+        .into_iter()
+        .map(|archive_path| NestedArchiveTask {
+            archive_path,
+            depth: 1,
+            inherited_password: inherited_password.clone(),
+        })
+        .collect::<VecDeque<_>>();
+
+    while let Some(nested) = pending.pop_front() {
+        ensure_not_cancelled(cancellation)?;
+        if !nested.archive_path.is_file() {
+            state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
+            report(state.update(
+                "嵌套压缩包已不存在，已跳过。",
+                nested.depth,
+                &nested.archive_path,
+            ));
+            continue;
+        }
+        if !state.processed_archives.insert(nested.archive_path.clone()) {
+            continue;
+        }
+        if state.discovered_nested_archives >= state.options.max_nested_archives {
+            state.count_limit_reached = true;
+            state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
+            report(state.update(
+                format!(
+                    "已达到 {} 个嵌套压缩包的安全上限，剩余项目不再处理。",
+                    state.options.max_nested_archives
+                ),
+                nested.depth,
+                &nested.archive_path,
+            ));
+            break;
+        }
+
+        state.discovered_nested_archives = state.discovered_nested_archives.saturating_add(1);
+        if nested.depth > state.options.max_depth {
+            state.depth_limit_reached = true;
+            state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
+            report(state.update(
+                format!(
+                    "已超过 {} 层递归安全上限，当前嵌套压缩包已跳过。",
+                    state.options.max_depth
+                ),
+                nested.depth,
+                &nested.archive_path,
+            ));
+            continue;
+        }
+
+        report(state.update(
+            format!(
+                "正在处理第 {} 层嵌套压缩包：{}。",
+                nested.depth,
+                archive_display_name(&nested.archive_path)
+            ),
+            nested.depth,
+            &nested.archive_path,
+        ));
+        let nested_output = resolve_nested_output_directory(&nested.archive_path);
+        let before_nested_extraction = capture_file_snapshot(&nested_output, cancellation)?;
+        let nested_job = RecoveryJob {
+            archive_path: nested.archive_path.clone(),
+            output_directory: nested_output.clone(),
+            dictionary_path: job.dictionary_path.clone(),
+            dictionary_count: job.dictionary_count,
+            known_password: nested.inherited_password.clone(),
+            work_directory: job
+                .work_directory
+                .join(format!("nested-{}", state.discovered_nested_archives)),
+        };
+        let context_state = state.progress_snapshot();
+        let nested_result = recover_single_archive(
+            &nested_job,
+            tools,
+            cancellation,
+            &mut dictionary_provider,
+            &mut |update| {
+                report(update.with_recursive_context(
+                    nested.depth,
+                    &nested.archive_path,
+                    &context_state,
+                ))
+            },
+        );
+
+        match nested_result {
+            Ok(result) if result.success => {
+                state.extracted_nested_archives = state.extracted_nested_archives.saturating_add(1);
+                if let Some(password) = result.password.as_ref()
+                    && !recovered_passwords.contains(password)
+                {
+                    recovered_passwords.push(password.clone());
+                }
+                let child_password = result
+                    .password
+                    .or(nested.inherited_password)
+                    .filter(|password| !password.is_empty());
+                let next_depth = nested.depth.saturating_add(1);
+                report(state.update(
+                    format!(
+                        "{} 已完成解压，正在扫描第 {} 层输出。",
+                        archive_display_name(&nested.archive_path),
+                        next_depth
+                    ),
+                    next_depth,
+                    &nested_output,
+                ));
+                let child_limit = state.collection_limit();
+                let child_scan_base = state.scanned_files;
+                let child_archives = find_new_or_changed_archives(
+                    &nested_output,
+                    &before_nested_extraction,
+                    child_limit,
+                    cancellation,
+                    |scanned_files, found_archives| {
+                        state.scanned_files = child_scan_base.saturating_add(scanned_files);
+                        report(state.update(
+                            format!(
+                                "正在扫描第 {next_depth} 层输出：已检查 {scanned_files} 个文件，发现 {found_archives} 个归档。"
+                            ),
+                            next_depth,
+                            &nested_output,
+                        ));
+                    },
+                )?;
+                pending.extend(
+                    child_archives
+                        .into_iter()
+                        .map(|archive_path| NestedArchiveTask {
+                            archive_path,
+                            depth: next_depth,
+                            inherited_password: child_password.clone(),
+                        }),
+                );
+                report(state.update(
+                    format!(
+                        "已解开第 {} 层嵌套压缩包：{}。",
+                        nested.depth,
+                        archive_display_name(&nested.archive_path)
+                    ),
+                    nested.depth,
+                    &nested.archive_path,
+                ));
+            }
+            Ok(_) => {
+                state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
+                report(state.update(
+                    format!(
+                        "未找到嵌套压缩包 {} 的密码，已跳过。",
+                        archive_display_name(&nested.archive_path)
+                    ),
+                    nested.depth,
+                    &nested.archive_path,
+                ));
+            }
+            Err(RecoveryError::Cancelled) => return Err(RecoveryError::Cancelled),
+            Err(error) => {
+                state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
+                report(state.update(
+                    format!(
+                        "嵌套压缩包 {} 无法继续处理，已跳过：{error}",
+                        archive_display_name(&nested.archive_path)
+                    ),
+                    nested.depth,
+                    &nested.archive_path,
+                ));
+            }
+        }
+    }
+
+    let mut summary = format!(
+        "递归扫描完成，共检查 {} 个文件，已自动解开 {} 个嵌套压缩包",
+        state.scanned_files, state.extracted_nested_archives
+    );
+    if state.skipped_nested_archives > 0 {
+        summary.push_str(&format!("，跳过 {} 个", state.skipped_nested_archives));
+    }
+    if state.depth_limit_reached || state.count_limit_reached {
+        summary.push_str("；已达到安全限制");
+    }
+    summary.push('。');
+    root.message = format!("{} {summary}", root.message);
+
+    Ok(RecursiveRecoveryResult {
+        root,
+        discovered_nested_archives: state.discovered_nested_archives,
+        extracted_nested_archives: state.extracted_nested_archives,
+        skipped_nested_archives: state.skipped_nested_archives,
+        depth_limit_reached: state.depth_limit_reached,
+        count_limit_reached: state.count_limit_reached,
+        recovered_passwords,
+        scanned_files: state.scanned_files,
+    })
+}
+
+fn capture_file_snapshot(
+    directory: &Path,
+    cancellation: &CancellationToken,
+) -> Result<HashMap<PathBuf, FileSnapshot>, RecoveryError> {
+    let mut snapshot = HashMap::new();
+    visit_files(directory, cancellation, |path| {
+        if let Some(state) = capture_file_state(&path) {
+            snapshot.insert(path, state);
+        }
+        true
+    })?;
+    Ok(snapshot)
+}
+
+fn find_new_or_changed_archives(
+    directory: &Path,
+    before: &HashMap<PathBuf, FileSnapshot>,
+    max_archives: usize,
+    cancellation: &CancellationToken,
+    mut report_progress: impl FnMut(u64, usize),
+) -> Result<Vec<PathBuf>, RecoveryError> {
+    if max_archives == 0 {
+        return Ok(Vec::new());
+    }
+    let mut archives = Vec::with_capacity(max_archives.min(16));
+    let mut scanned_files = 0u64;
+    let mut last_reported = 0u64;
+    let mut last_report_at = Instant::now();
+    visit_files(directory, cancellation, |path| {
+        scanned_files = scanned_files.saturating_add(1);
+        if let Some(current) = capture_file_state(&path)
+            && !before
+                .get(&path)
+                .is_some_and(|previous| !current.has_changed_since(previous))
+            && detect_nested_archive_format(&path).is_ok()
+        {
+            archives.push(path);
+        }
+        if scanned_files == 1
+            || scanned_files % SCAN_PROGRESS_INTERVAL_FILES == 0
+            || last_report_at.elapsed() >= Duration::from_millis(250)
+        {
+            report_progress(scanned_files, archives.len());
+            last_reported = scanned_files;
+            last_report_at = Instant::now();
+        }
+        archives.len() < max_archives
+    })?;
+    if scanned_files != last_reported {
+        report_progress(scanned_files, archives.len());
+    }
+    Ok(archives)
+}
+
+fn visit_files(
+    directory: &Path,
+    cancellation: &CancellationToken,
+    mut visit: impl FnMut(PathBuf) -> bool,
+) -> Result<(), RecoveryError> {
+    if !directory.is_dir() {
+        return Ok(());
+    }
+    let mut pending = vec![directory.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        ensure_not_cancelled(cancellation)?;
+        let entries = match fs::read_dir(current) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries {
+            ensure_not_cancelled(cancellation)?;
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                pending.push(entry.path());
+            } else if file_type.is_file() && !visit(entry.path()) {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn capture_file_state(path: &Path) -> Option<FileSnapshot> {
+    let metadata = path.metadata().ok()?;
+    Some(FileSnapshot {
+        length: metadata.len(),
+        modified: metadata.modified().ok(),
+        created: metadata.created().ok(),
+    })
+}
+
+fn resolve_nested_output_directory(archive_path: &Path) -> PathBuf {
+    let parent = archive_path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = archive_display_name(archive_path);
+    let output_name = if archive_path.extension().is_some() {
+        archive_path
+            .file_stem()
+            .map(|name| name.to_string_lossy().into_owned())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| format!("{file_name}.extracted"))
+    } else {
+        format!("{file_name}.extracted")
+    };
+    resolve_available_nested_directory(&parent.join(output_name))
+}
+
+fn resolve_available_nested_directory(preferred: &Path) -> PathBuf {
+    if !preferred.exists() {
+        return preferred.to_path_buf();
+    }
+    let parent = preferred.parent().unwrap_or_else(|| Path::new("."));
+    let base_name = preferred
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "archive.extracted".into());
+    for suffix in 2..=9_999 {
+        let candidate = parent.join(format!("{base_name} ({suffix})"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    parent.join(format!("{base_name}-{}", std::process::id()))
+}
+
+fn archive_display_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path_for_display(path))
+}
+
+fn recover_single_archive(
+    job: &RecoveryJob,
+    tools: &RecoveryToolPaths,
+    cancellation: &CancellationToken,
+    prepare_dictionary: &mut impl FnMut() -> Result<RecoveryDictionary, RecoveryError>,
+    report: &mut impl FnMut(RecoveryUpdate),
+) -> Result<RecoveryResult, RecoveryError> {
+    validate_base_job_inputs(job, tools)?;
     let analysis = analyze_archive(&job.archive_path)?;
     fs::create_dir_all(&job.work_directory)?;
 
-    report(RecoveryUpdate {
-        phase: RecoveryPhase::Verifying,
-        engine: Some("7-Zip".into()),
-        message: "正在检查归档是否无需密码。".into(),
-    });
+    ensure_not_cancelled(cancellation)?;
+    report(RecoveryUpdate::stage(
+        RecoveryPhase::Verifying,
+        Some("7-Zip"),
+        "正在检查归档是否无需密码。",
+    ));
     if verify_password(&job.archive_path, "", tools, cancellation)? {
-        extract_with_password(job, tools, "", cancellation, &mut report)?;
+        extract_with_password(job, tools, "", cancellation, report)?;
         return Ok(success_result(
             job,
             None,
@@ -227,13 +956,13 @@ pub fn recover_and_extract(
         .as_deref()
         .filter(|value| !value.is_empty())
     {
-        report(RecoveryUpdate {
-            phase: RecoveryPhase::Verifying,
-            engine: Some("7-Zip".into()),
-            message: "正在验证手动输入的密码。".into(),
-        });
+        report(RecoveryUpdate::stage(
+            RecoveryPhase::Verifying,
+            Some("7-Zip"),
+            "正在验证手动输入的密码。",
+        ));
         if verify_password(&job.archive_path, password, tools, cancellation)? {
-            extract_with_password(job, tools, password, cancellation, &mut report)?;
+            extract_with_password(job, tools, password, cancellation, report)?;
             return Ok(success_result(
                 job,
                 Some(password.to_owned()),
@@ -243,195 +972,235 @@ pub fn recover_and_extract(
         }
     }
 
-    if job.dictionary_count == 0 {
+    ensure_not_cancelled(cancellation)?;
+    report(RecoveryUpdate::stage(
+        RecoveryPhase::Preparing,
+        Some("全局字典"),
+        "需要继续恢复密码，正在准备全局字典。",
+    ));
+    let dictionary = prepare_dictionary()?;
+    ensure_not_cancelled(cancellation)?;
+    let dictionary_job = RecoveryJob {
+        dictionary_path: dictionary.path,
+        dictionary_count: dictionary.candidate_count,
+        ..job.clone()
+    };
+    validate_dictionary_input(&dictionary_job)?;
+    report(RecoveryUpdate::progress(
+        RecoveryPhase::Preparing,
+        "全局字典",
+        format!(
+            "已准备 {} 条候选，正在选择可用的恢复引擎。",
+            dictionary_job.dictionary_count
+        ),
+        0,
+        dictionary_job.dictionary_count,
+    ));
+
+    if dictionary_job.dictionary_count == 0 {
         return Ok(exhausted_result(
-            job,
-            "全局字典没有可供 Hashcat/John 使用的候选密码。",
+            &dictionary_job,
+            "手动密码未通过，且全局字典中没有可用候选。",
         ));
     }
 
-    // Dictionary recovery needs the full *2john + Hashcat + John stack.
-    validate_recovery_engines(tools, analysis.format)?;
+    recover_with_dictionary(
+        &dictionary_job,
+        tools,
+        analysis.format,
+        cancellation,
+        report,
+    )
+}
 
-    report(RecoveryUpdate {
-        phase: RecoveryPhase::Converting,
-        engine: Some(converter_name(analysis.format).into()),
-        message: format!(
-            "正在使用 {} 提取 {} 验密哈希。",
-            converter_name(analysis.format),
-            analysis.format_label
-        ),
-    });
-    let records = extract_hashes(job, tools, analysis.format, cancellation)?;
-    if records.is_empty() {
-        return Err(RecoveryError::Message(format!(
-            "{} 未生成可用的归档哈希。",
-            converter_name(analysis.format)
-        )));
-    }
+fn recover_with_dictionary(
+    job: &RecoveryJob,
+    tools: &RecoveryToolPaths,
+    format: ArchiveFormat,
+    cancellation: &CancellationToken,
+    report: &mut impl FnMut(RecoveryUpdate),
+) -> Result<RecoveryResult, RecoveryError> {
+    let mut fallback_reasons = Vec::new();
+    let records = if converter_is_available(tools, format) {
+        report(RecoveryUpdate::stage(
+            RecoveryPhase::Converting,
+            Some(converter_name(format)),
+            format!(
+                "正在使用 {} 提取 {} 验密哈希。",
+                converter_name(format),
+                format.label()
+            ),
+        ));
+        match extract_hashes(job, tools, format, cancellation) {
+            Ok(records) if !records.is_empty() => Some(records),
+            Ok(_) => {
+                fallback_reasons.push(format!("{} 未生成可用哈希", converter_name(format)));
+                None
+            }
+            Err(RecoveryError::Cancelled) => return Err(RecoveryError::Cancelled),
+            Err(error) => {
+                fallback_reasons.push(format!("{} 执行失败：{error}", converter_name(format)));
+                None
+            }
+        }
+    } else {
+        fallback_reasons.push(format!("{} 不可用", converter_name(format)));
+        None
+    };
 
     let mut verified_candidates = HashSet::new();
-    for (record_index, record) in records.iter().enumerate() {
-        ensure_not_cancelled(cancellation)?;
-        let hash_file = job
-            .work_directory
-            .join(format!("hashcat-{record_index}.hash"));
-        fs::write(&hash_file, format!("{}\n", record.hash))?;
-        let modes = identify_hashcat_modes(&hash_file, &record.hash, tools, cancellation);
-
-        for mode in modes {
-            ensure_not_cancelled(cancellation)?;
-            report(RecoveryUpdate {
-                phase: RecoveryPhase::Hashcat,
-                engine: Some("Hashcat GPU".into()),
-                message: format!(
-                    "Hashcat GPU 正在尝试模式 {mode}（{} 条候选）。",
-                    job.dictionary_count
-                ),
-            });
-            let gpu = run_hashcat(job, tools, &hash_file, mode, "2", cancellation)?;
-            if let Some(result) = verify_crack_attempt(
-                gpu,
-                job,
-                tools,
-                cancellation,
-                &mut report,
-                &mut verified_candidates,
-                "Hashcat GPU",
-            )? {
-                return Ok(result);
+    let mut hashcat_completed = false;
+    if let Some(records) = records.as_ref() {
+        if tools.hashcat.is_file() {
+            for (device_type, engine) in [("2", "Hashcat GPU"), ("1", "Hashcat CPU")] {
+                for (record_index, record) in records.iter().enumerate() {
+                    ensure_not_cancelled(cancellation)?;
+                    let hash_file = job
+                        .work_directory
+                        .join(format!("hashcat-{record_index}.hash"));
+                    fs::write(&hash_file, format!("{}\n", record.hash))?;
+                    let modes =
+                        identify_hashcat_modes(&hash_file, &record.hash, tools, cancellation);
+                    for mode in modes {
+                        ensure_not_cancelled(cancellation)?;
+                        report(RecoveryUpdate::stage(
+                            RecoveryPhase::Hashcat,
+                            Some(engine),
+                            format!(
+                                "{engine} 正在尝试模式 {mode}（{} 条候选）。",
+                                job.dictionary_count
+                            ),
+                        ));
+                        match run_hashcat(job, tools, &hash_file, mode, device_type, cancellation) {
+                            Ok(attempt) => {
+                                hashcat_completed |= attempt == CrackAttempt::Exhausted;
+                                if let Some(result) = verify_crack_attempt(
+                                    attempt,
+                                    job,
+                                    tools,
+                                    cancellation,
+                                    report,
+                                    &mut verified_candidates,
+                                    engine,
+                                )? {
+                                    return Ok(result);
+                                }
+                            }
+                            Err(RecoveryError::Cancelled) => {
+                                return Err(RecoveryError::Cancelled);
+                            }
+                            Err(error) => {
+                                fallback_reasons.push(format!("{engine} 执行失败：{error}"));
+                                break;
+                            }
+                        }
+                    }
+                }
             }
+        } else {
+            fallback_reasons.push("Hashcat 不可用".into());
         }
     }
 
-    // Hashcat CPU is used as a fallback only after the GPU pass. On systems
-    // without an OpenCL CPU backend this fails quickly and John remains the
-    // guaranteed bundled CPU implementation.
-    for (record_index, record) in records.iter().enumerate() {
-        ensure_not_cancelled(cancellation)?;
-        let hash_file = job
-            .work_directory
-            .join(format!("hashcat-{record_index}.hash"));
-        let modes = identify_hashcat_modes(&hash_file, &record.hash, tools, cancellation);
-        for mode in modes {
-            report(RecoveryUpdate {
-                phase: RecoveryPhase::Hashcat,
-                engine: Some("Hashcat CPU".into()),
-                message: format!(
-                    "Hashcat CPU 正在尝试模式 {mode}（{} 条候选）。",
+    let mut john_completed = false;
+    if let Some(records) = records.as_ref() {
+        if tools.john_tools_directory.join("john.exe").is_file() {
+            report(RecoveryUpdate::stage(
+                RecoveryPhase::John,
+                Some("John CPU"),
+                format!(
+                    "Hashcat 未找到可用密码，正在用 John CPU 复跑 {} 条候选。",
                     job.dictionary_count
                 ),
-            });
-            let cpu = run_hashcat(job, tools, &hash_file, mode, "1", cancellation)?;
-            if let Some(result) = verify_crack_attempt(
-                cpu,
-                job,
-                tools,
-                cancellation,
-                &mut report,
-                &mut verified_candidates,
-                "Hashcat CPU",
-            )? {
-                return Ok(result);
+            ));
+            match run_john(job, tools, records, cancellation) {
+                Ok(attempt) => {
+                    john_completed = attempt == CrackAttempt::Exhausted;
+                    if let Some(result) = verify_crack_attempt(
+                        attempt,
+                        job,
+                        tools,
+                        cancellation,
+                        report,
+                        &mut verified_candidates,
+                        "John CPU",
+                    )? {
+                        return Ok(result);
+                    }
+                }
+                Err(RecoveryError::Cancelled) => return Err(RecoveryError::Cancelled),
+                Err(error) => fallback_reasons.push(format!("John CPU 执行失败：{error}")),
             }
+        } else {
+            fallback_reasons.push("John CPU 不可用".into());
         }
     }
 
-    report(RecoveryUpdate {
-        phase: RecoveryPhase::John,
-        engine: Some("John CPU".into()),
-        message: format!(
-            "Hashcat 未找到可用密码，正在用 John CPU 复跑 {} 条候选。",
-            job.dictionary_count
-        ),
-    });
-    let john = run_john(job, tools, &records, cancellation)?;
-    if let Some(result) = verify_crack_attempt(
-        john,
-        job,
-        tools,
-        cancellation,
-        &mut report,
-        &mut verified_candidates,
-        "John CPU",
-    )? {
+    if john_completed || hashcat_completed {
+        return Ok(exhausted_result(
+            job,
+            "可用的外部恢复引擎已完成，当前字典未命中密码。",
+        ));
+    }
+
+    let fallback_summary = if fallback_reasons.is_empty() {
+        "外部引擎未能完成".to_owned()
+    } else {
+        fallback_reasons.join("；")
+    };
+    report(RecoveryUpdate::progress(
+        RecoveryPhase::Internal,
+        "7-Zip CPU",
+        format!("{fallback_summary}。正在回退到兼容性更高的 7-Zip CPU 验密。"),
+        0,
+        job.dictionary_count,
+    ));
+    if let Some(result) =
+        run_internal_dictionary(job, tools, cancellation, report, &verified_candidates)?
+    {
         return Ok(result);
     }
-
     Ok(exhausted_result(
         job,
-        "Hashcat GPU/CPU 与 John CPU 均已完成，当前字典未命中密码。",
+        "外部引擎不可用或未能完成，7-Zip CPU 兜底也未在当前字典中找到密码。",
     ))
 }
 
-fn validate_job_inputs(job: &RecoveryJob, tools: &RecoveryToolPaths) -> Result<(), RecoveryError> {
+fn validate_base_job_inputs(
+    job: &RecoveryJob,
+    tools: &RecoveryToolPaths,
+) -> Result<(), RecoveryError> {
     if !tools.seven_zip.is_file() {
         return Err(RecoveryError::MissingTool(format!(
             "7-Zip（{}）",
-            tools.seven_zip.display()
+            path_for_display(&tools.seven_zip)
         )));
     }
     if !job.archive_path.is_file() {
-        return Err(RecoveryError::NotFound(
-            job.archive_path.display().to_string(),
-        ));
-    }
-    if !job.dictionary_path.is_file() {
-        return Err(RecoveryError::NotFound(
-            job.dictionary_path.display().to_string(),
-        ));
+        return Err(RecoveryError::NotFound(path_for_display(&job.archive_path)));
     }
     Ok(())
 }
 
-fn validate_recovery_engines(
-    tools: &RecoveryToolPaths,
-    format: ArchiveFormat,
-) -> Result<(), RecoveryError> {
-    for (name, path) in [
-        ("Hashcat", tools.hashcat.clone()),
-        ("John", tools.john_tools_directory.join("john.exe")),
-    ] {
-        if !path.is_file() {
-            return Err(RecoveryError::MissingTool(format!(
-                "{name}（{}）",
-                path.display()
-            )));
-        }
-    }
-
-    let converter = match format {
-        ArchiveFormat::SevenZip => {
-            let script = tools.john_tools_directory.join("7z2john.pl");
-            if !tools.perl.is_file() {
-                return Err(RecoveryError::MissingTool(format!(
-                    "Perl（{}）",
-                    tools.perl.display()
-                )));
-            }
-            if !script.is_file() {
-                return Err(RecoveryError::MissingTool(format!(
-                    "7z2john.pl（{}）",
-                    script.display()
-                )));
-            }
-            None
-        }
-        ArchiveFormat::Zip => Some(tools.john_tools_directory.join("zip2john.exe")),
-        ArchiveFormat::Rar3 | ArchiveFormat::Rar5 => {
-            Some(tools.john_tools_directory.join("rar2john.exe"))
-        }
-    };
-    if let Some(path) = converter
-        && !path.is_file()
-    {
-        return Err(RecoveryError::MissingTool(format!(
-            "{}（{}）",
-            converter_name(format),
-            path.display()
+fn validate_dictionary_input(job: &RecoveryJob) -> Result<(), RecoveryError> {
+    if !job.dictionary_path.is_file() {
+        return Err(RecoveryError::NotFound(path_for_display(
+            &job.dictionary_path,
         )));
     }
     Ok(())
+}
+
+fn converter_is_available(tools: &RecoveryToolPaths, format: ArchiveFormat) -> bool {
+    match format {
+        ArchiveFormat::SevenZip => {
+            tools.perl.is_file() && tools.john_tools_directory.join("7z2john.pl").is_file()
+        }
+        ArchiveFormat::Zip => tools.john_tools_directory.join("zip2john.exe").is_file(),
+        ArchiveFormat::Rar3 | ArchiveFormat::Rar5 => {
+            tools.john_tools_directory.join("rar2john.exe").is_file()
+        }
+    }
 }
 
 fn converter_name(format: ArchiveFormat) -> &'static str {
@@ -440,6 +1209,81 @@ fn converter_name(format: ArchiveFormat) -> &'static str {
         ArchiveFormat::Zip => "zip2john",
         ArchiveFormat::Rar3 | ArchiveFormat::Rar5 => "rar2john",
     }
+}
+
+fn run_internal_dictionary(
+    job: &RecoveryJob,
+    tools: &RecoveryToolPaths,
+    cancellation: &CancellationToken,
+    report: &mut impl FnMut(RecoveryUpdate),
+    already_verified: &HashSet<String>,
+) -> Result<Option<RecoveryResult>, RecoveryError> {
+    let file = fs::File::open(&job.dictionary_path)?;
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    let mut line = String::new();
+    let mut attempted = 0u64;
+    let mut last_reported = 0u64;
+    let mut last_report_at = Instant::now();
+
+    loop {
+        ensure_not_cancelled(cancellation)?;
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        if line.ends_with('\n') {
+            line.pop();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+        }
+        if line.is_empty() {
+            continue;
+        }
+
+        attempted = attempted.saturating_add(1);
+        if attempted == 1 || last_report_at.elapsed() >= Duration::from_millis(250) {
+            report(RecoveryUpdate::progress(
+                RecoveryPhase::Internal,
+                "7-Zip CPU",
+                format!(
+                    "7-Zip CPU 正在逐条验密：{} / {}。",
+                    attempted, job.dictionary_count
+                ),
+                attempted,
+                job.dictionary_count,
+            ));
+            last_reported = attempted;
+            last_report_at = Instant::now();
+        }
+
+        if already_verified.contains(&line) {
+            continue;
+        }
+        if verify_password(&job.archive_path, &line, tools, cancellation)? {
+            extract_with_password(job, tools, &line, cancellation, report)?;
+            return Ok(Some(success_result(
+                job,
+                Some(line.clone()),
+                "7-Zip CPU",
+                "7-Zip CPU 兜底找到的密码已通过复验并完成解压。",
+            )));
+        }
+    }
+
+    if attempted != last_reported {
+        report(RecoveryUpdate::progress(
+            RecoveryPhase::Internal,
+            "7-Zip CPU",
+            format!(
+                "7-Zip CPU 已完成逐条验密：{} / {}。",
+                attempted, job.dictionary_count
+            ),
+            attempted,
+            job.dictionary_count,
+        ));
+    }
+    Ok(None)
 }
 
 fn extract_hashes(
@@ -467,7 +1311,7 @@ fn extract_hashes(
         ),
     };
     if !program.is_file() {
-        return Err(RecoveryError::MissingTool(program.display().to_string()));
+        return Err(RecoveryError::MissingTool(path_for_display(&program)));
     }
 
     let mut request = ProcessRequest::new(program);
@@ -585,7 +1429,7 @@ fn run_hashcat(
         return Ok(CrackAttempt::Found(password));
     }
     Ok(match output.exit_code {
-        Some(0 | 1) => CrackAttempt::Exhausted,
+        Some(1) => CrackAttempt::Exhausted,
         _ => CrackAttempt::Failed,
     })
 }
@@ -653,11 +1497,11 @@ fn verify_crack_attempt(
         return Ok(None);
     }
 
-    report(RecoveryUpdate {
-        phase: RecoveryPhase::Verifying,
-        engine: Some("7-Zip".into()),
-        message: format!("{engine} 已找到候选密码，正在用 7-Zip 复验。"),
-    });
+    report(RecoveryUpdate::stage(
+        RecoveryPhase::Verifying,
+        Some("7-Zip"),
+        format!("{engine} 已找到候选密码，正在用 7-Zip 复验。"),
+    ));
     if !verify_password(&job.archive_path, &password, tools, cancellation)? {
         return Ok(None);
     }
@@ -700,7 +1544,16 @@ fn verify_password(
     request.current_dir = tools.seven_zip.parent().map(Path::to_path_buf);
     request.timeout = Duration::from_secs(5 * 60);
     request.max_output_bytes = 1024 * 1024;
-    Ok(run_checked(&request, cancellation)?.success)
+    let output = run_checked(&request, cancellation)?;
+    if output.success {
+        return Ok(true);
+    }
+    if is_password_rejection(&output) {
+        return Ok(false);
+    }
+    Err(RecoveryError::InvalidArchive(process_failure_detail(
+        &output,
+    )))
 }
 
 fn extract_with_password(
@@ -711,17 +1564,22 @@ fn extract_with_password(
     report: &mut impl FnMut(RecoveryUpdate),
 ) -> Result<(), RecoveryError> {
     ensure_not_cancelled(cancellation)?;
-    report(RecoveryUpdate {
-        phase: RecoveryPhase::Extracting,
-        engine: Some("7-Zip".into()),
-        message: format!("正在解压到 {}。", job.output_directory.display()),
-    });
+    report(RecoveryUpdate::stage(
+        RecoveryPhase::Extracting,
+        Some("7-Zip"),
+        format!(
+            "正在安全解压到 {}。",
+            path_for_display(&job.output_directory)
+        ),
+    ));
     fs::create_dir_all(&job.output_directory)?;
     let mut request = ProcessRequest::new(&tools.seven_zip);
     request.args = vec![
         OsString::from("x"),
         OsString::from("-y"),
-        OsString::from("-aoa"),
+        // Rename incoming files on collision instead of silently overwriting
+        // anything already present in a custom output directory.
+        OsString::from("-aou"),
         OsString::from("-bd"),
         OsString::from("-bso0"),
         seven_zip_password_arg(password),
@@ -784,26 +1642,33 @@ fn exhausted_result(job: &RecoveryJob, message: &str) -> RecoveryResult {
 }
 
 fn process_failure(tool: &str, output: &ProcessOutput) -> RecoveryError {
+    let detail = process_failure_detail(output);
+    RecoveryError::Process(format!("{tool} 退出码 {:?}：{}", output.exit_code, detail))
+}
+
+fn process_failure_detail(output: &ProcessOutput) -> String {
     let detail = if output.stderr.trim().is_empty() {
         output.stdout.trim()
     } else {
         output.stderr.trim()
     };
-    RecoveryError::Process(format!(
-        "{tool} 退出码 {:?}：{}",
-        output.exit_code,
-        if detail.is_empty() {
-            "未返回诊断信息"
-        } else {
-            detail
-        }
-    ))
+    if detail.is_empty() {
+        format!("退出码 {:?}，未返回诊断信息", output.exit_code)
+    } else {
+        detail.to_owned()
+    }
 }
 
-fn find_signature(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
+fn is_password_rejection(output: &ProcessOutput) -> bool {
+    let diagnostic = format!("{}\n{}", output.stdout, output.stderr).to_lowercase();
+    [
+        "wrong password",
+        "password is incorrect",
+        "cannot open encrypted archive",
+        "data error in encrypted file",
+    ]
+    .iter()
+    .any(|marker| diagnostic.contains(marker))
 }
 
 fn parse_hash_records(output: &str) -> Vec<HashRecord> {
@@ -905,6 +1770,68 @@ mod tests {
     }
 
     #[test]
+    fn nested_detection_is_content_driven_and_ignores_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut carrier = vec![0u8; 256 * 1024];
+        carrier[..4].copy_from_slice(b"\xff\xd8\xff\xe0");
+        let signature_offset = 128 * 1024;
+        carrier[signature_offset..signature_offset + SEVEN_ZIP_SIGNATURE.len()]
+            .copy_from_slice(SEVEN_ZIP_SIGNATURE);
+
+        let image_path = dir.path().join("carrier.unexpected-suffix");
+        fs::write(&image_path, &carrier).unwrap();
+        assert_eq!(
+            detect_nested_archive_format(&image_path).unwrap(),
+            ArchiveFormat::SevenZip
+        );
+
+        let mut arbitrary_prefix = vec![0u8; NESTED_FALLBACK_SCAN_LIMIT as usize];
+        arbitrary_prefix[32 * 1024..32 * 1024 + SEVEN_ZIP_SIGNATURE.len()]
+            .copy_from_slice(SEVEN_ZIP_SIGNATURE);
+        let arbitrary_path = dir.path().join("asset.rpgmvp");
+        fs::write(&arbitrary_path, arbitrary_prefix).unwrap();
+        assert_eq!(
+            detect_nested_archive_format(&arbitrary_path).unwrap(),
+            ArchiveFormat::SevenZip
+        );
+
+        for file_name in [
+            "test.jpg",
+            "test.png",
+            "test.pdf",
+            "test",
+            "test.anything",
+            "test.7z.jpg",
+            "test.7z11",
+            "test.7z.1",
+        ] {
+            let renamed_archive_path = dir.path().join(file_name);
+            fs::write(&renamed_archive_path, SEVEN_ZIP_SIGNATURE).unwrap();
+            assert_eq!(
+                detect_nested_archive_format(&renamed_archive_path).unwrap(),
+                ArchiveFormat::SevenZip,
+                "failed to detect {file_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn user_facing_paths_hide_windows_verbatim_prefixes() {
+        assert_eq!(
+            path_for_display(Path::new(r"\\?\F:\Download\archive.7z")),
+            r"F:\Download\archive.7z"
+        );
+        assert_eq!(
+            path_for_display(Path::new(r"\\?\UNC\server\share\archive.7z")),
+            r"\\server\share\archive.7z"
+        );
+        assert_eq!(
+            path_for_display(Path::new(r"F:\Download\archive.7z")),
+            r"F:\Download\archive.7z"
+        );
+    }
+
+    #[test]
     fn parses_all_supported_john_hash_families() {
         let output = concat!(
             "a.7z:$7z$0$19$0$abc:meta\n",
@@ -969,6 +1896,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn seven_zip_diagnostics_distinguish_wrong_password_from_broken_archive() {
+        let wrong_password = ProcessOutput {
+            exit_code: Some(2),
+            success: false,
+            stdout: String::new(),
+            stderr: "Cannot open encrypted archive. Wrong password?".into(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+        };
+        let broken_archive = ProcessOutput {
+            exit_code: Some(2),
+            success: false,
+            stdout: String::new(),
+            stderr: "Unexpected end of archive".into(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+        };
+
+        assert!(is_password_rejection(&wrong_password));
+        assert!(!is_password_rejection(&broken_archive));
+    }
+
     /// Real 7-Zip CLI checks. Skipped when no 7z.exe is available.
     #[test]
     fn seven_zip_verifies_and_extracts_encrypted_7z_and_zip() {
@@ -1011,10 +1961,16 @@ mod tests {
                 known_password: Some(password.into()),
                 work_directory: dir.path().join(format!("{name}-work")),
             };
-            fs::write(&job.dictionary_path, b"").unwrap();
             fs::create_dir_all(&job.work_directory).unwrap();
 
-            let result = recover_and_extract(&job, &tools, &cancellation, |_| {}).expect("recover");
+            let result = recover_and_extract_lazy(
+                &job,
+                &tools,
+                &cancellation,
+                || panic!("known-password recovery must not prepare the dictionary"),
+                |_| {},
+            )
+            .expect("recover");
             assert!(result.success, "{name}: {}", result.message);
             assert_eq!(result.password.as_deref(), Some(password));
             assert_eq!(
@@ -1062,15 +2018,337 @@ mod tests {
             known_password: None,
             work_directory: dir.path().join("plain-work"),
         };
-        fs::write(&job.dictionary_path, b"").unwrap();
         fs::create_dir_all(&job.work_directory).unwrap();
 
-        let result = recover_and_extract(&job, &tools, &cancellation, |_| {}).expect("recover");
+        let result = recover_and_extract_lazy(
+            &job,
+            &tools,
+            &cancellation,
+            || panic!("unencrypted recovery must not prepare the dictionary"),
+            |_| {},
+        )
+        .expect("recover");
         assert!(result.success, "{}", result.message);
         assert!(result.password.is_none());
         assert_eq!(
             fs::read_to_string(output_directory.join("plain.txt")).unwrap(),
             "no-password"
+        );
+    }
+
+    #[test]
+    fn recursively_extracts_misleading_suffix_archive_with_inherited_password() {
+        let Some(seven_zip) = locate_seven_zip() else {
+            eprintln!("skip: 7z.exe not found");
+            return;
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let payload = dir.path().join("nested-payload.txt");
+        fs::write(&payload, b"recursive-password-ok").unwrap();
+        let password = "shared-nested-pass";
+        let inner_archive = dir.path().join("inner.7z11");
+        create_encrypted_archive(&seven_zip, "-t7z", password, &inner_archive, &payload);
+        let outer_archive = dir.path().join("outer.7z");
+        create_encrypted_archive(&seven_zip, "-t7z", password, &outer_archive, &inner_archive);
+        let output_directory = dir.path().join("recursive-out");
+        let job = RecoveryJob {
+            archive_path: outer_archive,
+            output_directory: output_directory.clone(),
+            dictionary_path: dir.path().join("unused.dict"),
+            dictionary_count: 0,
+            known_password: Some(password.into()),
+            work_directory: dir.path().join("recursive-work"),
+        };
+        let tools = RecoveryToolPaths {
+            seven_zip,
+            hashcat: dir.path().join("missing-hashcat"),
+            john_tools_directory: dir.path().join("missing-john"),
+            perl: dir.path().join("missing-perl"),
+        };
+
+        let mut updates = Vec::new();
+        let result = recover_and_extract_recursive_lazy(
+            &job,
+            &tools,
+            &CancellationToken::default(),
+            RecursiveRecoveryOptions::default(),
+            || panic!("inherited password must avoid dictionary preparation"),
+            |update| updates.push(update),
+        )
+        .expect("recursive recovery");
+
+        assert!(result.root.success, "{}", result.root.message);
+        assert_eq!(result.discovered_nested_archives, 1);
+        assert_eq!(result.extracted_nested_archives, 1);
+        assert_eq!(result.skipped_nested_archives, 0);
+        assert!(result.scanned_files > 0);
+        assert!(updates.iter().any(|update| {
+            update.phase == RecoveryPhase::Recursive
+                && update.scanned_file_count.is_some_and(|count| count > 0)
+        }));
+        assert_eq!(
+            fs::read_to_string(output_directory.join("inner").join("nested-payload.txt")).unwrap(),
+            "recursive-password-ok"
+        );
+    }
+
+    #[test]
+    fn recursively_uses_dictionary_once_for_different_nested_password() {
+        let Some(seven_zip) = locate_seven_zip() else {
+            eprintln!("skip: 7z.exe not found");
+            return;
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let payload = dir.path().join("different-password.txt");
+        fs::write(&payload, b"nested-dictionary-ok").unwrap();
+        let nested_password = "nested-only-pass";
+        let inner_archive = dir.path().join("dictionary-inner.7z");
+        create_encrypted_archive(
+            &seven_zip,
+            "-t7z",
+            nested_password,
+            &inner_archive,
+            &payload,
+        );
+        let outer_archive = dir.path().join("plain-outer.7z");
+        create_plain_archive(&seven_zip, &outer_archive, &inner_archive);
+        let dictionary_path = dir.path().join("nested.dict");
+        fs::write(
+            &dictionary_path,
+            format!("wrong-one\n{nested_password}\nwrong-two\n"),
+        )
+        .unwrap();
+        let output_directory = dir.path().join("dictionary-recursive-out");
+        let job = RecoveryJob {
+            archive_path: outer_archive,
+            output_directory: output_directory.clone(),
+            dictionary_path: dictionary_path.clone(),
+            dictionary_count: 3,
+            known_password: None,
+            work_directory: dir.path().join("dictionary-recursive-work"),
+        };
+        let tools = RecoveryToolPaths {
+            seven_zip,
+            hashcat: dir.path().join("missing-hashcat"),
+            john_tools_directory: dir.path().join("missing-john"),
+            perl: dir.path().join("missing-perl"),
+        };
+        let preparation_count = std::cell::Cell::new(0);
+
+        let result = recover_and_extract_recursive_lazy(
+            &job,
+            &tools,
+            &CancellationToken::default(),
+            RecursiveRecoveryOptions::default(),
+            || {
+                preparation_count.set(preparation_count.get() + 1);
+                Ok(RecoveryDictionary {
+                    path: dictionary_path,
+                    candidate_count: 3,
+                })
+            },
+            |_| {},
+        )
+        .expect("recursive dictionary recovery");
+
+        assert!(result.root.success, "{}", result.root.message);
+        assert_eq!(preparation_count.get(), 1);
+        assert_eq!(result.extracted_nested_archives, 1);
+        assert!(
+            result
+                .recovered_passwords
+                .iter()
+                .any(|password| password == nested_password)
+        );
+        assert_eq!(
+            fs::read_to_string(
+                output_directory
+                    .join("dictionary-inner")
+                    .join("different-password.txt")
+            )
+            .unwrap(),
+            "nested-dictionary-ok"
+        );
+    }
+
+    #[test]
+    fn recursive_extraction_enforces_depth_limit() {
+        let Some(seven_zip) = locate_seven_zip() else {
+            eprintln!("skip: 7z.exe not found");
+            return;
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let payload = dir.path().join("depth-payload.txt");
+        fs::write(&payload, b"depth-limit").unwrap();
+        let level_two = dir.path().join("level-two.7z");
+        create_plain_archive(&seven_zip, &level_two, &payload);
+        let level_one = dir.path().join("level-one.7z");
+        create_plain_archive(&seven_zip, &level_one, &level_two);
+        let outer_archive = dir.path().join("depth-outer.7z");
+        create_plain_archive(&seven_zip, &outer_archive, &level_one);
+        let output_directory = dir.path().join("depth-out");
+        let job = RecoveryJob {
+            archive_path: outer_archive,
+            output_directory: output_directory.clone(),
+            dictionary_path: dir.path().join("unused.dict"),
+            dictionary_count: 0,
+            known_password: None,
+            work_directory: dir.path().join("depth-work"),
+        };
+        let tools = RecoveryToolPaths {
+            seven_zip,
+            hashcat: dir.path().join("missing-hashcat"),
+            john_tools_directory: dir.path().join("missing-john"),
+            perl: dir.path().join("missing-perl"),
+        };
+
+        let result = recover_and_extract_recursive_lazy(
+            &job,
+            &tools,
+            &CancellationToken::default(),
+            RecursiveRecoveryOptions {
+                enabled: true,
+                max_depth: 1,
+                max_nested_archives: 100,
+            },
+            || panic!("plain archives must avoid dictionary preparation"),
+            |_| {},
+        )
+        .expect("depth-limited recursive recovery");
+
+        assert!(result.root.success, "{}", result.root.message);
+        assert_eq!(result.discovered_nested_archives, 2);
+        assert_eq!(result.extracted_nested_archives, 1);
+        assert_eq!(result.skipped_nested_archives, 1);
+        assert!(result.depth_limit_reached);
+        assert!(
+            output_directory
+                .join("level-one")
+                .join("level-two.7z")
+                .is_file()
+        );
+        assert!(
+            !output_directory
+                .join("level-one")
+                .join("level-two")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn recursive_extraction_ignores_preexisting_output_archives() {
+        let Some(seven_zip) = locate_seven_zip() else {
+            eprintln!("skip: 7z.exe not found");
+            return;
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let old_payload = dir.path().join("old-payload.txt");
+        fs::write(&old_payload, b"must-not-be-recursed").unwrap();
+        let old_archive = dir.path().join("old.7z");
+        create_plain_archive(&seven_zip, &old_archive, &old_payload);
+        let root_payload = dir.path().join("root-payload.txt");
+        fs::write(&root_payload, b"root-only").unwrap();
+        let outer_archive = dir.path().join("snapshot-outer.7z");
+        create_plain_archive(&seven_zip, &outer_archive, &root_payload);
+        let output_directory = dir.path().join("existing-output");
+        fs::create_dir_all(&output_directory).unwrap();
+        fs::copy(&old_archive, output_directory.join("old.7z")).unwrap();
+        let job = RecoveryJob {
+            archive_path: outer_archive,
+            output_directory: output_directory.clone(),
+            dictionary_path: dir.path().join("unused.dict"),
+            dictionary_count: 0,
+            known_password: None,
+            work_directory: dir.path().join("snapshot-work"),
+        };
+        let tools = RecoveryToolPaths {
+            seven_zip,
+            hashcat: dir.path().join("missing-hashcat"),
+            john_tools_directory: dir.path().join("missing-john"),
+            perl: dir.path().join("missing-perl"),
+        };
+
+        let result = recover_and_extract_recursive_lazy(
+            &job,
+            &tools,
+            &CancellationToken::default(),
+            RecursiveRecoveryOptions::default(),
+            || panic!("plain archive must avoid dictionary preparation"),
+            |_| {},
+        )
+        .expect("snapshot-aware recursive recovery");
+
+        assert!(result.root.success, "{}", result.root.message);
+        assert_eq!(result.discovered_nested_archives, 0);
+        assert!(!output_directory.join("old").exists());
+        assert_eq!(
+            fs::read_to_string(output_directory.join("root-payload.txt")).unwrap(),
+            "root-only"
+        );
+    }
+
+    #[test]
+    fn dictionary_recovery_falls_back_to_seven_zip_when_external_tools_are_missing() {
+        let Some(seven_zip) = locate_seven_zip() else {
+            eprintln!("skip: 7z.exe not found");
+            return;
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let payload = dir.path().join("fallback.txt");
+        fs::write(&payload, b"internal-fallback-ok").unwrap();
+        let password = "fallback-pass-42";
+        let archive = dir.path().join("fallback.7z");
+        create_encrypted_archive(&seven_zip, "-t7z", password, &archive, &payload);
+        let dictionary_path = dir.path().join("fallback.dict");
+        fs::write(
+            &dictionary_path,
+            format!("wrong-one\nwrong-two\n{password}\n"),
+        )
+        .unwrap();
+
+        let tools = RecoveryToolPaths {
+            seven_zip,
+            hashcat: dir.path().join("missing-hashcat"),
+            john_tools_directory: dir.path().join("missing-john"),
+            perl: dir.path().join("missing-perl"),
+        };
+        let output_directory = dir.path().join("fallback-out");
+        let job = RecoveryJob {
+            archive_path: archive,
+            output_directory: output_directory.clone(),
+            dictionary_path,
+            dictionary_count: 3,
+            known_password: None,
+            work_directory: dir.path().join("fallback-work"),
+        };
+        let mut updates = Vec::new();
+
+        let result = recover_and_extract(&job, &tools, &CancellationToken::default(), |update| {
+            updates.push(update)
+        })
+        .expect("fallback recovery");
+
+        assert!(result.success, "{}", result.message);
+        assert_eq!(result.password.as_deref(), Some(password));
+        assert_eq!(result.engine.as_deref(), Some("7-Zip CPU"));
+        assert!(
+            updates
+                .iter()
+                .any(|update| update.phase == RecoveryPhase::Internal)
+        );
+        assert!(
+            updates
+                .iter()
+                .any(|update| update.attempted_count.is_some())
+        );
+        assert_eq!(
+            fs::read_to_string(output_directory.join("fallback.txt")).unwrap(),
+            "internal-fallback-ok"
         );
     }
 
@@ -1439,6 +2717,19 @@ mod tests {
         args.push(payload.display().to_string());
         let owned: Vec<&str> = args.iter().map(String::as_str).collect();
         run_seven_zip(seven_zip, &owned);
+    }
+
+    fn create_plain_archive(seven_zip: &Path, archive: &Path, payload: &Path) {
+        run_seven_zip(
+            seven_zip,
+            &[
+                "a",
+                "-t7z",
+                "-y",
+                archive.to_str().unwrap(),
+                payload.to_str().unwrap(),
+            ],
+        );
     }
 
     fn run_seven_zip(seven_zip: &Path, args: &[&str]) {

@@ -3,6 +3,8 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import {
   Check,
+  ChevronDown,
+  CircleAlert,
   Copy,
   Eye,
   EyeOff,
@@ -29,6 +31,7 @@ import {
   startRecovery,
   type ArchiveAnalysis,
   type RecoveryPhase,
+  type RecoveryTaskEvent,
   type RecoveryTaskStatus,
 } from "@/lib/recovery"
 import { cn } from "@/lib/utils"
@@ -41,20 +44,29 @@ const PHASE_LABELS: Record<RecoveryPhase, string> = {
   converting: "转换",
   hashcat: "Hashcat",
   john: "John CPU",
+  internal: "7-Zip CPU",
   extracting: "解压",
+  recursive: "递归解密",
   completed: "完成",
+  exhausted: "未找到密码",
   cancelled: "已取消",
   failed: "失败",
 }
+
+const COUNT_FORMATTER = new Intl.NumberFormat("zh-CN")
 
 export function ExtractPage() {
   const [outputMode, setOutputMode] = React.useState<OutputMode>("sibling")
   const [outputDir, setOutputDir] = React.useState<string | null>(null)
   const [openWhenDone, setOpenWhenDone] = React.useState(true)
+  const [recursive, setRecursive] = React.useState(true)
   const [dragOver, setDragOver] = React.useState(false)
   const [analysis, setAnalysis] = React.useState<ArchiveAnalysis | null>(null)
   const [knownPassword, setKnownPassword] = React.useState("")
-  const [showPassword, setShowPassword] = React.useState(false)
+  const [showKnownPassword, setShowKnownPassword] = React.useState(false)
+  const [showRecoveredPassword, setShowRecoveredPassword] =
+    React.useState(false)
+  const [passwordCopied, setPasswordCopied] = React.useState(false)
   const [task, setTask] = React.useState<RecoveryTaskStatus | null>(null)
   const [dictionaryCount, setDictionaryCount] = React.useState<number | null>(
     null
@@ -62,6 +74,14 @@ export function ExtractPage() {
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const openedTasks = React.useRef(new Set<string>())
+  const autoOpenTasks = React.useRef(new Set<string>())
+  const analysisRequestId = React.useRef(0)
+  const running = Boolean(task?.running)
+  const runningRef = React.useRef(running)
+
+  React.useEffect(() => {
+    runningRef.current = running
+  }, [running])
 
   const refreshDictionaryCount = React.useCallback(() => {
     void countDictionary()
@@ -71,21 +91,60 @@ export function ExtractPage() {
 
   React.useEffect(refreshDictionaryCount, [refreshDictionaryCount])
 
-  const selectArchivePath = React.useCallback(async (path: string) => {
-    if (!path.trim()) {
+  React.useEffect(() => {
+    if (!isDesktopRuntime()) {
       return
     }
+    let disposed = false
+    void getRecoveryStatus()
+      .then((latest) => {
+        if (!disposed && latest) {
+          setTask((current) => current ?? latest)
+        }
+      })
+      .catch((reason) => {
+        if (!disposed) {
+          setError(toErrorMessage(reason))
+        }
+      })
+    return () => {
+      disposed = true
+    }
+  }, [])
+
+  const selectArchivePath = React.useCallback(async (path: string) => {
+    const normalizedPath = normalizeArchivePath(path)
+    if (!normalizedPath) {
+      return
+    }
+    if (runningRef.current) {
+      setError("当前恢复任务仍在运行，请先取消或等待任务完成。")
+      return
+    }
+    const requestId = ++analysisRequestId.current
     setBusy(true)
     setError(null)
     setTask(null)
+    setKnownPassword("")
+    setShowKnownPassword(false)
+    setShowRecoveredPassword(false)
+    setPasswordCopied(false)
     try {
-      const next = await analyzeArchive(path.trim().replace(/^"(.*)"$/, "$1"))
+      const next = await analyzeArchive(normalizedPath)
+      if (requestId !== analysisRequestId.current) {
+        return
+      }
       setAnalysis(next)
     } catch (reason) {
+      if (requestId !== analysisRequestId.current) {
+        return
+      }
       setAnalysis(null)
       setError(toErrorMessage(reason))
     } finally {
-      setBusy(false)
+      if (requestId === analysisRequestId.current) {
+        setBusy(false)
+      }
     }
   }, [])
 
@@ -98,6 +157,10 @@ export function ExtractPage() {
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         if (disposed) {
+          return
+        }
+        if (runningRef.current) {
+          setDragOver(false)
           return
         }
         if (event.payload.type === "over") {
@@ -128,8 +191,13 @@ export function ExtractPage() {
 
   React.useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
-      const path = event.clipboardData?.getData("text/plain").trim()
-      if (path && isDesktopRuntime()) {
+      if (isEditablePasteTarget(event.target)) {
+        return
+      }
+      const path = normalizeArchivePath(
+        event.clipboardData?.getData("text/plain") ?? ""
+      )
+      if (path && looksLikeAbsolutePath(path) && isDesktopRuntime()) {
         event.preventDefault()
         void selectArchivePath(path)
       }
@@ -177,6 +245,7 @@ export function ExtractPage() {
       !openWhenDone ||
       !task?.completed ||
       !task.success ||
+      !autoOpenTasks.current.has(task.taskId) ||
       openedTasks.current.has(task.taskId)
     ) {
       return
@@ -230,14 +299,19 @@ export function ExtractPage() {
             ? outputDir
             : analysis.suggestedOutputDirectory,
         knownPassword: knownPassword || null,
+        avoidOutputCollision: outputMode === "sibling",
+        recursive,
       })
+      autoOpenTasks.current.add(started.taskId)
+      setShowRecoveredPassword(false)
+      setPasswordCopied(false)
       setTask(started)
     } catch (reason) {
       setError(toErrorMessage(reason))
     } finally {
       setBusy(false)
     }
-  }, [analysis, knownPassword, outputDir, outputMode])
+  }, [analysis, knownPassword, outputDir, outputMode, recursive])
 
   const handleCancel = React.useCallback(async () => {
     if (!task?.running) {
@@ -259,12 +333,19 @@ export function ExtractPage() {
     }
     try {
       await navigator.clipboard.writeText(task.recoveredPassword)
+      setPasswordCopied(true)
     } catch (reason) {
       setError(toErrorMessage(reason))
     }
   }, [task])
 
-  const running = Boolean(task?.running)
+  React.useEffect(() => {
+    if (!passwordCopied) {
+      return
+    }
+    const timeout = setTimeout(() => setPasswordCopied(false), 1600)
+    return () => clearTimeout(timeout)
+  }, [passwordCopied])
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -335,7 +416,7 @@ export function ExtractPage() {
           <p className="mt-1.5 max-w-lg truncate text-xs text-muted-foreground">
             {analysis
               ? `${analysis.formatLabel} · ${formatFileSize(analysis.fileSize)} · 不依赖扩展名`
-              : "支持 7z / ZIP / RAR3 / RAR5，含自解压归档签名识别"}
+              : "按内容识别 7z / ZIP / RAR3 / RAR5，支持乱后缀、无后缀与复合载体"}
           </p>
 
           <Button
@@ -398,10 +479,15 @@ export function ExtractPage() {
               >
                 <p
                   className="truncate text-xs text-muted-foreground"
-                  title={analysis?.suggestedOutputDirectory}
+                  title={
+                    analysis
+                      ? pathForDisplay(analysis.suggestedOutputDirectory)
+                      : undefined
+                  }
                 >
-                  {analysis?.suggestedOutputDirectory ??
-                    "解压到源文件同级同名文件夹"}
+                  {analysis
+                    ? pathForDisplay(analysis.suggestedOutputDirectory)
+                    : "解压到源文件同级同名文件夹"}
                 </p>
               </div>
               <div
@@ -447,6 +533,45 @@ export function ExtractPage() {
               <span className="whitespace-nowrap">完成后打开</span>
             </label>
           </div>
+          <div className="mt-2 flex items-center justify-between gap-3 border-t border-border/70 pt-2">
+            <label
+              className={cn(
+                "flex min-w-0 items-center gap-2 text-xs",
+                running
+                  ? "cursor-not-allowed text-muted-foreground"
+                  : "cursor-pointer"
+              )}
+            >
+              <span
+                className={cn(
+                  "relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors",
+                  recursive
+                    ? "border-foreground bg-foreground"
+                    : "border-border bg-muted"
+                )}
+              >
+                <input
+                  type="checkbox"
+                  className="sr-only"
+                  checked={recursive}
+                  disabled={running}
+                  onChange={(event) => setRecursive(event.target.checked)}
+                />
+                <span
+                  className={cn(
+                    "absolute size-2.5 rounded-full transition-all duration-200",
+                    recursive
+                      ? "right-0.5 bg-background"
+                      : "left-0.5 bg-muted-foreground/50"
+                  )}
+                />
+              </span>
+              <span className="truncate">递归解密嵌套压缩包</span>
+            </label>
+            <span className="shrink-0 text-[10px] text-muted-foreground">
+              最多 5 层 · 100 个
+            </span>
+          </div>
         </section>
 
         {analysis ? (
@@ -471,31 +596,44 @@ export function ExtractPage() {
             </div>
 
             <div className="rounded-xl border border-border bg-card p-3">
-              <label
-                htmlFor="known-password"
-                className="mb-1.5 block text-xs font-medium"
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <label
+                  htmlFor="known-password"
+                  className="block text-xs font-medium"
+                >
+                  已知密码（可选）
+                </label>
+                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  自动回退
+                </span>
+              </div>
+              <p
+                id="recovery-route"
+                className="mb-2 text-[11px] leading-relaxed text-muted-foreground"
               >
-                已知密码（可选）
-              </label>
+                免密检查 → 手动密码 → Hashcat / John → 7-Zip CPU 兼容兜底 →
+                安全解压{recursive ? " → 递归扫描" : ""}
+              </p>
               <div className="flex gap-2">
                 <div className="relative min-w-0 flex-1">
                   <Input
                     id="known-password"
-                    type={showPassword ? "text" : "password"}
+                    type={showKnownPassword ? "text" : "password"}
                     value={knownPassword}
                     onChange={(event) => setKnownPassword(event.target.value)}
-                    placeholder="先复验此密码；错误时自动进入字典恢复"
+                    placeholder="输入后优先复验；留空则直接进入智能恢复"
                     disabled={running}
                     className="pr-9"
                     autoComplete="off"
+                    aria-describedby="recovery-route"
                   />
                   <button
                     type="button"
-                    onClick={() => setShowPassword((value) => !value)}
+                    onClick={() => setShowKnownPassword((value) => !value)}
                     className="absolute inset-y-0 right-0 inline-flex w-9 items-center justify-center text-muted-foreground hover:text-foreground"
-                    aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                    aria-label={showKnownPassword ? "隐藏密码" : "显示密码"}
                   >
-                    {showPassword ? (
+                    {showKnownPassword ? (
                       <EyeOff className="size-4" />
                     ) : (
                       <Eye className="size-4" />
@@ -517,7 +655,7 @@ export function ExtractPage() {
                     ) : (
                       <KeyRound data-icon="inline-start" />
                     )}
-                    恢复并解压
+                    开始智能恢复
                   </Button>
                 )}
               </div>
@@ -526,8 +664,11 @@ export function ExtractPage() {
             {task ? (
               <TaskResult
                 task={task}
-                showPassword={showPassword}
-                onTogglePassword={() => setShowPassword((value) => !value)}
+                showPassword={showRecoveredPassword}
+                passwordCopied={passwordCopied}
+                onTogglePassword={() =>
+                  setShowRecoveredPassword((value) => !value)
+                }
                 onCopyPassword={handleCopyPassword}
                 onOpenOutput={() =>
                   void openOutputDirectory(task.outputDirectory).catch(
@@ -555,16 +696,30 @@ export function ExtractPage() {
 function TaskResult({
   task,
   showPassword,
+  passwordCopied,
   onTogglePassword,
   onCopyPassword,
   onOpenOutput,
 }: {
   task: RecoveryTaskStatus
   showPassword: boolean
+  passwordCopied: boolean
   onTogglePassword: () => void
   onCopyPassword: () => void
   onOpenOutput: () => void
 }) {
+  const progress = resolveTaskProgress(task)
+  const hasCandidateProgress =
+    task.candidateCount > 0 && task.attemptedCount > 0
+  const hasRecursiveProgress =
+    task.recursiveEnabled &&
+    (task.phase === "recursive" ||
+      task.recursiveDepth > 0 ||
+      task.nestedArchiveCount > 0 ||
+      task.extractedNestedArchiveCount > 0 ||
+      task.skippedNestedArchiveCount > 0)
+  const elapsedLabel = formatElapsed(task.elapsedMs)
+
   return (
     <div
       className={cn(
@@ -573,12 +728,24 @@ function TaskResult({
           ? "border-emerald-500/35"
           : task.phase === "failed"
             ? "border-destructive/35"
-            : "border-border"
+            : task.phase === "exhausted"
+              ? "border-amber-500/40"
+              : "border-border"
       )}
     >
       {task.running ? (
-        <div className="h-0.5 w-full overflow-hidden bg-muted">
-          <div className="h-full w-1/3 animate-pulse bg-foreground" />
+        <div
+          className="h-0.5 w-full overflow-hidden bg-muted"
+          role="progressbar"
+          aria-label="恢复进度"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress}
+        >
+          <div
+            className="h-full bg-foreground transition-[width] duration-300"
+            style={{ width: `${progress}%` }}
+          />
         </div>
       ) : null}
       <div className="flex items-start justify-between gap-3 p-3">
@@ -588,7 +755,16 @@ function TaskResult({
               <LoaderCircle className="size-4 shrink-0 animate-spin" />
             ) : task.success ? (
               <Check className="size-4 shrink-0 text-emerald-600" />
-            ) : null}
+            ) : (
+              <CircleAlert
+                className={cn(
+                  "size-4 shrink-0",
+                  task.phase === "failed"
+                    ? "text-destructive"
+                    : "text-amber-600"
+                )}
+              />
+            )}
             <p className="text-xs font-semibold">
               {PHASE_LABELS[task.phase]}
               {task.engine ? ` · ${task.engine}` : ""}
@@ -597,6 +773,48 @@ function TaskResult({
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             {task.message}
           </p>
+          {hasCandidateProgress || task.elapsedMs > 0 ? (
+            <p className="mt-1 text-[11px] text-muted-foreground tabular-nums">
+              {hasCandidateProgress
+                ? `已尝试 ${formatCount(task.attemptedCount)} / ${formatCount(task.candidateCount)} 条候选 · `
+                : ""}
+              用时 {elapsedLabel}
+            </p>
+          ) : null}
+          {hasRecursiveProgress ? (
+            <div className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
+              <p className="tabular-nums">
+                已扫描 {formatCount(task.scannedFileCount)} 个文件 · 嵌套归档：
+                发现 {formatCount(task.nestedArchiveCount)} · 已解开{" "}
+                {formatCount(task.extractedNestedArchiveCount)} · 跳过{" "}
+                {formatCount(task.skippedNestedArchiveCount)}
+                {task.running && task.recursiveDepth > 0
+                  ? ` · 当前第 ${task.recursiveDepth} 层`
+                  : ""}
+              </p>
+              {task.running &&
+              task.recursiveDepth > 0 &&
+              task.currentArchivePath ? (
+                <p
+                  className="truncate"
+                  title={pathForDisplay(task.currentArchivePath)}
+                >
+                  {task.phase === "recursive" ? "正在扫描" : "正在处理"}：
+                  {archiveNameFromPath(task.currentArchivePath)}
+                </p>
+              ) : null}
+              {task.depthLimitReached || task.countLimitReached ? (
+                <p className="text-amber-600">
+                  已达到递归安全限制，剩余嵌套归档未继续处理。
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          <RecoveryProcessDetails
+            key={`${task.taskId}:${task.running ? "running" : "settled"}`}
+            events={task.events ?? []}
+            running={task.running}
+          />
           {task.recoveredPassword != null ? (
             <div className="mt-2 flex items-center gap-2">
               <code className="max-w-full truncate rounded bg-muted px-2 py-1 text-xs">
@@ -618,9 +836,13 @@ function TaskResult({
                 size="icon-sm"
                 variant="ghost"
                 onClick={onCopyPassword}
-                aria-label="复制恢复密码"
+                aria-label={passwordCopied ? "恢复密码已复制" : "复制恢复密码"}
               >
-                <Copy className="size-3.5" />
+                {passwordCopied ? (
+                  <Check className="size-3.5 text-emerald-600" />
+                ) : (
+                  <Copy className="size-3.5" />
+                )}
               </Button>
             </div>
           ) : null}
@@ -638,6 +860,114 @@ function TaskResult({
       </div>
     </div>
   )
+}
+
+function RecoveryProcessDetails({
+  events,
+  running,
+}: {
+  events: RecoveryTaskEvent[]
+  running: boolean
+}) {
+  const [open, setOpen] = React.useState(running)
+
+  if (events.length === 0) {
+    return null
+  }
+
+  return (
+    <details
+      className="group mt-2 overflow-hidden rounded-lg border border-border/70 bg-muted/20"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-2.5 py-2 text-[11px] font-medium outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+        <span className="flex items-center gap-1.5">
+          <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />
+          详细过程
+        </span>
+        <span className="font-normal text-muted-foreground">
+          最近 {events.length} 条 · 最新在前
+        </span>
+      </summary>
+      <div className="border-t border-border/70">
+        <ol className="max-h-56 overflow-y-auto px-2.5 py-1">
+          {events.map((event, index) => {
+            const current = running && index === 0
+            const metadata = recoveryEventMetadata(event)
+            return (
+              <li
+                key={event.sequence}
+                className="grid grid-cols-[42px_12px_minmax(0,1fr)] gap-1.5 border-b border-border/50 py-2 last:border-b-0"
+              >
+                <time className="pt-0.5 text-[10px] text-muted-foreground tabular-nums">
+                  {formatCompactElapsed(event.elapsedMs)}
+                </time>
+                <span className="flex justify-center pt-0.5">
+                  {current ? (
+                    <LoaderCircle className="size-3 animate-spin" />
+                  ) : event.phase === "failed" ||
+                    event.phase === "cancelled" ||
+                    event.phase === "exhausted" ? (
+                    <CircleAlert className="size-3 text-amber-600" />
+                  ) : (
+                    <span className="mt-1 size-1.5 rounded-full bg-muted-foreground/55" />
+                  )}
+                </span>
+                <div className="min-w-0">
+                  <p
+                    className="truncate text-[11px] font-medium"
+                    title={
+                      event.archivePath
+                        ? pathForDisplay(event.archivePath)
+                        : undefined
+                    }
+                  >
+                    {PHASE_LABELS[event.phase]}
+                    {event.engine ? ` · ${event.engine}` : ""}
+                    {event.archivePath
+                      ? ` · ${archiveNameFromPath(event.archivePath)}`
+                      : ""}
+                  </p>
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                    {event.message}
+                  </p>
+                  {metadata ? (
+                    <p className="mt-0.5 text-[10px] text-muted-foreground tabular-nums">
+                      {metadata}
+                    </p>
+                  ) : null}
+                </div>
+              </li>
+            )
+          })}
+        </ol>
+        <p className="border-t border-border/50 px-2.5 py-1.5 text-[10px] text-muted-foreground">
+          为保护密码安全，仅展示候选进度，不展示具体候选内容。
+        </p>
+      </div>
+    </details>
+  )
+}
+
+function recoveryEventMetadata(event: RecoveryTaskEvent): string {
+  const parts: string[] = []
+  if (event.recursiveDepth > 0) {
+    parts.push(`第 ${event.recursiveDepth} 层`)
+  }
+  if (
+    event.attemptedCount != null &&
+    event.totalCount != null &&
+    event.totalCount > 0
+  ) {
+    parts.push(
+      `候选 ${formatCount(event.attemptedCount)} / ${formatCount(event.totalCount)}`
+    )
+  }
+  if (event.scannedFileCount != null) {
+    parts.push(`累计扫描 ${formatCount(event.scannedFileCount)} 个文件`)
+  }
+  return parts.join(" · ")
 }
 
 function SegmentButton({
@@ -678,22 +1008,25 @@ function OutputDirPicker({
   onPick: () => void
   disabled?: boolean
 }) {
+  const displayPath = path ? pathForDisplay(path) : null
   return (
     <button
       type="button"
       onClick={onPick}
       disabled={disabled}
-      aria-label={path ? `输出目录：${path}，点击重新选择` : "选择输出目录"}
-      title={path ?? "选择输出目录"}
+      aria-label={
+        displayPath ? `输出目录：${displayPath}，点击重新选择` : "选择输出目录"
+      }
+      title={displayPath ?? "选择输出目录"}
       className="group flex h-8 min-w-0 flex-1 items-stretch overflow-hidden rounded-md border border-border bg-background text-left transition-colors outline-none hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60"
     >
       <span
         className={cn(
           "flex min-w-0 flex-1 items-center px-2.5 text-xs leading-none",
-          path ? "text-foreground" : "text-muted-foreground"
+          displayPath ? "text-foreground" : "text-muted-foreground"
         )}
       >
-        <span className="truncate">{path ?? "尚未选择输出目录"}</span>
+        <span className="truncate">{displayPath ?? "尚未选择输出目录"}</span>
       </span>
       <span className="inline-flex shrink-0 items-center gap-1 border-l border-border bg-muted/40 px-2 text-xs font-medium transition-colors group-hover:bg-muted/70">
         <FolderPlus className="size-3.5 shrink-0" strokeWidth={1.9} />
@@ -744,6 +1077,106 @@ function formatFileSize(bytes: number): string {
     index += 1
   }
   return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[index]}`
+}
+
+function resolveTaskProgress(task: RecoveryTaskStatus): number {
+  if (task.completed) {
+    return 100
+  }
+  if (task.recursiveDepth > 0) {
+    if (
+      task.phase === "internal" &&
+      task.candidateCount > 0 &&
+      task.attemptedCount > 0
+    ) {
+      const candidateRatio = Math.min(
+        1,
+        task.attemptedCount / task.candidateCount
+      )
+      return Math.round(94 + candidateRatio * 4)
+    }
+    return 94
+  }
+  if (
+    task.phase === "internal" &&
+    task.candidateCount > 0 &&
+    task.attemptedCount > 0
+  ) {
+    const candidateRatio = Math.min(
+      1,
+      task.attemptedCount / task.candidateCount
+    )
+    return Math.round(68 + candidateRatio * 20)
+  }
+  const phaseProgress: Record<RecoveryPhase, number> = {
+    preparing: 6,
+    verifying: 16,
+    converting: 30,
+    hashcat: 48,
+    john: 62,
+    internal: 68,
+    extracting: 92,
+    recursive: 94,
+    completed: 100,
+    exhausted: 100,
+    cancelled: 100,
+    failed: 100,
+  }
+  return phaseProgress[task.phase]
+}
+
+function formatCount(value: number): string {
+  return COUNT_FORMATTER.format(value)
+}
+
+function formatElapsed(elapsedMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  return [hours, minutes, seconds]
+    .map((value) => value.toString().padStart(2, "0"))
+    .join(":")
+}
+
+function formatCompactElapsed(elapsedMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes.toString().padStart(2, "0")}:${seconds
+    .toString()
+    .padStart(2, "0")}`
+}
+
+function normalizeArchivePath(value: string): string {
+  return value.trim().replace(/^"(.*)"$/, "$1")
+}
+
+function looksLikeAbsolutePath(value: string): boolean {
+  return /^(?:[a-zA-Z]:[\\/]|\\\\|\/)/.test(value)
+}
+
+function isEditablePasteTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false
+  }
+  return Boolean(
+    target.closest(
+      'input, textarea, [role="textbox"], [contenteditable=""], [contenteditable="true"]'
+    )
+  )
+}
+
+function archiveNameFromPath(path: string): string {
+  const displayPath = pathForDisplay(path)
+  return displayPath.split(/[\\/]/).filter(Boolean).at(-1) ?? displayPath
+}
+
+function pathForDisplay(path: string): string {
+  if (path.startsWith("\\\\?\\UNC\\")) {
+    return `\\\\${path.slice(8)}`
+  }
+  return path.startsWith("\\\\?\\") ? path.slice(4) : path
 }
 
 function toErrorMessage(reason: unknown): string {
