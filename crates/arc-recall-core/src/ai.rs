@@ -214,7 +214,7 @@ fn parse_models_response(body: &str) -> Result<Vec<AiModelInfo>, AiError> {
             })
         })
         .collect::<Vec<_>>();
-    models.sort_by(|left, right| left.id.to_lowercase().cmp(&right.id.to_lowercase()));
+    models.sort_by_key(|model| model.id.to_lowercase());
     models.dedup_by(|left, right| left.id == right.id);
     Ok(models)
 }

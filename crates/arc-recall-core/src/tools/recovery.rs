@@ -939,15 +939,15 @@ fn find_new_or_changed_archives(
     visit_files(directory, cancellation, |path| {
         scanned_files = scanned_files.saturating_add(1);
         if let Some(current) = capture_file_state(&path)
-            && !before
+            && before
                 .get(&path)
-                .is_some_and(|previous| !current.has_changed_since(previous))
+                .is_none_or(|previous| current.has_changed_since(previous))
             && detect_nested_archive_format(&path).is_ok()
         {
             archives.push(path);
         }
         if scanned_files == 1
-            || scanned_files % SCAN_PROGRESS_INTERVAL_FILES == 0
+            || scanned_files.is_multiple_of(SCAN_PROGRESS_INTERVAL_FILES)
             || last_report_at.elapsed() >= Duration::from_millis(250)
         {
             report_progress(scanned_files, archives.len());

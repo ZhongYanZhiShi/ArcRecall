@@ -317,11 +317,10 @@ fn push_recovery_event(
 }
 
 fn recovery_progress_bucket(attempted: u64, total: u64) -> u64 {
-    if total == 0 {
-        attempted
-    } else {
-        attempted.saturating_mul(20) / total
-    }
+    attempted
+        .saturating_mul(20)
+        .checked_div(total)
+        .unwrap_or(attempted)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1971,8 +1970,6 @@ async fn recovery_start(
                         &logger_for_worker,
                         if result.root.success {
                             LogLevel::Info
-                        } else if result.root.cancelled {
-                            LogLevel::Warn
                         } else {
                             LogLevel::Warn
                         },
