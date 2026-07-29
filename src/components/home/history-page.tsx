@@ -28,10 +28,35 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group"
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+} from "@/components/ui/pagination"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Separator } from "@/components/ui/separator"
+import { Spinner } from "@/components/ui/spinner"
 import {
   Table,
   TableBody,
@@ -326,12 +351,11 @@ export function HistoryPage() {
 
         <Card size="sm" className="shrink-0 gap-0 py-0 shadow-sm">
           <CardContent className="flex items-center gap-2 py-2.5">
-            <div className="relative min-w-0 flex-1">
-              <Search
-                aria-hidden
-                className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
+            <InputGroup className="h-8 min-w-0 flex-1">
+              <InputGroupAddon>
+                <Search aria-hidden />
+              </InputGroupAddon>
+              <InputGroupInput
                 type="search"
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
@@ -343,9 +367,9 @@ export function HistoryPage() {
                 }}
                 placeholder="按内容指纹前缀查询"
                 disabled={busy}
-                className="h-8 rounded-xl pl-9 font-mono text-xs"
+                className="font-mono text-xs"
               />
-            </div>
+            </InputGroup>
             <Button
               size="sm"
               variant="outline"
@@ -361,21 +385,19 @@ export function HistoryPage() {
           size="sm"
           className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden py-0 shadow-sm"
         >
-          <div
+          <Alert
             aria-live="polite"
-            className={cn(
-              "shrink-0 border-b px-3 py-1.5 text-[11px]",
-              error
-                ? "border-destructive/20 bg-destructive/5 text-destructive"
-                : "border-border/60 bg-muted/20 text-muted-foreground"
-            )}
+            variant={error ? "destructive" : "default"}
+            className="shrink-0 rounded-none border-x-0 border-t-0 px-3 py-1.5"
           >
-            {error ??
-              notice ??
-              (result
-                ? `匹配 ${result.matchedCount} / ${result.totalCount} 条 · 密码默认遮罩，查看后 30 秒自动隐藏`
-                : "正在读取本机历史…")}
-          </div>
+            <AlertDescription className="text-[11px]">
+              {error ??
+                notice ??
+                (result
+                  ? `匹配 ${result.matchedCount} / ${result.totalCount} 条 · 密码默认遮罩，查看后 30 秒自动隐藏`
+                  : "正在读取本机历史…")}
+            </AlertDescription>
+          </Alert>
           <CardContent className="min-h-0 flex-1 p-0">
             <ScrollArea className="h-full max-h-full [&_[data-slot=table-container]]:overflow-visible">
               <Table>
@@ -407,9 +429,7 @@ export function HistoryPage() {
                 <TableBody>
                   {loading ? (
                     <StateRow
-                      icon={
-                        <RefreshCw className="size-5 animate-spin motion-reduce:animate-none" />
-                      }
+                      icon={<Spinner />}
                       title="正在读取历史"
                       description="正在查询本机恢复记录。"
                     />
@@ -490,40 +510,50 @@ export function HistoryPage() {
               </Table>
             </ScrollArea>
           </CardContent>
-          <div className="flex h-10 shrink-0 items-center justify-between border-t border-border/80 px-3">
+          <Separator />
+          <div className="flex h-10 shrink-0 items-center justify-between px-3">
             <p className="text-xs text-muted-foreground tabular-nums">
               第 {displayedPage} / {pageCount} 页
             </p>
-            <nav className="flex items-center gap-1" aria-label="历史分页">
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                disabled={busy || pageIndex <= 0}
-                onClick={() =>
-                  void runBusy(async () => {
-                    await load(appliedSearch, pageIndex - 1)
-                  })
-                }
-                aria-label="上一页"
-                title="上一页"
-              >
-                <ChevronLeft />
-              </Button>
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                disabled={busy || pageIndex + 1 >= pageCount}
-                onClick={() =>
-                  void runBusy(async () => {
-                    await load(appliedSearch, pageIndex + 1)
-                  })
-                }
-                aria-label="下一页"
-                title="下一页"
-              >
-                <ChevronRight />
-              </Button>
-            </nav>
+            <Pagination
+              aria-label="历史分页"
+              className="mx-0 w-auto justify-end"
+            >
+              <PaginationContent>
+                <PaginationItem>
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    disabled={busy || pageIndex <= 0}
+                    onClick={() =>
+                      void runBusy(async () => {
+                        await load(appliedSearch, pageIndex - 1)
+                      })
+                    }
+                    aria-label="上一页"
+                    title="上一页"
+                  >
+                    <ChevronLeft />
+                  </Button>
+                </PaginationItem>
+                <PaginationItem>
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    disabled={busy || pageIndex + 1 >= pageCount}
+                    onClick={() =>
+                      void runBusy(async () => {
+                        await load(appliedSearch, pageIndex + 1)
+                      })
+                    }
+                    aria-label="下一页"
+                    title="下一页"
+                  >
+                    <ChevronRight />
+                  </Button>
+                </PaginationItem>
+              </PaginationContent>
+            </Pagination>
           </div>
         </Card>
       </div>
@@ -593,18 +623,20 @@ function SummaryCard({
   hint: string
 }) {
   return (
-    <Card size="sm" className="gap-0 py-0 shadow-sm">
-      <CardContent className="flex items-center gap-3 py-3">
+    <Card size="sm" className="gap-2 py-3 shadow-sm">
+      <CardHeader className="flex-row items-center gap-3 px-3">
         <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
           {icon}
         </div>
-        <div className="min-w-0">
-          <p className="text-[10px] font-medium tracking-wide text-muted-foreground">
-            {label}
-          </p>
-          <p className="mt-0.5 text-sm font-semibold tabular-nums">{value}</p>
-          <p className="truncate text-[10px] text-muted-foreground">{hint}</p>
-        </div>
+        <CardTitle className="text-[10px] font-medium tracking-wide text-muted-foreground">
+          {label}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="px-3">
+        <p className="text-sm font-semibold tabular-nums">{value}</p>
+        <CardDescription className="truncate text-[10px]">
+          {hint}
+        </CardDescription>
       </CardContent>
     </Card>
   )
@@ -676,15 +708,15 @@ function StateRow({
   return (
     <TableRow className="hover:bg-transparent">
       <TableCell colSpan={7} className="p-0">
-        <div className="flex min-h-56 flex-col items-center justify-center px-6 py-10 text-center">
-          <div className="mb-3 flex size-11 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
-            {icon}
-          </div>
-          <p className="text-sm font-medium">{title}</p>
-          <p className="mt-1 max-w-sm text-xs text-muted-foreground">
-            {description}
-          </p>
-        </div>
+        <Empty className="min-h-56 border-0 px-6 py-10">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">{icon}</EmptyMedia>
+            <EmptyTitle className="text-sm">{title}</EmptyTitle>
+            <EmptyDescription className="max-w-sm text-xs">
+              {description}
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       </TableCell>
     </TableRow>
   )

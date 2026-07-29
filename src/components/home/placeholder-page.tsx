@@ -1,3 +1,10 @@
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty"
+
 type PlaceholderPageProps = {
   eyebrow: string
   title: string
@@ -20,9 +27,14 @@ export function PlaceholderPage({
           <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
         </header>
 
-        <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-border bg-muted/30 px-6 text-center">
-          <p className="text-sm font-medium text-foreground">页面 UI 待绘制</p>
-        </div>
+        <Empty className="min-h-0 flex-1 border border-border bg-muted/30 px-6">
+          <EmptyHeader>
+            <EmptyTitle className="text-sm">页面 UI 待绘制</EmptyTitle>
+            <EmptyDescription className="text-xs">
+              {description}
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       </div>
     </div>
   )

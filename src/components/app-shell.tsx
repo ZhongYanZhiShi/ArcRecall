@@ -11,6 +11,12 @@ import {
 } from "lucide-react"
 import * as React from "react"
 
+import { Button } from "@/components/ui/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
 export type NavId =
@@ -228,43 +234,31 @@ const ToolButton = React.forwardRef<
   const Icon = item.icon
 
   return (
-    <button
-      ref={ref}
-      type="button"
-      title={item.label}
-      aria-label={item.label}
-      aria-current={active ? "page" : undefined}
-      onClick={onClick}
-      className={cn(
-        "group relative flex size-10 items-center justify-center rounded-xl leading-none outline-none",
-        "transition-dock focus-visible:ring-2 focus-visible:ring-ring/40",
-        "active:scale-95",
-        active
-          ? "text-primary-foreground"
-          : "text-muted-foreground hover:scale-105 hover:bg-muted/80 hover:text-foreground"
-      )}
-    >
-      <Icon
-        aria-hidden
-        className={cn(
-          "size-4 shrink-0 transition-transform duration-200 ease-out",
-          active ? "scale-105" : "group-hover:scale-110"
-        )}
-        strokeWidth={active ? 2.25 : 1.9}
-      />
-      <span
-        className={cn(
-          "pointer-events-none absolute -top-9 left-1/2 z-10 -translate-x-1/2",
-          "rounded-md border border-border bg-popover px-2 py-0.5 whitespace-nowrap",
-          "text-[11px] font-medium text-popover-foreground shadow-sm",
-          "origin-bottom scale-95 opacity-0",
-          "transition-[opacity,transform] duration-150 ease-out",
-          "group-hover:scale-100 group-hover:opacity-100",
-          "group-focus-visible:scale-100 group-focus-visible:opacity-100"
-        )}
-      >
-        {item.label}
-      </span>
-    </button>
+    <Tooltip>
+      <TooltipTrigger render={<span className="inline-flex" />}>
+        <Button
+          ref={ref}
+          type="button"
+          size="icon-lg"
+          variant="ghost"
+          aria-label={item.label}
+          aria-current={active ? "page" : undefined}
+          onClick={onClick}
+          className={cn(
+            "transition-dock relative rounded-xl active:scale-95",
+            active
+              ? "text-primary-foreground hover:bg-transparent hover:text-primary-foreground"
+              : "text-muted-foreground hover:scale-105"
+          )}
+        >
+          <Icon
+            aria-hidden
+            className="transition-transform duration-200 ease-out group-hover/button:scale-110"
+            strokeWidth={active ? 2.25 : 1.9}
+          />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{item.label}</TooltipContent>
+    </Tooltip>
   )
 })

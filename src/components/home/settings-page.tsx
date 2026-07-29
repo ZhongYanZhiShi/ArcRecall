@@ -15,6 +15,7 @@ import {
 import * as React from "react"
 
 import { AiSettingsPanel } from "@/components/home/ai-settings-panel"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -24,9 +25,26 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+  FieldLegend,
+  FieldSeparator,
+  FieldSet,
+  FieldTitle,
+} from "@/components/ui/field"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+  InputGroupText,
+} from "@/components/ui/input-group"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   getRecoveryCapabilities,
   type RecoveryCapabilities,
@@ -54,7 +72,6 @@ import {
   setSettings,
   setToolsDirectory,
 } from "@/lib/settings"
-import { cn } from "@/lib/utils"
 
 export type SettingsCategory = "ai" | "engine" | "app" | "data"
 
@@ -545,16 +562,19 @@ export function SettingsPage({
             })}
           </TabsList>
 
-          <div className="min-h-0 flex-1 overflow-y-auto pb-1">
+          <div className="min-h-0 flex-1 scroll-fade overflow-y-auto pb-1">
             <TabsContent value="ai" className="mt-0 outline-none">
               <AiSettingsPanel />
             </TabsContent>
 
-            <TabsContent value="engine" className="mt-0 space-y-2 outline-none">
+            <TabsContent
+              value="engine"
+              className="mt-0 flex flex-col gap-2 outline-none"
+            >
               <Card size="sm">
                 <CardHeader className="border-b border-border/80">
                   <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="space-y-1">
+                    <div className="flex flex-col gap-1">
                       <div className="flex items-center gap-2">
                         <CardTitle className="text-sm">默认解密方式</CardTitle>
                         <Badge variant="secondary" className="font-normal">
@@ -576,54 +596,49 @@ export function SettingsPage({
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent className="space-y-3 pt-4">
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      disabled={recoverySettingsBusy}
-                      onClick={() =>
-                        handleRecoveryComputeModeChange("gpuPreferred")
+                <CardContent className="flex flex-col gap-3 pt-4">
+                  <FieldSet disabled={recoverySettingsBusy}>
+                    <FieldLegend className="sr-only">默认解密方式</FieldLegend>
+                    <RadioGroup
+                      value={
+                        appSettings?.recovery?.computeMode ?? "gpuPreferred"
                       }
-                      className={cn(
-                        "flex items-start gap-2 rounded-xl border p-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-60",
-                        (appSettings?.recovery?.computeMode ??
-                          "gpuPreferred") === "gpuPreferred"
-                          ? "border-primary bg-primary text-primary-foreground"
-                          : "border-border bg-card hover:bg-muted/50"
-                      )}
+                      onValueChange={(value) =>
+                        handleRecoveryComputeModeChange(
+                          value as RecoveryComputeMode
+                        )
+                      }
+                      className="grid gap-2 sm:grid-cols-2"
                     >
-                      <Zap className="mt-0.5 size-4 shrink-0" />
-                      <span>
-                        <span className="block text-xs font-semibold">
-                          GPU 优先
-                        </span>
-                        <span className="mt-0.5 block text-[11px] opacity-70">
-                          Hashcat GPU → Hashcat / John / 7-Zip CPU
-                        </span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={recoverySettingsBusy}
-                      onClick={() => handleRecoveryComputeModeChange("cpuOnly")}
-                      className={cn(
-                        "flex items-start gap-2 rounded-xl border p-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-60",
-                        appSettings?.recovery?.computeMode === "cpuOnly"
-                          ? "border-primary bg-primary text-primary-foreground"
-                          : "border-border bg-card hover:bg-muted/50"
-                      )}
-                    >
-                      <Cpu className="mt-0.5 size-4 shrink-0" />
-                      <span>
-                        <span className="block text-xs font-semibold">
-                          仅 CPU
-                        </span>
-                        <span className="mt-0.5 block text-[11px] opacity-70">
-                          Hashcat CPU → John CPU → 7-Zip CPU
-                        </span>
-                      </span>
-                    </button>
-                  </div>
+                      <FieldLabel htmlFor="compute-gpu">
+                        <Field orientation="horizontal">
+                          <Zap className="mt-0.5 size-4 shrink-0" />
+                          <FieldContent>
+                            <FieldTitle>GPU 优先</FieldTitle>
+                            <FieldDescription className="text-[11px]">
+                              Hashcat GPU → Hashcat / John / 7-Zip CPU
+                            </FieldDescription>
+                          </FieldContent>
+                          <RadioGroupItem
+                            id="compute-gpu"
+                            value="gpuPreferred"
+                          />
+                        </Field>
+                      </FieldLabel>
+                      <FieldLabel htmlFor="compute-cpu">
+                        <Field orientation="horizontal">
+                          <Cpu className="mt-0.5 size-4 shrink-0" />
+                          <FieldContent>
+                            <FieldTitle>仅 CPU</FieldTitle>
+                            <FieldDescription className="text-[11px]">
+                              Hashcat CPU → John CPU → 7-Zip CPU
+                            </FieldDescription>
+                          </FieldContent>
+                          <RadioGroupItem id="compute-cpu" value="cpuOnly" />
+                        </Field>
+                      </FieldLabel>
+                    </RadioGroup>
+                  </FieldSet>
                   <div>
                     <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">
                       当前支持的恢复方式
@@ -650,9 +665,11 @@ export function SettingsPage({
                     </div>
                   </div>
                   {recoverySettingsMessage ? (
-                    <p className="rounded-xl bg-muted/50 px-2.5 py-2 text-xs text-muted-foreground">
-                      {recoverySettingsMessage}
-                    </p>
+                    <Alert>
+                      <AlertDescription>
+                        {recoverySettingsMessage}
+                      </AlertDescription>
+                    </Alert>
                   ) : null}
                 </CardContent>
               </Card>
@@ -660,7 +677,7 @@ export function SettingsPage({
               <Card size="sm">
                 <CardHeader className="border-b border-border/80">
                   <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0 space-y-1">
+                    <div className="flex min-w-0 flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <CardTitle className="text-sm">
                           Windows x64 完整离线包
@@ -703,7 +720,7 @@ export function SettingsPage({
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent className="space-y-3 pt-4">
+                <CardContent className="flex flex-col gap-3 pt-4">
                   <div className="flex flex-wrap gap-1.5">
                     {[
                       { id: "7zip", component: fullBundle?.sevenZip },
@@ -755,16 +772,9 @@ export function SettingsPage({
                     回退。
                   </p>
                   {engineMessage ? (
-                    <p
-                      className={cn(
-                        "rounded-xl px-2.5 py-2 text-xs leading-relaxed",
-                        engineError
-                          ? "bg-destructive/10 text-destructive"
-                          : "bg-muted/50 text-muted-foreground"
-                      )}
-                    >
-                      {engineMessage}
-                    </p>
+                    <Alert variant={engineError ? "destructive" : "default"}>
+                      <AlertDescription>{engineMessage}</AlertDescription>
+                    </Alert>
                   ) : null}
                 </CardContent>
               </Card>
@@ -777,16 +787,16 @@ export function SettingsPage({
                     tools 目录。
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-3 pt-4">
-                  <div className="space-y-2">
-                    <Label
+                <CardContent className="flex flex-col gap-3 pt-4">
+                  <Field>
+                    <FieldLabel
                       htmlFor="tools-dir"
                       className="text-xs text-muted-foreground"
                     >
                       公共目录（绝对路径）
-                    </Label>
-                    <div className="flex gap-2">
-                      <Input
+                    </FieldLabel>
+                    <InputGroup>
+                      <InputGroupInput
                         id="tools-dir"
                         value={toolsDirInput}
                         onChange={(event) =>
@@ -797,38 +807,38 @@ export function SettingsPage({
                           hashcat?.defaultToolsDirectory ||
                           "留空 = 使用默认 tools 目录"
                         }
-                        className="h-9 min-w-0 flex-1 rounded-xl font-mono text-xs"
+                        className="font-mono text-xs"
                       />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-9 rounded-xl"
-                        disabled={
-                          engineBusy ||
-                          !(
-                            toolsDirInput.trim() ||
-                            hashcat?.defaultToolsDirectory
-                          )
-                        }
-                        onClick={() =>
-                          handleOpenPath(
-                            toolsDirInput.trim() ||
-                              hashcat?.defaultToolsDirectory ||
-                              ""
-                          )
-                        }
-                      >
-                        <ExternalLink data-icon="inline-start" />
-                        跳转
-                      </Button>
-                    </div>
-                    <p className="text-[11px] text-muted-foreground">
+                      <InputGroupAddon align="inline-end">
+                        <InputGroupButton
+                          variant="outline"
+                          disabled={
+                            engineBusy ||
+                            !(
+                              toolsDirInput.trim() ||
+                              hashcat?.defaultToolsDirectory
+                            )
+                          }
+                          onClick={() =>
+                            handleOpenPath(
+                              toolsDirInput.trim() ||
+                                hashcat?.defaultToolsDirectory ||
+                                ""
+                            )
+                          }
+                        >
+                          <ExternalLink />
+                          跳转
+                        </InputGroupButton>
+                      </InputGroupAddon>
+                    </InputGroup>
+                    <FieldDescription className="text-[11px]">
                       默认：{hashcat?.defaultToolsDirectory || "—"}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground">
+                    </FieldDescription>
+                    <FieldDescription className="text-[11px]">
                       当前生效：{hashcat?.toolsDirectory || "—"}
-                    </p>
-                  </div>
+                    </FieldDescription>
+                  </Field>
                   <div className="flex flex-wrap gap-2">
                     <Button
                       size="sm"
@@ -852,7 +862,7 @@ export function SettingsPage({
               <Card size="sm">
                 <CardHeader className="border-b border-border/80">
                   <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0 space-y-1">
+                    <div className="flex min-w-0 flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <CardTitle className="text-sm">hashcat</CardTitle>
                         <Badge variant="secondary" className="font-normal">
@@ -881,7 +891,7 @@ export function SettingsPage({
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent className="space-y-3 pt-4">
+                <CardContent className="flex flex-col gap-3 pt-4">
                   <InfoRow
                     icon={<HardDrive className="size-3.5" />}
                     label="可执行文件"
@@ -924,7 +934,7 @@ export function SettingsPage({
               <Card size="sm">
                 <CardHeader className="border-b border-border/80">
                   <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0 space-y-1">
+                    <div className="flex min-w-0 flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <CardTitle className="text-sm">John / Perl</CardTitle>
                         <Badge
@@ -959,16 +969,16 @@ export function SettingsPage({
                     </div>
                   </div>
                 </CardHeader>
-                <CardContent className="space-y-3 pt-4">
-                  <div className="space-y-2">
-                    <Label
+                <CardContent className="flex flex-col gap-3 pt-4">
+                  <Field>
+                    <FieldLabel
                       htmlFor="john-dir"
                       className="text-xs text-muted-foreground"
                     >
                       John 工具目录
-                    </Label>
-                    <div className="flex gap-2">
-                      <Input
+                    </FieldLabel>
+                    <InputGroup>
+                      <InputGroupInput
                         id="john-dir"
                         value={johnDirInput}
                         onChange={(event) =>
@@ -976,29 +986,29 @@ export function SettingsPage({
                         }
                         disabled={engineBusy}
                         placeholder="含 john / 7z2john / rar2john / zip2john 的目录"
-                        className="h-9 min-w-0 flex-1 rounded-xl font-mono text-xs"
+                        className="font-mono text-xs"
                       />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-9 rounded-xl"
-                        disabled={engineBusy || !johnDirInput.trim()}
-                        onClick={() => handleOpenPath(johnDirInput)}
-                      >
-                        <ExternalLink data-icon="inline-start" />
-                        跳转
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label
+                      <InputGroupAddon align="inline-end">
+                        <InputGroupButton
+                          variant="outline"
+                          disabled={engineBusy || !johnDirInput.trim()}
+                          onClick={() => handleOpenPath(johnDirInput)}
+                        >
+                          <ExternalLink />
+                          跳转
+                        </InputGroupButton>
+                      </InputGroupAddon>
+                    </InputGroup>
+                  </Field>
+                  <Field>
+                    <FieldLabel
                       htmlFor="perl-path"
                       className="text-xs text-muted-foreground"
                     >
                       perl.exe 路径
-                    </Label>
-                    <div className="flex gap-2">
-                      <Input
+                    </FieldLabel>
+                    <InputGroup>
+                      <InputGroupInput
                         id="perl-path"
                         value={perlPathInput}
                         onChange={(event) =>
@@ -1006,20 +1016,20 @@ export function SettingsPage({
                         }
                         disabled={engineBusy}
                         placeholder="可选；使用 7z2john.pl 时需要"
-                        className="h-9 min-w-0 flex-1 rounded-xl font-mono text-xs"
+                        className="font-mono text-xs"
                       />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-9 rounded-xl"
-                        disabled={engineBusy || !perlPathInput.trim()}
-                        onClick={() => handleOpenPath(perlPathInput)}
-                      >
-                        <ExternalLink data-icon="inline-start" />
-                        跳转
-                      </Button>
-                    </div>
-                  </div>
+                      <InputGroupAddon align="inline-end">
+                        <InputGroupButton
+                          variant="outline"
+                          disabled={engineBusy || !perlPathInput.trim()}
+                          onClick={() => handleOpenPath(perlPathInput)}
+                        >
+                          <ExternalLink />
+                          跳转
+                        </InputGroupButton>
+                      </InputGroupAddon>
+                    </InputGroup>
+                  </Field>
                   <div className="flex flex-wrap gap-1.5">
                     <Badge
                       variant={
@@ -1069,7 +1079,7 @@ export function SettingsPage({
             </TabsContent>
 
             <TabsContent value="app" className="mt-0 outline-none">
-              <div className="space-y-2">
+              <div className="flex flex-col gap-2">
                 <Card size="sm">
                   <CardHeader className="border-b border-border/80">
                     <div className="flex items-center gap-2">
@@ -1085,56 +1095,51 @@ export function SettingsPage({
                       日志的详细程度和最大磁盘占用。密码、候选内容和用户路径会在写入前隐藏。
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="space-y-3 pt-4">
-                    <fieldset
-                      className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+                  <CardContent className="flex flex-col gap-3 pt-4">
+                    <FieldSet
                       disabled={logSettingsBusy || appSettings === null}
                     >
-                      <legend className="sr-only">日志级别</legend>
-                      {LOG_LEVELS.map((item) => {
-                        const active =
-                          (appSettings?.logging?.level ?? "info") === item.value
-                        return (
-                          <button
+                      <FieldLegend className="sr-only">日志级别</FieldLegend>
+                      <ToggleGroup
+                        value={[appSettings?.logging?.level ?? "info"]}
+                        onValueChange={(value) => {
+                          const level = value[0] as AppLogLevel | undefined
+                          if (level) {
+                            void handleLogLevelChange(level)
+                          }
+                        }}
+                        variant="outline"
+                        className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4"
+                      >
+                        {LOG_LEVELS.map((item) => (
+                          <ToggleGroupItem
                             key={item.value}
-                            type="button"
-                            aria-pressed={active}
-                            onClick={() => handleLogLevelChange(item.value)}
-                            className={cn(
-                              "rounded-xl border px-2.5 py-2 text-left transition-colors outline-none",
-                              "focus-visible:ring-2 focus-visible:ring-ring/30 disabled:opacity-50",
-                              active
-                                ? "border-primary bg-primary text-primary-foreground"
-                                : "border-border bg-background hover:bg-muted/60"
-                            )}
+                            value={item.value}
+                            className="h-auto min-h-14 flex-col items-start gap-0.5 rounded-xl px-2.5 py-2 text-left"
                           >
                             <span className="block text-xs font-medium">
                               {item.label}
                             </span>
-                            <span
-                              className={cn(
-                                "mt-0.5 block text-[10px] leading-tight",
-                                active
-                                  ? "text-primary-foreground/70"
-                                  : "text-muted-foreground"
-                              )}
-                            >
+                            <span className="block text-[10px] leading-tight text-muted-foreground">
                               {item.description}
                             </span>
-                          </button>
-                        )
-                      })}
-                    </fieldset>
-                    <fieldset
-                      className="space-y-3 border-t border-border/80 pt-3"
+                          </ToggleGroupItem>
+                        ))}
+                      </ToggleGroup>
+                    </FieldSet>
+                    <FieldSeparator />
+                    <FieldSet
+                      className="gap-3"
                       disabled={logSettingsBusy || appSettings === null}
                     >
-                      <legend className="sr-only">日志容量</legend>
+                      <FieldLegend className="sr-only">日志容量</FieldLegend>
                       <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-                        <div className="space-y-1.5">
-                          <Label htmlFor="log-max-disk-mib">最大磁盘占用</Label>
-                          <div className="relative max-w-48">
-                            <Input
+                        <Field className="max-w-48 gap-1.5">
+                          <FieldLabel htmlFor="log-max-disk-mib">
+                            最大磁盘占用
+                          </FieldLabel>
+                          <InputGroup>
+                            <InputGroupInput
                               id="log-max-disk-mib"
                               type="number"
                               inputMode="numeric"
@@ -1146,13 +1151,12 @@ export function SettingsPage({
                                 setLogMaxDiskInput(event.target.value)
                               }
                               aria-describedby="log-max-disk-hint"
-                              className="pr-12"
                             />
-                            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
-                              MiB
-                            </span>
-                          </div>
-                        </div>
+                            <InputGroupAddon align="inline-end">
+                              <InputGroupText>MiB</InputGroupText>
+                            </InputGroupAddon>
+                          </InputGroup>
+                        </Field>
                         <Button
                           type="button"
                           size="sm"
@@ -1161,39 +1165,46 @@ export function SettingsPage({
                           保存容量
                         </Button>
                       </div>
-                      <div className="flex flex-wrap gap-1.5">
+                      <ToggleGroup
+                        value={
+                          LOG_CAPACITY_PRESETS.some(
+                            (capacity) => String(capacity) === logMaxDiskInput
+                          )
+                            ? [logMaxDiskInput]
+                            : []
+                        }
+                        onValueChange={(value) => {
+                          if (value[0]) {
+                            setLogMaxDiskInput(value[0])
+                          }
+                        }}
+                        variant="outline"
+                        size="sm"
+                        className="flex-wrap"
+                      >
                         {LOG_CAPACITY_PRESETS.map((capacity) => (
-                          <Button
+                          <ToggleGroupItem
                             key={capacity}
-                            type="button"
-                            size="xs"
-                            variant={
-                              logMaxDiskInput === String(capacity)
-                                ? "secondary"
-                                : "outline"
-                            }
-                            aria-pressed={logMaxDiskInput === String(capacity)}
-                            onClick={() => setLogMaxDiskInput(String(capacity))}
+                            value={String(capacity)}
                           >
                             {capacity} MiB
-                          </Button>
+                          </ToggleGroupItem>
                         ))}
-                      </div>
-                      <p
+                      </ToggleGroup>
+                      <FieldDescription
                         id="log-max-disk-hint"
                         className="text-[11px] leading-relaxed text-muted-foreground"
                       >
                         可设置 {MIN_LOG_MAX_DISK_MIB}–{MAX_LOG_MAX_DISK_MIB}{" "}
                         MiB；日志按 5 MiB 分片，到达总上限后自动删除最旧文件。
-                      </p>
-                    </fieldset>
+                      </FieldDescription>
+                    </FieldSet>
                     {logSettingsMessage ? (
-                      <p
-                        aria-live="polite"
-                        className="rounded-xl bg-muted/50 px-2.5 py-2 text-xs text-muted-foreground"
-                      >
-                        {logSettingsMessage}
-                      </p>
+                      <Alert>
+                        <AlertDescription aria-live="polite">
+                          {logSettingsMessage}
+                        </AlertDescription>
+                      </Alert>
                     ) : null}
                   </CardContent>
                 </Card>
@@ -1238,7 +1249,7 @@ export function SettingsPage({
                     SQLite，不在项目仓库内；缺失时自动创建。字典导入编码自动识别。
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-3 pt-4">
+                <CardContent className="flex flex-col gap-3 pt-4">
                   <InfoRow
                     icon={<HardDrive className="size-3.5" />}
                     label="数据根目录"
@@ -1293,7 +1304,7 @@ function InfoRow({
   badge?: string
 }) {
   return (
-    <div className="space-y-1">
+    <div className="flex flex-col gap-1">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         {icon}
         <span>{label}</span>

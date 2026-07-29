@@ -25,12 +25,38 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group"
 import { Label } from "@/components/ui/label"
+import { Separator } from "@/components/ui/separator"
+import { Spinner } from "@/components/ui/spinner"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   type LogEntry,
   type LogLevel,
@@ -370,69 +396,66 @@ export function LogsPage() {
         <Card size="sm" className="min-h-0 flex-1 gap-0 overflow-hidden py-0">
           <CardContent className="flex h-full min-h-0 flex-col p-0">
             <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border/80 p-2.5">
-              <fieldset className="flex flex-wrap items-center gap-1">
-                <legend className="sr-only">按日志级别筛选</legend>
+              <ToggleGroup
+                value={[level]}
+                onValueChange={(value) => {
+                  const next = value[0] as LevelFilter | undefined
+                  if (next) {
+                    setLevel(next)
+                    setTake(PAGE_SIZE)
+                  }
+                }}
+                variant="outline"
+                size="sm"
+                spacing={0}
+                aria-label="按日志级别筛选"
+                className="flex-wrap"
+              >
                 {LEVELS.map((item) => (
-                  <Button
-                    key={item.value}
-                    type="button"
-                    size="xs"
-                    variant={level === item.value ? "default" : "ghost"}
-                    aria-pressed={level === item.value}
-                    onClick={() => {
-                      setLevel(item.value)
-                      setTake(PAGE_SIZE)
-                    }}
-                  >
+                  <ToggleGroupItem key={item.value} value={item.value}>
                     {item.label}
-                  </Button>
+                  </ToggleGroupItem>
                 ))}
-              </fieldset>
+              </ToggleGroup>
 
               <span
                 aria-hidden
                 className="hidden h-5 w-px bg-border sm:block"
               />
-              <fieldset className="flex items-center gap-1">
-                <legend className="sr-only">日志显示方式</legend>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant={displayMode === "summary" ? "secondary" : "ghost"}
-                  aria-pressed={displayMode === "summary"}
-                  onClick={() => setDisplayMode("summary")}
-                >
-                  简洁
-                </Button>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant={displayMode === "all" ? "secondary" : "ghost"}
-                  aria-pressed={displayMode === "all"}
-                  onClick={() => setDisplayMode("all")}
-                >
-                  全部事件
-                </Button>
-              </fieldset>
+              <ToggleGroup
+                value={[displayMode]}
+                onValueChange={(value) => {
+                  const next = value[0] as DisplayMode | undefined
+                  if (next) {
+                    setDisplayMode(next)
+                  }
+                }}
+                size="sm"
+                aria-label="日志显示方式"
+              >
+                <ToggleGroupItem value="summary">简洁</ToggleGroupItem>
+                <ToggleGroupItem value="all">全部事件</ToggleGroupItem>
+              </ToggleGroup>
 
-              <div className="relative min-w-[180px] flex-1">
+              <div className="min-w-[180px] flex-1">
                 <Label htmlFor="log-search" className="sr-only">
                   搜索日志
                 </Label>
-                <Search
-                  aria-hidden
-                  className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-                />
-                <Input
-                  id="log-search"
-                  value={searchText}
-                  onChange={(event) => {
-                    setSearchText(event.target.value)
-                    setTake(PAGE_SIZE)
-                  }}
-                  placeholder="搜索事件、来源或内容…"
-                  className="h-8 rounded-xl pl-8 text-xs"
-                />
+                <InputGroup className="h-8">
+                  <InputGroupAddon>
+                    <Search aria-hidden />
+                  </InputGroupAddon>
+                  <InputGroupInput
+                    id="log-search"
+                    value={searchText}
+                    onChange={(event) => {
+                      setSearchText(event.target.value)
+                      setTake(PAGE_SIZE)
+                    }}
+                    placeholder="搜索事件、来源或内容…"
+                    className="text-xs"
+                  />
+                </InputGroup>
               </div>
 
               <div className="flex items-center gap-2">
@@ -465,31 +488,27 @@ export function LogsPage() {
               </div>
             </div>
 
-            <div
+            <Alert
               aria-live="polite"
               aria-atomic="true"
-              className={cn(
-                "shrink-0 border-b px-3 py-1.5 text-[11px]",
-                error
-                  ? "border-destructive/20 bg-destructive/5 text-destructive"
-                  : "border-border/60 bg-muted/20 text-muted-foreground"
-              )}
+              variant={error ? "destructive" : "default"}
+              className="shrink-0 rounded-none border-x-0 border-t-0 px-3 py-1.5"
             >
-              {error ??
-                notice ??
-                (result
-                  ? compactMode && hiddenRoutineCount > 0
-                    ? `摘要显示 ${visibleEntries.length} 条 · 已收起 ${hiddenRoutineCount} 条过程记录`
-                    : `匹配 ${result.matchedCount} / ${result.totalCount} 条`
-                  : "正在读取本机日志…")}
-            </div>
+              <AlertDescription className="text-[11px]">
+                {error ??
+                  notice ??
+                  (result
+                    ? compactMode && hiddenRoutineCount > 0
+                      ? `摘要显示 ${visibleEntries.length} 条 · 已收起 ${hiddenRoutineCount} 条过程记录`
+                      : `匹配 ${result.matchedCount} / ${result.totalCount} 条`
+                    : "正在读取本机日志…")}
+              </AlertDescription>
+            </Alert>
 
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="min-h-0 flex-1 scroll-fade overflow-y-auto">
               {loading ? (
                 <LogState
-                  icon={
-                    <RefreshCw className="size-5 animate-spin motion-reduce:animate-none" />
-                  }
+                  icon={<Spinner />}
                   title="正在读取日志"
                   description="正在扫描本机轮转日志文件。"
                 />
@@ -540,16 +559,19 @@ export function LogsPage() {
             </div>
 
             {result?.hasMore ? (
-              <div className="shrink-0 border-t border-border/80 p-2 text-center">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={refreshing}
-                  onClick={() => setTake((current) => current + PAGE_SIZE)}
-                >
-                  查看更多
-                </Button>
-              </div>
+              <>
+                <Separator />
+                <div className="shrink-0 p-2 text-center">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={refreshing}
+                    onClick={() => setTake((current) => current + PAGE_SIZE)}
+                  >
+                    查看更多
+                  </Button>
+                </div>
+              </>
             ) : null}
           </CardContent>
         </Card>
@@ -595,22 +617,26 @@ function SummaryCard({
   return (
     <Card
       size="sm"
-      className={cn("gap-0 py-0", tone === "danger" && "border-destructive/25")}
+      className={cn("gap-2 py-3", tone === "danger" && "border-destructive/25")}
     >
-      <CardContent className="flex items-start gap-2.5 p-3">
+      <CardHeader className="flex-row items-center gap-2 px-3">
         <span
           className={cn(
-            "mt-0.5 rounded-lg bg-muted p-1.5 text-muted-foreground",
+            "rounded-lg bg-muted p-1.5 text-muted-foreground",
             tone === "danger" && "bg-destructive/10 text-destructive"
           )}
         >
           {icon}
         </span>
-        <div className="min-w-0">
-          <p className="text-[11px] text-muted-foreground">{label}</p>
-          <p className="text-base font-semibold tracking-tight">{value}</p>
-          <p className="truncate text-[10px] text-muted-foreground">{hint}</p>
-        </div>
+        <CardTitle className="text-[11px] font-normal text-muted-foreground">
+          {label}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="px-3">
+        <p className="text-base font-semibold tracking-tight">{value}</p>
+        <CardDescription className="truncate text-[10px]">
+          {hint}
+        </CardDescription>
       </CardContent>
     </Card>
   )
@@ -649,22 +675,24 @@ function LogRow({ entry }: { entry: LogEntry }) {
             {presentation.description}
           </p>
         ) : null}
-        <details className="group mt-1.5">
-          <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-md text-[10px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30 [&::-webkit-details-marker]:hidden">
+        <Collapsible className="group mt-1.5">
+          <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-md text-[10px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30">
             技术详情
-            <ChevronDown className="size-3 transition-transform group-open:rotate-180" />
-          </summary>
-          <dl className="mt-2 grid gap-1.5 rounded-lg border border-border/70 bg-muted/20 p-2 text-[10px] sm:grid-cols-2">
-            <TechnicalField
-              label="来源"
-              value={`${sourceLabel(entry.source)}（${entry.source}）`}
-            />
-            <TechnicalField label="事件标识" value={entry.event} />
-            {context.map(([key, value]) => (
-              <TechnicalField key={key} label={key} value={value} />
-            ))}
-          </dl>
-        </details>
+            <ChevronDown className="size-3 transition-transform group-data-[open]/collapsible:rotate-180" />
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <dl className="mt-2 grid gap-1.5 rounded-lg border border-border/70 bg-muted/20 p-2 text-[10px] sm:grid-cols-2">
+              <TechnicalField
+                label="来源"
+                value={`${sourceLabel(entry.source)}（${entry.source}）`}
+              />
+              <TechnicalField label="事件标识" value={entry.event} />
+              {context.map(([key, value]) => (
+                <TechnicalField key={key} label={key} value={value} />
+              ))}
+            </dl>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
     </li>
   )
@@ -691,15 +719,13 @@ function LogState({
   description: string
 }) {
   return (
-    <div className="flex h-full min-h-40 items-center justify-center p-6 text-center">
-      <div>
-        <span className="mx-auto flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-          {icon}
-        </span>
-        <p className="mt-3 text-sm font-medium">{title}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{description}</p>
-      </div>
-    </div>
+    <Empty className="h-full min-h-40 border-0 p-6">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">{icon}</EmptyMedia>
+        <EmptyTitle className="text-sm">{title}</EmptyTitle>
+        <EmptyDescription className="text-xs">{description}</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   )
 }
 

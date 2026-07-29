@@ -5,7 +5,6 @@ import {
   Check,
   CircleAlert,
   KeyRound,
-  LoaderCircle,
   Plus,
   RefreshCw,
   Save,
@@ -16,6 +15,7 @@ import {
 } from "lucide-react"
 import * as React from "react"
 
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,8 +35,23 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldSeparator,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import {
   AI_PROVIDER_DEFAULTS,
@@ -51,7 +66,6 @@ import {
   type AiProviderKind,
   type AiSettings,
 } from "@/lib/ai"
-import { cn } from "@/lib/utils"
 
 type ProfileDraft = {
   id: string | null
@@ -296,7 +310,7 @@ export function AiSettingsPanel() {
   const providerMeta = AI_PROVIDER_DEFAULTS[draft.provider]
 
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col gap-2">
       <Card size="sm">
         <CardHeader className="border-b border-border/80">
           <div className="flex items-start justify-between gap-3">
@@ -328,35 +342,35 @@ export function AiSettingsPanel() {
           </div>
         </CardHeader>
         <CardContent className="grid gap-3 pt-4 lg:grid-cols-[190px_minmax(0,1fr)]">
-          <aside className="space-y-1.5" aria-label="已保存 AI 配置">
+          <aside className="flex flex-col gap-1.5" aria-label="已保存 AI 配置">
             {settings === null ? (
               <div className="flex items-center gap-2 rounded-xl bg-muted/50 px-3 py-3 text-xs text-muted-foreground">
-                <LoaderCircle className="size-4 animate-spin" />
+                <Spinner />
                 正在读取配置…
               </div>
             ) : settings.profiles.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-border px-3 py-4 text-center">
-                <Bot className="mx-auto size-5 text-muted-foreground" />
-                <p className="mt-2 text-xs font-medium">尚无 AI 配置</p>
-                <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                  右侧可直接创建 DeepSeek，也可切换为本地模型。
-                </p>
-              </div>
+              <Empty className="gap-2 border px-3 py-4">
+                <EmptyHeader className="gap-1">
+                  <EmptyMedia variant="icon">
+                    <Bot />
+                  </EmptyMedia>
+                  <EmptyTitle className="text-xs">尚无 AI 配置</EmptyTitle>
+                  <EmptyDescription className="text-[10px] leading-relaxed">
+                    右侧可直接创建 DeepSeek，也可切换为本地模型。
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
             ) : (
               settings.profiles.map((profile) => (
-                <button
+                <Button
                   key={profile.id}
                   type="button"
+                  variant={draft.id === profile.id ? "secondary" : "ghost"}
                   disabled={busy}
                   onClick={() => handleSelectProfile(profile)}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-xl border px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-                    draft.id === profile.id
-                      ? "border-foreground/30 bg-muted"
-                      : "border-transparent hover:border-border hover:bg-muted/50"
-                  )}
+                  className="h-auto w-full justify-start rounded-xl px-2.5 py-2 text-left"
                 >
-                  <Server className="size-3.5 shrink-0 text-muted-foreground" />
+                  <Server data-icon="inline-start" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-xs font-medium">
                       {profile.name}
@@ -367,20 +381,17 @@ export function AiSettingsPanel() {
                     </span>
                   </span>
                   {settings.activeProfileId === profile.id ? (
-                    <Check
-                      aria-label="当前配置"
-                      className="size-3.5 shrink-0"
-                    />
+                    <Check aria-label="当前配置" data-icon="inline-end" />
                   ) : null}
-                </button>
+                </Button>
               ))
             )}
           </aside>
 
-          <div className="min-w-0 space-y-3 rounded-xl border border-border/80 p-3">
+          <FieldGroup className="min-w-0 gap-3 rounded-xl border border-border/80 p-3">
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="ai-profile-name">配置名称</Label>
+              <Field className="gap-1.5">
+                <FieldLabel htmlFor="ai-profile-name">配置名称</FieldLabel>
                 <Input
                   id="ai-profile-name"
                   value={draft.name}
@@ -393,30 +404,35 @@ export function AiSettingsPanel() {
                   }
                   placeholder="例如：本机 Ollama"
                 />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ai-provider">服务类型</Label>
-                <select
+              </Field>
+              <Field className="gap-1.5">
+                <FieldLabel htmlFor="ai-provider">服务类型</FieldLabel>
+                <NativeSelect
                   id="ai-provider"
+                  className="w-full"
                   value={draft.provider}
                   disabled={busy}
                   onChange={(event) =>
                     handleProviderChange(event.target.value as AiProviderKind)
                   }
-                  className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {PROVIDERS.map((provider) => (
-                    <option key={provider.value} value={provider.value}>
+                    <NativeSelectOption
+                      key={provider.value}
+                      value={provider.value}
+                    >
                       {provider.label}
                       {provider.local ? "（本地）" : ""}
-                    </option>
+                    </NativeSelectOption>
                   ))}
-                </select>
-              </div>
+                </NativeSelect>
+              </Field>
             </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="ai-base-url">OpenAI-compatible 地址</Label>
+            <Field className="gap-1.5">
+              <FieldLabel htmlFor="ai-base-url">
+                OpenAI-compatible 地址
+              </FieldLabel>
               <Input
                 id="ai-base-url"
                 value={draft.baseUrl}
@@ -430,14 +446,14 @@ export function AiSettingsPanel() {
                 placeholder="http://127.0.0.1:11434/v1"
                 spellCheck={false}
               />
-              <p className="text-[10px] leading-relaxed text-muted-foreground">
+              <FieldDescription className="text-[10px] leading-relaxed">
                 将使用 GET /models 与 POST /chat/completions；本地服务无需联网。
-              </p>
-            </div>
+              </FieldDescription>
+            </Field>
 
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-              <div className="space-y-1.5">
-                <Label htmlFor="ai-model">模型</Label>
+              <Field className="gap-1.5">
+                <FieldLabel htmlFor="ai-model">模型</FieldLabel>
                 <Input
                   id="ai-model"
                   list="ai-model-options"
@@ -463,7 +479,7 @@ export function AiSettingsPanel() {
                     </option>
                   ))}
                 </datalist>
-              </div>
+              </Field>
               <div className="flex items-end gap-2">
                 <Button
                   type="button"
@@ -488,11 +504,11 @@ export function AiSettingsPanel() {
               </div>
             </div>
 
-            <div className="space-y-1.5">
+            <Field className="gap-1.5">
               <div className="flex items-center justify-between gap-2">
-                <Label htmlFor="ai-api-key">API Key（可选）</Label>
+                <FieldLabel htmlFor="ai-api-key">API Key（可选）</FieldLabel>
                 <Badge variant="outline" className="font-normal">
-                  <KeyRound className="size-3" />
+                  <KeyRound />
                   {draft.clearApiKey
                     ? "保存后清除"
                     : draft.hasApiKey
@@ -541,9 +557,10 @@ export function AiSettingsPanel() {
                   </Button>
                 ) : null}
               </div>
-            </div>
+            </Field>
 
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-3">
+            <FieldSeparator />
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 {isActive ? (
                   <Badge variant="default" className="font-normal">
@@ -590,10 +607,7 @@ export function AiSettingsPanel() {
                   onClick={() => void handleSaveProfile(false)}
                 >
                   {busy ? (
-                    <LoaderCircle
-                      className="animate-spin"
-                      data-icon="inline-start"
-                    />
+                    <Spinner data-icon="inline-start" />
                   ) : (
                     <Save data-icon="inline-start" />
                   )}
@@ -601,7 +615,7 @@ export function AiSettingsPanel() {
                 </Button>
               </div>
             </div>
-          </div>
+          </FieldGroup>
         </CardContent>
       </Card>
 
@@ -613,14 +627,19 @@ export function AiSettingsPanel() {
             只会收到此提示词和你在压缩页填写的基础名称，不会读取或上传来源文件、路径和内容。
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3 pt-4">
-          <Textarea
-            value={prompt}
-            disabled={busy || settings === null}
-            onChange={(event) => setPrompt(event.target.value)}
-            rows={4}
-            aria-label="AI 重命名提示词"
-          />
+        <CardContent className="flex flex-col gap-3 pt-4">
+          <Field>
+            <FieldLabel htmlFor="ai-rename-prompt" className="sr-only">
+              AI 重命名提示词
+            </FieldLabel>
+            <Textarea
+              id="ai-rename-prompt"
+              value={prompt}
+              disabled={busy || settings === null}
+              onChange={(event) => setPrompt(event.target.value)}
+              rows={4}
+            />
+          </Field>
           <div className="flex items-center justify-between gap-3">
             <p className="text-[10px] text-muted-foreground">
               最长 2000 字符；AI 结果会再次经过本机文件名安全处理。
@@ -640,22 +659,10 @@ export function AiSettingsPanel() {
       </Card>
 
       {message ? (
-        <p
-          aria-live="polite"
-          className={cn(
-            "flex items-start gap-2 rounded-xl px-3 py-2 text-xs leading-relaxed",
-            error
-              ? "bg-destructive/10 text-destructive"
-              : "bg-muted/60 text-muted-foreground"
-          )}
-        >
-          {error ? (
-            <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
-          ) : (
-            <Check className="mt-0.5 size-3.5 shrink-0" />
-          )}
-          {message}
-        </p>
+        <Alert aria-live="polite" variant={error ? "destructive" : "default"}>
+          {error ? <CircleAlert /> : <Check />}
+          <AlertDescription>{message}</AlertDescription>
+        </Alert>
       ) : null}
 
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
@@ -673,7 +680,7 @@ export function AiSettingsPanel() {
               disabled={busy}
               onClick={handleDelete}
             >
-              {busy ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
+              {busy ? <Spinner /> : <Trash2 />}
               删除
             </AlertDialogAction>
           </AlertDialogFooter>

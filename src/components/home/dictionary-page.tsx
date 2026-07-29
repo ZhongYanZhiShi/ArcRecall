@@ -22,18 +22,36 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import { Field, FieldLabel } from "@/components/ui/field"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group"
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+} from "@/components/ui/pagination"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -43,6 +61,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import { Spinner } from "@/components/ui/spinner"
 import {
   Table,
   TableBody,
@@ -62,7 +81,6 @@ import {
   isDesktopRuntime,
   listDictionary,
 } from "@/lib/dictionary"
-import { cn } from "@/lib/utils"
 
 type StatusTone = "neutral" | "busy" | "ok" | "warn"
 
@@ -397,13 +415,11 @@ export function DictionaryPage() {
           className="shrink-0 gap-0 py-0 shadow-sm ring-border/60"
         >
           <CardContent className="flex items-center gap-2 py-2.5">
-            <div className="relative min-w-0 flex-1">
-              <Search
-                aria-hidden
-                className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
-                strokeWidth={1.9}
-              />
-              <Input
+            <InputGroup className="h-8 min-w-0 flex-1">
+              <InputGroupAddon>
+                <Search aria-hidden />
+              </InputGroupAddon>
+              <InputGroupInput
                 type="search"
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
@@ -415,9 +431,9 @@ export function DictionaryPage() {
                 }}
                 placeholder="按明文搜索候选"
                 disabled={isBusy}
-                className="h-8 rounded-xl pl-9 text-xs"
+                className="text-xs"
               />
-            </div>
+            </InputGroup>
             <Button
               size="sm"
               variant="outline"
@@ -466,29 +482,29 @@ export function DictionaryPage() {
                   {isEmpty ? (
                     <TableRow className="hover:bg-transparent">
                       <TableCell colSpan={4} className="p-0">
-                        <div className="flex min-h-[220px] flex-col items-center justify-center px-6 py-10 text-center">
-                          <div className="mb-3 flex size-11 items-center justify-center rounded-2xl bg-muted">
-                            <Library
-                              className="size-5 text-muted-foreground"
-                              strokeWidth={1.75}
-                            />
-                          </div>
-                          <p className="text-sm font-medium">
-                            没有可显示的候选
-                          </p>
-                          <p className="mt-1 max-w-xs text-xs text-muted-foreground">
-                            导入字典文件，或直接添加候选；重复项会自动跳过。
-                          </p>
-                          <Button
-                            size="sm"
-                            className="mt-4"
-                            disabled={isBusy}
-                            onClick={() => setAddPanelOpen(true)}
-                          >
-                            <Plus data-icon="inline-start" />
-                            添加候选
-                          </Button>
-                        </div>
+                        <Empty className="min-h-[220px] border-0 px-6 py-10">
+                          <EmptyHeader>
+                            <EmptyMedia variant="icon">
+                              <Library />
+                            </EmptyMedia>
+                            <EmptyTitle className="text-sm">
+                              没有可显示的候选
+                            </EmptyTitle>
+                            <EmptyDescription className="max-w-xs text-xs">
+                              导入字典文件，或直接添加候选；重复项会自动跳过。
+                            </EmptyDescription>
+                          </EmptyHeader>
+                          <EmptyContent>
+                            <Button
+                              size="sm"
+                              disabled={isBusy}
+                              onClick={() => setAddPanelOpen(true)}
+                            >
+                              <Plus data-icon="inline-start" />
+                              添加候选
+                            </Button>
+                          </EmptyContent>
+                        </Empty>
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -538,73 +554,62 @@ export function DictionaryPage() {
               </Table>
             </ScrollArea>
           </CardContent>
-          <div className="flex h-10 shrink-0 items-center justify-between border-t border-border/80 px-3">
+          <Separator />
+          <div className="flex h-10 shrink-0 items-center justify-between px-3">
             <p
               className="text-xs text-muted-foreground tabular-nums"
               aria-live="polite"
             >
               第 {displayedPage} / {pageCount} 页
             </p>
-            <nav className="flex items-center gap-1" aria-label="字典分页">
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                disabled={isBusy || !hasPreviousPage}
-                onClick={() => handlePageChange(pageIndex - 1)}
-                aria-label="上一页"
-                title="上一页"
-              >
-                <ChevronLeft />
-              </Button>
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                disabled={isBusy || !hasNextPage}
-                onClick={() => handlePageChange(pageIndex + 1)}
-                aria-label="下一页"
-                title="下一页"
-              >
-                <ChevronRight />
-              </Button>
-            </nav>
+            <Pagination
+              aria-label="字典分页"
+              className="mx-0 w-auto justify-end"
+            >
+              <PaginationContent>
+                <PaginationItem>
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    disabled={isBusy || !hasPreviousPage}
+                    onClick={() => handlePageChange(pageIndex - 1)}
+                    aria-label="上一页"
+                    title="上一页"
+                  >
+                    <ChevronLeft />
+                  </Button>
+                </PaginationItem>
+                <PaginationItem>
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    disabled={isBusy || !hasNextPage}
+                    onClick={() => handlePageChange(pageIndex + 1)}
+                    aria-label="下一页"
+                    title="下一页"
+                  >
+                    <ChevronRight />
+                  </Button>
+                </PaginationItem>
+              </PaginationContent>
+            </Pagination>
           </div>
         </Card>
 
-        <Card
-          size="sm"
-          className={cn(
-            "shrink-0 gap-0 py-0 shadow-sm",
-            statusTone === "busy" && "bg-muted/40 ring-border/60",
-            statusTone === "ok" && "ring-border/60",
-            statusTone === "warn" &&
-              "bg-destructive/5 ring-destructive/25 dark:bg-destructive/10",
-            statusTone === "neutral" && "ring-border/60"
-          )}
+        <Alert
+          variant={statusTone === "warn" ? "destructive" : "default"}
+          className="shrink-0 py-2.5 shadow-sm"
         >
-          <CardFooter className="py-2.5">
-            <p
-              className={cn(
-                "line-clamp-2 text-xs leading-relaxed",
-                statusTone === "warn"
-                  ? "text-destructive"
-                  : statusTone === "busy" || statusTone === "neutral"
-                    ? "text-muted-foreground"
-                    : "text-foreground"
-              )}
-            >
-              {status}
-            </p>
-          </CardFooter>
-        </Card>
+          {statusTone === "busy" ? <Spinner /> : null}
+          <AlertDescription className="line-clamp-2 text-xs leading-relaxed">
+            {status}
+          </AlertDescription>
+        </Alert>
       </div>
 
       {/* 添加候选：右侧抽屉，保留字典列表上下文 */}
       <Sheet open={addPanelOpen} onOpenChange={setAddPanelOpen}>
-        <SheetContent
-          side="right"
-          showCloseButton
-          className="w-full gap-0 p-0 sm:max-w-md"
-        >
+        <SheetContent side="right" showCloseButton className="gap-0 p-0">
           <SheetHeader className="shrink-0 border-b border-border/80 pr-12">
             <p className="text-[11px] font-medium tracking-[0.16em] text-muted-foreground uppercase">
               Add Candidates
@@ -615,9 +620,9 @@ export function DictionaryPage() {
             </SheetDescription>
           </SheetHeader>
 
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4 pb-24">
+          <div className="flex min-h-0 flex-1 scroll-fade flex-col gap-4 overflow-y-auto px-6 py-4 pb-24">
             <Card size="sm" className="gap-0 py-0 shadow-none ring-border/60">
-              <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 py-3">
+              <CardHeader className="flex flex-row items-center justify-between gap-3 py-3">
                 <div className="min-w-0">
                   <CardTitle className="text-sm">批量导入</CardTitle>
                   <CardDescription className="text-xs">
@@ -649,15 +654,15 @@ export function DictionaryPage() {
 
             <Separator />
 
-            <div className="space-y-2">
-              <Label
+            <Field>
+              <FieldLabel
                 htmlFor="dict-single"
                 className="text-xs text-muted-foreground"
               >
                 新增单条
-              </Label>
-              <div className="flex gap-2">
-                <Input
+              </FieldLabel>
+              <InputGroup>
+                <InputGroupInput
                   id="dict-single"
                   type="text"
                   value={singleCandidate}
@@ -670,25 +675,26 @@ export function DictionaryPage() {
                   }}
                   disabled={isBusy}
                   placeholder="输入一条候选密码"
-                  className="h-9 rounded-xl"
                 />
-                <Button
-                  className="shrink-0"
-                  disabled={isBusy || singleCandidate.length === 0}
-                  onClick={handleAddSingle}
-                >
-                  添加
-                </Button>
-              </div>
-            </div>
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    variant="outline"
+                    disabled={isBusy || singleCandidate.length === 0}
+                    onClick={handleAddSingle}
+                  >
+                    添加
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
+            </Field>
 
-            <div className="space-y-2">
-              <Label
+            <Field>
+              <FieldLabel
                 htmlFor="dict-paste"
                 className="text-xs text-muted-foreground"
               >
                 粘贴多行
-              </Label>
+              </FieldLabel>
               <Textarea
                 id="dict-paste"
                 value={pastedCandidates}
@@ -706,7 +712,7 @@ export function DictionaryPage() {
               >
                 添加多行
               </Button>
-            </div>
+            </Field>
           </div>
         </SheetContent>
       </Sheet>
