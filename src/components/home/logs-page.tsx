@@ -28,13 +28,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Collapsible,
@@ -356,11 +350,12 @@ export function LogsPage() {
           </div>
         </header>
 
-        <section
+        <Card
+          size="sm"
           aria-label="日志概览"
-          className="grid shrink-0 grid-cols-2 gap-2 lg:grid-cols-4"
+          className="grid shrink-0 grid-cols-4 gap-0 divide-x divide-border/70 py-0 shadow-sm"
         >
-          <SummaryCard
+          <SummaryMetric
             label={compactMode ? "摘要" : "事件"}
             value={String(
               compactMode ? visibleEntries.length : (result?.totalCount ?? 0)
@@ -372,26 +367,26 @@ export function LogsPage() {
             }
             icon={<FileJson className="size-4" />}
           />
-          <SummaryCard
+          <SummaryMetric
             label="需关注"
             value={String((stats?.errorCount ?? 0) + (stats?.warnCount ?? 0))}
             hint={`${stats?.errorCount ?? 0} 错误 · ${stats?.warnCount ?? 0} 警告`}
             icon={<AlertTriangle className="size-4" />}
             tone={(stats?.errorCount ?? 0) > 0 ? "danger" : "default"}
           />
-          <SummaryCard
+          <SummaryMetric
             label="磁盘占用"
             value={formatBytes(stats?.diskBytes ?? 0)}
             hint={`${stats?.fileCount ?? 0} 个文件 · 上限可在设置中调整`}
             icon={<DatabaseBackup className="size-4" />}
           />
-          <SummaryCard
+          <SummaryMetric
             label="隐私保护"
             value="已启用"
             hint="敏感字段写入前脱敏"
             icon={<ShieldCheck className="size-4" />}
           />
-        </section>
+        </Card>
 
         <Card size="sm" className="min-h-0 flex-1 gap-0 overflow-hidden py-0">
           <CardContent className="flex h-full min-h-0 flex-col p-0">
@@ -601,7 +596,7 @@ export function LogsPage() {
   )
 }
 
-function SummaryCard({
+function SummaryMetric({
   label,
   value,
   hint,
@@ -615,30 +610,34 @@ function SummaryCard({
   tone?: "default" | "danger"
 }) {
   return (
-    <Card
-      size="sm"
-      className={cn("gap-2 py-3", tone === "danger" && "border-destructive/25")}
+    <div
+      className={cn(
+        "flex min-w-0 items-center gap-2.5 px-3 py-2.5",
+        tone === "danger" && "bg-destructive/[0.035]"
+      )}
     >
-      <CardHeader className="flex-row items-center gap-2 px-3">
-        <span
-          className={cn(
-            "rounded-lg bg-muted p-1.5 text-muted-foreground",
-            tone === "danger" && "bg-destructive/10 text-destructive"
-          )}
-        >
-          {icon}
-        </span>
-        <CardTitle className="text-[11px] font-normal text-muted-foreground">
-          {label}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="px-3">
-        <p className="text-base font-semibold tracking-tight">{value}</p>
-        <CardDescription className="truncate text-[10px]">
+      <span
+        className={cn(
+          "flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted/80 text-muted-foreground",
+          tone === "danger" && "bg-destructive/10 text-destructive"
+        )}
+      >
+        {icon}
+      </span>
+      <div className="min-w-0">
+        <div className="flex items-baseline gap-2">
+          <p className="shrink-0 text-sm font-semibold tracking-tight tabular-nums">
+            {value}
+          </p>
+          <p className="truncate text-[10px] font-medium tracking-wide text-muted-foreground">
+            {label}
+          </p>
+        </div>
+        <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
           {hint}
-        </CardDescription>
-      </CardContent>
-    </Card>
+        </p>
+      </div>
+    </div>
   )
 }
 
