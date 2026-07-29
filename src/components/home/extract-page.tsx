@@ -480,15 +480,15 @@ export function ExtractPage() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="workbench-page flex h-full min-h-0 scroll-fade flex-col overflow-y-auto px-5 pt-6 pb-4">
-        <header className="mb-3 shrink-0 text-center">
-          <p className="text-[11px] font-medium tracking-[0.16em] text-muted-foreground uppercase">
+        <header className="mb-5 shrink-0">
+          <p className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
             ArcRecall
           </p>
-          <h1 className="mt-1 text-lg font-semibold tracking-tight">
+          <h1 className="mt-1 text-xl font-semibold tracking-tight">
             恢复并解压
           </h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            *2john 转换 · Hashcat / John 恢复 · 7-Zip 复验
+          <p className="mt-1 text-xs text-muted-foreground">
+            选择压缩包后自动识别格式、恢复密码并安全解压。
           </p>
         </header>
 
@@ -562,7 +562,7 @@ export function ExtractPage() {
             <CardDescription className="max-w-lg truncate text-xs">
               {analysis
                 ? `${analysis.formatLabel} · ${formatFileSize(analysis.fileSize)} · 不依赖扩展名`
-                : "按内容识别 7z / ZIP / RAR3 / RAR5，支持乱后缀、无后缀与复合载体"}
+                : "按内容识别 7z / ZIP / RAR，支持乱后缀、无后缀与复合载体"}
             </CardDescription>
           </CardHeader>
           <CardContent
