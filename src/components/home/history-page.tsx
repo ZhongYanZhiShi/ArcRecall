@@ -30,13 +30,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Empty,
   EmptyDescription,
@@ -325,29 +319,30 @@ export function HistoryPage() {
           </div>
         </header>
 
-        <section
+        <Card
+          size="sm"
           aria-label="历史概览"
-          className="grid shrink-0 grid-cols-3 gap-2"
+          className="grid shrink-0 grid-cols-3 gap-0 divide-x divide-border/70 py-0 shadow-sm"
         >
-          <SummaryCard
+          <SummaryMetric
             icon={<History className="size-4" />}
             label="成功归档"
             value={String(result?.totalCount ?? 0)}
             hint="相同内容指纹自动归并"
           />
-          <SummaryCard
+          <SummaryMetric
             icon={<KeyRound className="size-4" />}
             label="已存密码"
             value={String(result?.passwordCount ?? 0)}
             hint="本机数据库明文保存"
           />
-          <SummaryCard
+          <SummaryMetric
             icon={<ShieldCheck className="size-4" />}
             label="来源信息"
             value="不记录"
             hint="无文件名、路径和字典内容"
           />
-        </section>
+        </Card>
 
         <Card size="sm" className="shrink-0 gap-0 py-0 shadow-sm">
           <CardContent className="flex items-center gap-2 py-2.5">
@@ -611,7 +606,7 @@ export function HistoryPage() {
   )
 }
 
-function SummaryCard({
+function SummaryMetric({
   icon,
   label,
   value,
@@ -623,22 +618,22 @@ function SummaryCard({
   hint: string
 }) {
   return (
-    <Card size="sm" className="gap-2 py-3 shadow-sm">
-      <CardHeader className="flex-row items-center gap-3 px-3">
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-          {icon}
+    <div className="flex min-w-0 items-center gap-2.5 px-3 py-2.5">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted/80 text-muted-foreground">
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <div className="flex items-baseline gap-2">
+          <p className="shrink-0 text-sm font-semibold tabular-nums">{value}</p>
+          <p className="truncate text-[10px] font-medium tracking-wide text-muted-foreground">
+            {label}
+          </p>
         </div>
-        <CardTitle className="text-[10px] font-medium tracking-wide text-muted-foreground">
-          {label}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="px-3">
-        <p className="text-sm font-semibold tabular-nums">{value}</p>
-        <CardDescription className="truncate text-[10px]">
+        <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
           {hint}
-        </CardDescription>
-      </CardContent>
-    </Card>
+        </p>
+      </div>
+    </div>
   )
 }
 
