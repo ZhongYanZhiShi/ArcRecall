@@ -305,7 +305,7 @@ export function LogsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="mx-auto flex h-full min-h-0 w-full max-w-[960px] flex-col gap-2 px-5 pt-6 pb-2">
+      <div className="workbench-page flex h-full min-h-0 flex-col gap-2 px-5 pt-6 pb-2">
         <header className="flex shrink-0 flex-wrap items-start justify-between gap-3 pr-12 lg:pr-0">
           <div className="min-w-0">
             <p className="text-[11px] font-medium tracking-[0.16em] text-muted-foreground uppercase">

@@ -18,7 +18,7 @@ export function PlaceholderPage({
 }: PlaceholderPageProps) {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="mx-auto flex h-full w-full max-w-[720px] flex-col px-5 pt-6 pb-2">
+      <div className="workbench-page flex h-full flex-col px-5 pt-6 pb-2">
         <header className="mb-3 shrink-0 text-center">
           <p className="text-[11px] font-medium tracking-[0.16em] text-muted-foreground uppercase">
             {eyebrow}

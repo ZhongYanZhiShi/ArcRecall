@@ -456,7 +456,7 @@ export function CompressPage({
 
   return (
     <div className="h-full min-h-0 overflow-hidden">
-      <div className="mx-auto flex h-full min-h-0 w-full max-w-[820px] scroll-fade flex-col overflow-y-auto px-5 pt-6 pb-5">
+      <div className="workbench-page flex h-full min-h-0 scroll-fade flex-col overflow-y-auto px-5 pt-6 pb-5">
         <header className="shrink-0">
           <p className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
             Pack
