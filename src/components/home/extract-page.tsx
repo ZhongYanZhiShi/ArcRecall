@@ -886,6 +886,10 @@ function TaskResult({
       task.extractedNestedArchiveCount > 0 ||
       task.skippedNestedArchiveCount > 0)
   const elapsedLabel = formatElapsed(task.elapsedMs)
+  const activePhaseLabel =
+    task.running && task.rootExtractionCompleted
+      ? "递归处理"
+      : PHASE_LABELS[task.phase]
 
   return (
     <div
@@ -933,13 +937,18 @@ function TaskResult({
               />
             )}
             <p className="text-xs font-semibold">
-              {PHASE_LABELS[task.phase]}
+              {activePhaseLabel}
               {task.engine ? ` · ${task.engine}` : ""}
             </p>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             {task.message}
           </p>
+          {task.running && task.rootExtractionCompleted ? (
+            <p className="mt-1 text-[11px] text-success-foreground">
+              主归档已完成，当前仅处理递归发现的嵌套归档。
+            </p>
+          ) : null}
           {hasCandidateProgress || task.elapsedMs > 0 ? (
             <p className="mt-1 text-[11px] text-muted-foreground tabular-nums">
               {hasCandidateProgress
@@ -1014,7 +1023,7 @@ function TaskResult({
           variant="outline"
           size="sm"
           className="shrink-0"
-          disabled={!task.success}
+          disabled={!task.success && !task.rootExtractionCompleted}
           onClick={onOpenOutput}
         >
           <PackageOpen data-icon="inline-start" />
@@ -1197,6 +1206,9 @@ function recoveryComputeSummary(
     return "正在保存默认解密方式…"
   }
   if (task?.running) {
+    if (task.rootExtractionCompleted) {
+      return `主归档已解压，正在递归检查：${task.engine || "7-Zip"}`
+    }
     return `当前正在使用：${task.engine || "7-Zip CPU 基础校验"}`
   }
   if (task?.completed) {

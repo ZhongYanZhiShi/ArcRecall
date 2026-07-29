@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use lz4::Decoder as Lz4Decoder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -17,9 +18,13 @@ const SEVEN_ZIP_SIGNATURE: &[u8] = b"\x37\x7a\xbc\xaf\x27\x1c";
 const RAR3_SIGNATURE: &[u8] = b"Rar!\x1a\x07\x00";
 const RAR5_SIGNATURE: &[u8] = b"Rar!\x1a\x07\x01\x00";
 const ZIP_SIGNATURES: [&[u8]; 3] = [b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"];
+const LZ4_FRAME_SIGNATURE: &[u8] = b"\x04\x22\x4d\x18";
 const SIGNATURE_SCAN_LIMIT: u64 = 4 * 1024 * 1024;
 const HEADER_PROBE_LIMIT: usize = 16;
-const NESTED_FALLBACK_SCAN_LIMIT: u64 = 64 * 1024;
+const DOS_HEADER_PROBE_LIMIT: usize = 64;
+const PE_SECTION_HEADER_SIZE: u64 = 40;
+const PE_MAX_SECTION_COUNT: u16 = 96;
+const LZ4_COPY_BUFFER_SIZE: usize = 256 * 1024;
 const SCAN_PROGRESS_INTERVAL_FILES: u64 = 128;
 const FINGERPRINT_FULL_READ_LIMIT: u64 = 1024 * 1024;
 const FINGERPRINT_SAMPLE_SIZE: u64 = 64 * 1024;
@@ -47,6 +52,14 @@ impl ArchiveFormat {
             Self::Zip => "ZIP",
             Self::Rar3 => "RAR3",
             Self::Rar5 => "RAR5",
+        }
+    }
+
+    fn extension(self) -> &'static str {
+        match self {
+            Self::SevenZip => "7z",
+            Self::Zip => "zip",
+            Self::Rar3 | Self::Rar5 => "rar",
         }
     }
 }
@@ -136,6 +149,7 @@ pub struct RecoveryUpdate {
     pub extracted_nested_archive_count: Option<u32>,
     pub skipped_nested_archive_count: Option<u32>,
     pub scanned_file_count: Option<u64>,
+    pub root_extraction_completed: Option<bool>,
 }
 
 impl RecoveryUpdate {
@@ -156,6 +170,7 @@ impl RecoveryUpdate {
             extracted_nested_archive_count: None,
             skipped_nested_archive_count: None,
             scanned_file_count: None,
+            root_extraction_completed: None,
         }
     }
 
@@ -178,7 +193,13 @@ impl RecoveryUpdate {
             extracted_nested_archive_count: None,
             skipped_nested_archive_count: None,
             scanned_file_count: None,
+            root_extraction_completed: None,
         }
+    }
+
+    fn with_root_extraction_completed(mut self) -> Self {
+        self.root_extraction_completed = Some(true);
+        self
     }
 
     fn with_recursive_context(
@@ -311,6 +332,52 @@ struct NestedArchiveTask {
     archive_path: PathBuf,
     depth: u32,
     inherited_password: Option<String>,
+}
+
+struct NestedOutputTransaction {
+    destination: PathBuf,
+    staging: PathBuf,
+    committed: bool,
+}
+
+impl NestedOutputTransaction {
+    fn new(destination: PathBuf) -> Self {
+        let staging = resolve_nested_staging_directory(&destination);
+        Self {
+            destination,
+            staging,
+            committed: false,
+        }
+    }
+
+    fn staging_directory(&self) -> &Path {
+        &self.staging
+    }
+
+    fn commit(&mut self) -> Result<(), RecoveryError> {
+        if !self.staging.is_dir() {
+            return Err(RecoveryError::Message(
+                "嵌套归档解压完成，但临时输出不存在。".into(),
+            ));
+        }
+        if self.destination.exists() {
+            return Err(RecoveryError::Message(format!(
+                "嵌套归档输出位置已被占用：{}",
+                path_for_display(&self.destination)
+            )));
+        }
+        fs::rename(&self.staging, &self.destination)?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for NestedOutputTransaction {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = fs::remove_dir_all(&self.staging);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -478,7 +545,41 @@ pub fn detect_archive_format(path: &Path) -> Result<ArchiveFormat, RecoveryError
 }
 
 fn detect_nested_archive_format(path: &Path) -> Result<ArchiveFormat, RecoveryError> {
-    detect_archive_format_with_limit(path, nested_signature_scan_limit)
+    if !path.is_file() {
+        return Err(RecoveryError::NotFound(path_for_display(path)));
+    }
+    let mut file = fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    let mut prefix = [0u8; DOS_HEADER_PROBE_LIMIT];
+    let prefix_length = file.read(&mut prefix)?;
+    let prefix = &prefix[..prefix_length];
+
+    if prefix.starts_with(LZ4_FRAME_SIGNATURE) {
+        return detect_lz4_inner_format(path, file);
+    }
+    if let Some(format) = detect_format_at_offset(prefix) {
+        return Ok(format);
+    }
+
+    let scan_start = if prefix.starts_with(b"MZ") {
+        pe_overlay_offset(&mut file, metadata.len()).ok_or(RecoveryError::UnsupportedFormat)?
+    } else if looks_like_embedded_archive_carrier(prefix) {
+        0
+    } else {
+        return Err(RecoveryError::UnsupportedFormat);
+    };
+    if scan_start >= metadata.len() {
+        return Err(RecoveryError::UnsupportedFormat);
+    }
+
+    file.seek(SeekFrom::Start(scan_start))?;
+    let scan_length = metadata
+        .len()
+        .saturating_sub(scan_start)
+        .min(SIGNATURE_SCAN_LIMIT) as usize;
+    let mut buffer = Vec::with_capacity(scan_length);
+    file.take(scan_length as u64).read_to_end(&mut buffer)?;
+    detect_format_in_buffer(&buffer, false).ok_or(RecoveryError::UnsupportedFormat)
 }
 
 fn detect_archive_format_with_limit(
@@ -493,15 +594,76 @@ fn detect_archive_format_with_limit(
     let mut prefix = [0u8; HEADER_PROBE_LIMIT];
     let prefix_length = file.read(&mut prefix)?;
     let prefix = &prefix[..prefix_length];
+    let scan_limit = scan_limit(prefix);
+    if prefix.starts_with(LZ4_FRAME_SIGNATURE) {
+        return detect_lz4_inner_format(path, file);
+    }
     if let Some(format) = detect_format_in_buffer(prefix, true) {
         return Ok(format);
     }
-    let scan_limit = metadata.len().min(scan_limit(prefix)) as usize;
+    let scan_limit = metadata.len().min(scan_limit) as usize;
     let mut buffer = Vec::with_capacity(scan_limit);
     buffer.extend_from_slice(prefix);
     file.take(scan_limit.saturating_sub(prefix_length) as u64)
         .read_to_end(&mut buffer)?;
     detect_format_in_buffer(&buffer, false).ok_or(RecoveryError::UnsupportedFormat)
+}
+
+fn detect_lz4_inner_format(
+    path: &Path,
+    mut file: fs::File,
+) -> Result<ArchiveFormat, RecoveryError> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut decoder =
+        Lz4Decoder::new(BufReader::new(file)).map_err(|error| lz4_decode_error(path, error))?;
+    let mut header = [0u8; HEADER_PROBE_LIMIT];
+    let header_length = decoder
+        .read(&mut header)
+        .map_err(|error| lz4_decode_error(path, error))?;
+    detect_format_at_offset(&header[..header_length]).ok_or(RecoveryError::UnsupportedFormat)
+}
+
+fn pe_overlay_offset(file: &mut fs::File, file_size: u64) -> Option<u64> {
+    let mut dos_header = [0u8; DOS_HEADER_PROBE_LIMIT];
+    file.seek(SeekFrom::Start(0)).ok()?;
+    file.read_exact(&mut dos_header).ok()?;
+    if !dos_header.starts_with(b"MZ") {
+        return None;
+    }
+
+    let pe_offset = u32::from_le_bytes(dos_header[0x3c..0x40].try_into().ok()?) as u64;
+    let mut coff_header = [0u8; 24];
+    file.seek(SeekFrom::Start(pe_offset)).ok()?;
+    file.read_exact(&mut coff_header).ok()?;
+    if !coff_header.starts_with(b"PE\0\0") {
+        return None;
+    }
+
+    let section_count = u16::from_le_bytes(coff_header[6..8].try_into().ok()?);
+    if section_count == 0 || section_count > PE_MAX_SECTION_COUNT {
+        return None;
+    }
+    let optional_header_size = u16::from_le_bytes(coff_header[20..22].try_into().ok()?) as u64;
+    let section_table_offset = pe_offset
+        .checked_add(24)?
+        .checked_add(optional_header_size)?;
+    let section_table_size = u64::from(section_count).checked_mul(PE_SECTION_HEADER_SIZE)?;
+    if section_table_offset.checked_add(section_table_size)? > file_size {
+        return None;
+    }
+
+    let mut overlay_offset = section_table_offset.checked_add(section_table_size)?;
+    let mut section_header = [0u8; PE_SECTION_HEADER_SIZE as usize];
+    for index in 0..section_count {
+        let offset = section_table_offset
+            .checked_add(u64::from(index).checked_mul(PE_SECTION_HEADER_SIZE)?)?;
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        file.read_exact(&mut section_header).ok()?;
+        let raw_size = u32::from_le_bytes(section_header[16..20].try_into().ok()?) as u64;
+        let raw_offset = u32::from_le_bytes(section_header[20..24].try_into().ok()?) as u64;
+        overlay_offset = overlay_offset.max(raw_offset.checked_add(raw_size)?);
+    }
+    Some(overlay_offset.min(file_size))
 }
 
 fn detect_format_in_buffer(buffer: &[u8], require_start: bool) -> Option<ArchiveFormat> {
@@ -526,17 +688,81 @@ fn detect_format_at_offset(buffer: &[u8]) -> Option<ArchiveFormat> {
     }
 }
 
-fn nested_signature_scan_limit(prefix: &[u8]) -> u64 {
-    if looks_like_embedded_archive_carrier(prefix) {
-        SIGNATURE_SCAN_LIMIT
-    } else {
-        NESTED_FALLBACK_SCAN_LIMIT
+fn lz4_decode_error(path: &Path, error: std::io::Error) -> RecoveryError {
+    RecoveryError::Message(format!(
+        "LZ4 外层解码失败（{}）：{error}",
+        path_for_display(path)
+    ))
+}
+
+fn is_lz4_frame(path: &Path) -> Result<bool, RecoveryError> {
+    let mut file = fs::File::open(path)?;
+    let mut signature = [0u8; LZ4_FRAME_SIGNATURE.len()];
+    let length = file.read(&mut signature)?;
+    Ok(length == signature.len() && signature == LZ4_FRAME_SIGNATURE)
+}
+
+fn materialize_lz4_archive(
+    source: &Path,
+    format: ArchiveFormat,
+    work_directory: &Path,
+    cancellation: &CancellationToken,
+) -> Result<Option<PathBuf>, RecoveryError> {
+    if !is_lz4_frame(source)? {
+        return Ok(None);
     }
+
+    let normalized_path = work_directory.join(format!("lz4-decoded.{}", format.extension()));
+    let partial_path = work_directory.join("lz4-decoded.partial");
+    let result = (|| {
+        let input = BufReader::new(fs::File::open(source)?);
+        let mut decoder =
+            Lz4Decoder::new(input).map_err(|error| lz4_decode_error(source, error))?;
+        let mut output = BufWriter::new(fs::File::create(&partial_path)?);
+        let mut buffer = vec![0u8; LZ4_COPY_BUFFER_SIZE];
+
+        loop {
+            ensure_not_cancelled(cancellation)?;
+            let length = decoder
+                .read(&mut buffer)
+                .map_err(|error| lz4_decode_error(source, error))?;
+            if length == 0 {
+                break;
+            }
+            output.write_all(&buffer[..length])?;
+        }
+        ensure_not_cancelled(cancellation)?;
+        output.flush()?;
+        drop(output);
+        let (_, finish_result) = decoder.finish();
+        finish_result.map_err(|error| lz4_decode_error(source, error))?;
+
+        let mut normalized = fs::File::open(&partial_path)?;
+        let mut header = [0u8; HEADER_PROBE_LIMIT];
+        let header_length = normalized.read(&mut header)?;
+        let decoded_format = detect_format_at_offset(&header[..header_length])
+            .ok_or(RecoveryError::UnsupportedFormat)?;
+        if decoded_format != format {
+            return Err(RecoveryError::Message(format!(
+                "LZ4 解包后的归档格式与分析结果不一致：预期 {}，实际 {}。",
+                format.label(),
+                decoded_format.label()
+            )));
+        }
+
+        fs::rename(&partial_path, &normalized_path)?;
+        Ok(normalized_path.clone())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&partial_path);
+        let _ = fs::remove_file(&normalized_path);
+    }
+    result.map(Some)
 }
 
 fn looks_like_embedded_archive_carrier(prefix: &[u8]) -> bool {
-    prefix.starts_with(b"MZ")
-        || prefix.starts_with(b"\xff\xd8\xff")
+    prefix.starts_with(b"\xff\xd8\xff")
         || prefix.starts_with(b"\x89PNG\r\n\x1a\n")
         || prefix.starts_with(b"GIF87a")
         || prefix.starts_with(b"GIF89a")
@@ -546,9 +772,6 @@ fn looks_like_embedded_archive_carrier(prefix: &[u8]) -> bool {
         || prefix.starts_with(b"\x1aE\xdf\xa3")
         || (prefix.len() >= 12 && &prefix[4..8] == b"ftyp")
         || (prefix.len() >= 12 && prefix.starts_with(b"RIFF") && &prefix[8..12] == b"WEBP")
-        || prefix
-            .iter()
-            .all(|byte| byte.is_ascii_whitespace() || byte.is_ascii_graphic())
 }
 
 pub fn path_for_display(path: &Path) -> String {
@@ -677,11 +900,15 @@ pub fn recover_and_extract_recursive_lazy(
     }
 
     let mut state = RecursiveRecoveryState::new(options);
-    report(state.update(
-        "外层解压已完成，正在扫描第 1 层输出。",
-        1,
-        &job.output_directory,
-    ));
+    report(
+        state
+            .update(
+                "外层解压已完成，正在扫描第 1 层输出。",
+                1,
+                &job.output_directory,
+            )
+            .with_root_extraction_completed(),
+    );
     let initial_limit = state.collection_limit();
     let initial_scan_base = state.scanned_files;
     let nested_archives = find_new_or_changed_archives(
@@ -768,9 +995,10 @@ pub fn recover_and_extract_recursive_lazy(
         ));
         let nested_output = resolve_nested_output_directory(&nested.archive_path);
         let before_nested_extraction = capture_file_snapshot(&nested_output, cancellation)?;
+        let mut output_transaction = NestedOutputTransaction::new(nested_output.clone());
         let nested_job = RecoveryJob {
             archive_path: nested.archive_path.clone(),
-            output_directory: nested_output.clone(),
+            output_directory: output_transaction.staging_directory().to_path_buf(),
             dictionary_path: job.dictionary_path.clone(),
             dictionary_count: job.dictionary_count,
             known_password: nested.inherited_password.clone(),
@@ -786,16 +1014,36 @@ pub fn recover_and_extract_recursive_lazy(
             state.options.compute_mode,
             &mut dictionary_provider,
             &mut |update| {
-                report(update.with_recursive_context(
+                let mut update = update.with_recursive_context(
                     nested.depth,
                     &nested.archive_path,
                     &context_state,
-                ))
+                );
+                if update.phase == RecoveryPhase::Extracting {
+                    update.message = format!(
+                        "正在安全解压嵌套归档到 {}。",
+                        path_for_display(&nested_output)
+                    );
+                }
+                report(update)
             },
         );
 
         match nested_result {
-            Ok(result) if result.success => {
+            Ok(mut result) if result.success => {
+                if let Err(error) = output_transaction.commit() {
+                    state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
+                    report(state.update(
+                        format!(
+                            "嵌套压缩包 {} 的临时输出无法发布，已自动清理：{error}",
+                            archive_display_name(&nested.archive_path)
+                        ),
+                        nested.depth,
+                        &nested.archive_path,
+                    ));
+                    continue;
+                }
+                result.output_directory = nested_output.clone();
                 state.extracted_nested_archives = state.extracted_nested_archives.saturating_add(1);
                 if let Some(record) = result.recovered_archive.clone() {
                     recovered_archives.push(record);
@@ -1041,6 +1289,20 @@ fn resolve_available_nested_directory(preferred: &Path) -> PathBuf {
     parent.join(format!("{base_name}-{}", std::process::id()))
 }
 
+fn resolve_nested_staging_directory(destination: &Path) -> PathBuf {
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let base_name = destination
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "archive".into());
+    let preferred = parent.join(format!(
+        ".{base_name}.arcrecall-{}.partial",
+        std::process::id()
+    ));
+    resolve_available_nested_directory(&preferred)
+}
+
 fn archive_display_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -1059,17 +1321,42 @@ fn recover_single_archive(
     validate_base_job_inputs(job, tools)?;
     let analysis = analyze_archive(&job.archive_path)?;
     fs::create_dir_all(&job.work_directory)?;
+    let mut processing_job = job.clone();
 
+    if is_lz4_frame(&job.archive_path)? {
+        report(RecoveryUpdate::stage(
+            RecoveryPhase::Preparing,
+            Some("LZ4"),
+            format!(
+                "检测到 LZ4 Frame，正在流式解包内部 {} 归档。",
+                analysis.format.label()
+            ),
+        ));
+        processing_job.archive_path = materialize_lz4_archive(
+            &job.archive_path,
+            analysis.format,
+            &job.work_directory,
+            cancellation,
+        )?
+        .ok_or_else(|| RecoveryError::Message("LZ4 临时归档准备失败。".into()))?;
+    }
+
+    validate_archive_container(
+        &processing_job.archive_path,
+        analysis.format,
+        tools,
+        cancellation,
+    )?;
     ensure_not_cancelled(cancellation)?;
     report(RecoveryUpdate::stage(
         RecoveryPhase::Verifying,
         Some("7-Zip"),
         "正在检查归档是否无需密码。",
     ));
-    if verify_password(&job.archive_path, "", tools, cancellation)? {
-        extract_with_password(job, tools, "", cancellation, report)?;
+    if verify_password(&processing_job.archive_path, "", tools, cancellation)? {
+        extract_with_password(&processing_job, tools, "", cancellation, report)?;
         return Ok(attach_recovered_archive(
-            success_result(job, None, "7-Zip", "归档无需密码，已直接解压。"),
+            success_result(&processing_job, None, "7-Zip", "归档无需密码，已直接解压。"),
             &analysis,
             &job.archive_path,
         ));
@@ -1085,11 +1372,11 @@ fn recover_single_archive(
             Some("7-Zip"),
             "正在验证手动输入或历史记录中的密码。",
         ));
-        if verify_password(&job.archive_path, password, tools, cancellation)? {
-            extract_with_password(job, tools, password, cancellation, report)?;
+        if verify_password(&processing_job.archive_path, password, tools, cancellation)? {
+            extract_with_password(&processing_job, tools, password, cancellation, report)?;
             return Ok(attach_recovered_archive(
                 success_result(
-                    job,
+                    &processing_job,
                     Some(password.to_owned()),
                     "优先密码",
                     "优先密码验证通过，归档已解压。",
@@ -1111,7 +1398,7 @@ fn recover_single_archive(
     let dictionary_job = RecoveryJob {
         dictionary_path: dictionary.path,
         dictionary_count: dictionary.candidate_count,
-        ..job.clone()
+        ..processing_job
     };
     validate_dictionary_input(&dictionary_job)?;
     report(RecoveryUpdate::progress(
@@ -1188,6 +1475,7 @@ fn recover_with_dictionary(
     if let Some(records) = records.as_ref() {
         if tools.hashcat.is_file() {
             for &(device_type, engine) in hashcat_device_plan(compute_mode) {
+                let mut device_completed = false;
                 for (record_index, record) in records.iter().enumerate() {
                     ensure_not_cancelled(cancellation)?;
                     let hash_file = job
@@ -1208,7 +1496,9 @@ fn recover_with_dictionary(
                         ));
                         match run_hashcat(job, tools, &hash_file, mode, device_type, cancellation) {
                             Ok(attempt) => {
-                                hashcat_completed |= attempt == CrackAttempt::Exhausted;
+                                let completed = attempt == CrackAttempt::Exhausted;
+                                device_completed |= completed;
+                                hashcat_completed |= completed;
                                 if let Some(result) = verify_crack_attempt(
                                     attempt,
                                     job,
@@ -1231,10 +1521,20 @@ fn recover_with_dictionary(
                         }
                     }
                 }
+                if device_completed {
+                    break;
+                }
             }
         } else {
             fallback_reasons.push("Hashcat 不可用".into());
         }
+    }
+
+    if hashcat_completed {
+        return Ok(exhausted_result(
+            job,
+            "Hashcat 已完成当前字典，未命中密码。",
+        ));
     }
 
     let mut john_completed = false;
@@ -1271,7 +1571,7 @@ fn recover_with_dictionary(
         }
     }
 
-    if john_completed || hashcat_completed {
+    if john_completed {
         return Ok(exhausted_result(
             job,
             "可用的外部恢复引擎已完成，当前字典未命中密码。",
@@ -1767,6 +2067,72 @@ fn seven_zip_password_arg(password: &str) -> OsString {
     arg
 }
 
+fn validate_archive_container(
+    archive: &Path,
+    expected_format: ArchiveFormat,
+    tools: &RecoveryToolPaths,
+    cancellation: &CancellationToken,
+) -> Result<(), RecoveryError> {
+    let mut request = ProcessRequest::new(&tools.seven_zip);
+    request.args = vec![
+        OsString::from("l"),
+        OsString::from("-slt"),
+        OsString::from("-y"),
+        OsString::from("-bd"),
+        OsString::from("-p__arcrecall_probe__"),
+        archive.as_os_str().to_owned(),
+    ];
+    request.current_dir = tools.seven_zip.parent().map(Path::to_path_buf);
+    request.timeout = Duration::from_secs(2 * 60);
+    request.max_output_bytes = 1024 * 1024;
+    let output = run_checked(&request, cancellation)?;
+    let detected_types = seven_zip_archive_types(&output);
+
+    if detected_types
+        .iter()
+        .any(|detected| archive_type_matches(expected_format, detected))
+        || (detected_types.is_empty() && is_password_rejection(&output))
+    {
+        return Ok(());
+    }
+
+    if !detected_types.is_empty() {
+        return Err(RecoveryError::InvalidArchive(format!(
+            "7-Zip 将候选识别为 {}，不是受支持的 {} 归档",
+            detected_types.join(" / "),
+            expected_format.label()
+        )));
+    }
+    Err(RecoveryError::InvalidArchive(process_failure_detail(
+        &output,
+    )))
+}
+
+fn seven_zip_archive_types(output: &ProcessOutput) -> Vec<String> {
+    output
+        .stdout
+        .lines()
+        .chain(output.stderr.lines())
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("Type = ")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+fn archive_type_matches(format: ArchiveFormat, detected: &str) -> bool {
+    match format {
+        ArchiveFormat::SevenZip => detected.eq_ignore_ascii_case("7z"),
+        ArchiveFormat::Zip => detected.eq_ignore_ascii_case("zip"),
+        ArchiveFormat::Rar3 | ArchiveFormat::Rar5 => detected
+            .get(..3)
+            .is_some_and(|value| value.eq_ignore_ascii_case("rar")),
+    }
+}
+
 fn verify_password(
     archive: &Path,
     password: &str,
@@ -2061,6 +2427,63 @@ Device ID #2
     }
 
     #[test]
+    fn detects_and_materializes_lz4_wrapped_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("inner.rar");
+        let wrapped = dir.path().join("renamed.lz4");
+        let work_directory = dir.path().join("work");
+        let mut contents = RAR5_SIGNATURE.to_vec();
+        contents.extend_from_slice(b"arc-recall-lz4-fixture");
+        fs::write(&archive, &contents).unwrap();
+        write_lz4_frame(&archive, &wrapped);
+        fs::create_dir_all(&work_directory).unwrap();
+
+        assert_eq!(
+            detect_archive_format(&wrapped).unwrap(),
+            ArchiveFormat::Rar5
+        );
+        let normalized = materialize_lz4_archive(
+            &wrapped,
+            ArchiveFormat::Rar5,
+            &work_directory,
+            &CancellationToken::default(),
+        )
+        .unwrap()
+        .expect("LZ4 wrapper should be materialized");
+
+        assert_eq!(
+            normalized.extension().and_then(|value| value.to_str()),
+            Some("rar")
+        );
+        assert_eq!(fs::read(normalized).unwrap(), contents);
+    }
+
+    #[test]
+    fn cancelled_lz4_materialization_removes_partial_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("inner.rar");
+        let wrapped = dir.path().join("wrapped.lz4");
+        let work_directory = dir.path().join("work");
+        fs::write(&archive, RAR5_SIGNATURE).unwrap();
+        write_lz4_frame(&archive, &wrapped);
+        fs::create_dir_all(&work_directory).unwrap();
+        let cancellation = CancellationToken::default();
+        cancellation.cancel();
+
+        assert!(matches!(
+            materialize_lz4_archive(
+                &wrapped,
+                ArchiveFormat::Rar5,
+                &work_directory,
+                &cancellation,
+            ),
+            Err(RecoveryError::Cancelled)
+        ));
+        assert!(!work_directory.join("lz4-decoded.partial").exists());
+        assert!(!work_directory.join("lz4-decoded.rar").exists());
+    }
+
+    #[test]
     fn content_fingerprint_is_stable_after_rename() {
         let directory = tempfile::tempdir().unwrap();
         let original = directory.path().join("original.bin");
@@ -2125,13 +2548,30 @@ Device ID #2
             ArchiveFormat::SevenZip
         );
 
-        let mut arbitrary_prefix = vec![0u8; NESTED_FALLBACK_SCAN_LIMIT as usize];
+        let mut arbitrary_prefix = vec![0u8; 64 * 1024];
         arbitrary_prefix[32 * 1024..32 * 1024 + SEVEN_ZIP_SIGNATURE.len()]
             .copy_from_slice(SEVEN_ZIP_SIGNATURE);
         let arbitrary_path = dir.path().join("asset.rpgmvp");
         fs::write(&arbitrary_path, arbitrary_prefix).unwrap();
+        assert!(matches!(
+            detect_nested_archive_format(&arbitrary_path),
+            Err(RecoveryError::UnsupportedFormat)
+        ));
+
+        let mut pe = minimal_pe_fixture();
+        pe[4 * 1024..4 * 1024 + ZIP_SIGNATURES[0].len()].copy_from_slice(ZIP_SIGNATURES[0]);
+        let dll_path = dir.path().join("MonoPosixHelper.dll");
+        fs::write(&dll_path, &pe).unwrap();
+        assert!(matches!(
+            detect_nested_archive_format(&dll_path),
+            Err(RecoveryError::UnsupportedFormat)
+        ));
+
+        pe.extend_from_slice(SEVEN_ZIP_SIGNATURE);
+        let sfx_path = dir.path().join("self-extracting.exe");
+        fs::write(&sfx_path, pe).unwrap();
         assert_eq!(
-            detect_nested_archive_format(&arbitrary_path).unwrap(),
+            detect_nested_archive_format(&sfx_path).unwrap(),
             ArchiveFormat::SevenZip
         );
 
@@ -2153,6 +2593,38 @@ Device ID #2
                 "failed to detect {file_name}"
             );
         }
+    }
+
+    #[test]
+    fn nested_output_transaction_publishes_only_after_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("nested-output");
+        let mut transaction = NestedOutputTransaction::new(destination.clone());
+        fs::create_dir_all(transaction.staging_directory()).unwrap();
+        fs::write(transaction.staging_directory().join("payload.txt"), b"ok").unwrap();
+
+        assert!(!destination.exists());
+        transaction.commit().unwrap();
+        assert_eq!(
+            fs::read_to_string(destination.join("payload.txt")).unwrap(),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn nested_output_transaction_removes_uncommitted_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("nested-output");
+        let staging = {
+            let transaction = NestedOutputTransaction::new(destination.clone());
+            let staging = transaction.staging_directory().to_path_buf();
+            fs::create_dir_all(&staging).unwrap();
+            fs::write(staging.join("partial.txt"), b"partial").unwrap();
+            staging
+        };
+
+        assert!(!staging.exists());
+        assert!(!destination.exists());
     }
 
     #[test]
@@ -2259,6 +2731,33 @@ Device ID #2
         assert!(!is_password_rejection(&broken_archive));
     }
 
+    #[test]
+    fn seven_zip_type_probe_rejects_pe_and_accepts_supported_archives() {
+        let pe = ProcessOutput {
+            exit_code: Some(0),
+            success: true,
+            stdout: "Path = helper.dll\nType = PE\nPhysical Size = 780288\n".into(),
+            stderr: String::new(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+        };
+        let archives = ProcessOutput {
+            exit_code: Some(0),
+            success: true,
+            stdout: "Type = 7z\nType = zip\nType = Rar5\n".into(),
+            stderr: String::new(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+        };
+
+        assert_eq!(seven_zip_archive_types(&pe), ["PE"]);
+        assert!(!archive_type_matches(ArchiveFormat::Zip, "PE"));
+        assert!(archive_type_matches(ArchiveFormat::SevenZip, "7z"));
+        assert!(archive_type_matches(ArchiveFormat::Zip, "zip"));
+        assert!(archive_type_matches(ArchiveFormat::Rar5, "Rar5"));
+        assert_eq!(seven_zip_archive_types(&archives), ["7z", "zip", "Rar5"]);
+    }
+
     /// Real 7-Zip CLI checks. Skipped when no 7z.exe is available.
     #[test]
     fn seven_zip_verifies_and_extracts_encrypted_7z_and_zip() {
@@ -2321,6 +2820,58 @@ Device ID #2
     }
 
     #[test]
+    fn recovery_decodes_lz4_before_known_password_extraction() {
+        let Some(seven_zip) = locate_seven_zip() else {
+            eprintln!("skip: 7z.exe not found");
+            return;
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let payload = dir.path().join("payload.txt");
+        let archive = dir.path().join("encrypted.7z");
+        let wrapped = dir.path().join("encrypted.7z.lz4");
+        let output_directory = dir.path().join("out");
+        let work_directory = dir.path().join("work");
+        let password = "lz4-known-password";
+        fs::write(&payload, b"lz4-recovery-ok").unwrap();
+        create_encrypted_archive(&seven_zip, "-t7z", password, &archive, &payload);
+        write_lz4_frame(&archive, &wrapped);
+
+        let tools = RecoveryToolPaths {
+            seven_zip,
+            hashcat: PathBuf::from("hashcat-not-required"),
+            john_tools_directory: PathBuf::from("john-not-required"),
+            perl: PathBuf::from("perl-not-required"),
+        };
+        let job = RecoveryJob {
+            archive_path: wrapped,
+            output_directory: output_directory.clone(),
+            dictionary_path: dir.path().join("unused.dict"),
+            dictionary_count: 0,
+            known_password: Some(password.into()),
+            work_directory,
+        };
+        let mut updates = Vec::new();
+        let result = recover_and_extract_lazy(
+            &job,
+            &tools,
+            &CancellationToken::default(),
+            || panic!("known-password recovery must not prepare the dictionary"),
+            |update| updates.push(update),
+        )
+        .expect("recover LZ4-wrapped archive");
+
+        assert!(result.success, "{}", result.message);
+        assert_eq!(
+            fs::read_to_string(output_directory.join("payload.txt")).unwrap(),
+            "lz4-recovery-ok"
+        );
+        assert!(updates.iter().any(|update| {
+            update.phase == RecoveryPhase::Preparing && update.engine.as_deref() == Some("LZ4")
+        }));
+    }
+
+    #[test]
     fn seven_zip_extracts_unencrypted_archive_without_password() {
         let Some(seven_zip) = locate_seven_zip() else {
             eprintln!("skip: 7z.exe not found");
@@ -2374,6 +2925,35 @@ Device ID #2
             fs::read_to_string(output_directory.join("plain.txt")).unwrap(),
             "no-password"
         );
+    }
+
+    #[test]
+    fn seven_zip_container_validation_rejects_pe_with_zip_bytes() {
+        let Some(seven_zip) = locate_seven_zip() else {
+            eprintln!("skip: 7z.exe not found");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let dll_path = dir.path().join("MonoPosixHelper.dll");
+        let mut pe = minimal_pe_fixture();
+        pe[4 * 1024..4 * 1024 + ZIP_SIGNATURES[0].len()].copy_from_slice(ZIP_SIGNATURES[0]);
+        fs::write(&dll_path, pe).unwrap();
+        let tools = RecoveryToolPaths {
+            seven_zip,
+            hashcat: PathBuf::from("hashcat-not-required"),
+            john_tools_directory: PathBuf::from("john-not-required"),
+            perl: PathBuf::from("perl-not-required"),
+        };
+
+        assert!(matches!(
+            validate_archive_container(
+                &dll_path,
+                ArchiveFormat::Zip,
+                &tools,
+                &CancellationToken::default(),
+            ),
+            Err(RecoveryError::InvalidArchive(message)) if message.contains("PE")
+        ));
     }
 
     #[test]
@@ -3014,6 +3594,39 @@ Device ID #2
             .join("tests")
             .join("fixtures")
             .join("rar")
+    }
+
+    fn write_lz4_frame(source: &Path, destination: &Path) {
+        let mut input = BufReader::new(fs::File::open(source).unwrap());
+        let output = BufWriter::new(fs::File::create(destination).unwrap());
+        let mut encoder = lz4::EncoderBuilder::new().build(output).unwrap();
+        std::io::copy(&mut input, &mut encoder).unwrap();
+        let (mut output, result) = encoder.finish();
+        result.unwrap();
+        output.flush().unwrap();
+    }
+
+    fn minimal_pe_fixture() -> Vec<u8> {
+        const PE_OFFSET: usize = 0x80;
+        const OPTIONAL_HEADER_SIZE: usize = 0xf0;
+        const SECTION_RAW_OFFSET: usize = 0x400;
+        const SECTION_RAW_SIZE: usize = 0x2000;
+        let section_table_offset = PE_OFFSET + 24 + OPTIONAL_HEADER_SIZE;
+        let mut bytes = vec![0u8; SECTION_RAW_OFFSET + SECTION_RAW_SIZE];
+        bytes[..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&(PE_OFFSET as u32).to_le_bytes());
+        bytes[PE_OFFSET..PE_OFFSET + 4].copy_from_slice(b"PE\0\0");
+        bytes[PE_OFFSET + 4..PE_OFFSET + 6].copy_from_slice(&0x8664u16.to_le_bytes());
+        bytes[PE_OFFSET + 6..PE_OFFSET + 8].copy_from_slice(&1u16.to_le_bytes());
+        bytes[PE_OFFSET + 20..PE_OFFSET + 22]
+            .copy_from_slice(&(OPTIONAL_HEADER_SIZE as u16).to_le_bytes());
+        bytes[PE_OFFSET + 22..PE_OFFSET + 24].copy_from_slice(&0x2022u16.to_le_bytes());
+        bytes[PE_OFFSET + 24..PE_OFFSET + 26].copy_from_slice(&0x20bu16.to_le_bytes());
+        bytes[section_table_offset + 16..section_table_offset + 20]
+            .copy_from_slice(&(SECTION_RAW_SIZE as u32).to_le_bytes());
+        bytes[section_table_offset + 20..section_table_offset + 24]
+            .copy_from_slice(&(SECTION_RAW_OFFSET as u32).to_le_bytes());
+        bytes
     }
 
     fn locate_seven_zip() -> Option<PathBuf> {

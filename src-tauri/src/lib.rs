@@ -1,6 +1,8 @@
 mod logging;
 
+use std::any::Any;
 use std::collections::{BTreeMap, VecDeque};
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -210,9 +212,50 @@ struct RecoveryTaskStatus {
     extracted_nested_archive_count: u32,
     skipped_nested_archive_count: u32,
     scanned_file_count: u64,
+    root_extraction_completed: bool,
     depth_limit_reached: bool,
     count_limit_reached: bool,
     events: VecDeque<RecoveryTaskEvent>,
+}
+
+struct RecoveryTaskCompletionGuard {
+    status: Arc<Mutex<RecoveryTaskStatus>>,
+    work_directory: PathBuf,
+    finalized: bool,
+}
+
+impl RecoveryTaskCompletionGuard {
+    fn new(status: Arc<Mutex<RecoveryTaskStatus>>, work_directory: PathBuf) -> Self {
+        Self {
+            status,
+            work_directory,
+            finalized: false,
+        }
+    }
+
+    fn mark_finalized(&mut self) {
+        self.finalized = true;
+    }
+}
+
+impl Drop for RecoveryTaskCompletionGuard {
+    fn drop(&mut self) {
+        if !self.finalized {
+            let mut status = match self.status.lock() {
+                Ok(status) => status,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if status.running {
+                status.running = false;
+                status.completed = true;
+                status.success = false;
+                status.phase = RecoveryPhase::Failed;
+                status.message = "后台恢复任务异常终止，已自动停止并清理临时文件。".into();
+                status.elapsed_ms = current_time_ms().saturating_sub(status.started_at_ms);
+            }
+        }
+        let _ = std::fs::remove_dir_all(&self.work_directory);
+    }
 }
 
 fn default_recursive_recovery() -> bool {
@@ -369,16 +412,56 @@ fn write_log(
 fn install_panic_logger(logger: Arc<LogStore>) {
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
+        let panic_message = panic_payload_message(panic_info.payload());
+        let location = panic_info
+            .location()
+            .map(|location| {
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
+            })
+            .unwrap_or_else(|| "unknown".into());
+        let thread = std::thread::current()
+            .name()
+            .map(str::to_owned)
+            .unwrap_or_else(|| "unnamed".into());
         write_log(
             &logger,
             LogLevel::Error,
             "desktop",
             "app.panic",
             "应用发生未处理异常。",
-            std::iter::empty(),
+            [
+                ("panic".into(), panic_message),
+                ("location".into(), location),
+                ("thread".into(), thread),
+            ],
         );
         previous_hook(panic_info);
     }));
+}
+
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|value| (*value).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "未知 panic 载荷".into())
+}
+
+fn catch_recovery_panic<T>(
+    operation: impl FnOnce() -> Result<T, RecoveryError>,
+) -> Result<T, RecoveryError> {
+    match std::panic::catch_unwind(AssertUnwindSafe(operation)) {
+        Ok(outcome) => outcome,
+        Err(payload) => Err(RecoveryError::Message(format!(
+            "后台恢复任务异常终止：{}",
+            panic_payload_message(payload.as_ref())
+        ))),
+    }
 }
 
 #[tauri::command]
@@ -1765,6 +1848,7 @@ async fn recovery_start(
         extracted_nested_archive_count: 0,
         skipped_nested_archive_count: 0,
         scanned_file_count: 0,
+        root_extraction_completed: false,
         depth_limit_reached: false,
         count_limit_reached: false,
         events: initial_events,
@@ -1810,93 +1894,107 @@ async fn recovery_start(
         work_directory: work_directory.clone(),
     };
     let status_for_worker = Arc::clone(&status);
+    let status_for_updates = Arc::clone(&status);
     let status_for_dictionary = Arc::clone(&status);
     let dictionary_database_path = state.paths.database.clone();
     let dictionary_cancellation = cancellation.clone();
     let success_database_path = state.paths.database.clone();
     let logger_for_worker = Arc::clone(&state.logger);
+    let logger_for_updates = Arc::clone(&state.logger);
     let worker_task_id = initial.task_id.clone();
+    let update_task_id = initial.task_id.clone();
     std::thread::spawn(move || {
+        let mut completion_guard =
+            RecoveryTaskCompletionGuard::new(Arc::clone(&status_for_worker), work_directory);
         let mut last_logged_phase = None;
-        let outcome = recover_and_extract_recursive_lazy(
-            &job,
-            &tools,
-            &cancellation,
-            RecursiveRecoveryOptions {
-                enabled: initial.recursive_enabled,
-                max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
-                max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
-                compute_mode: initial.compute_mode,
-            },
-            move || {
-                if dictionary_cancellation.is_cancelled() {
-                    return Err(RecoveryError::Cancelled);
-                }
-                let store =
-                    DictionaryCandidateStore::open(dictionary_database_path).map_err(|error| {
-                        RecoveryError::Message(format!("打开全局字典失败：{error}"))
-                    })?;
-                let candidate_count = store.export_wordlist(&dictionary_path).map_err(|error| {
-                    RecoveryError::Message(format!("准备恢复字典失败：{error}"))
-                })?;
-                if let Ok(mut task_status) = status_for_dictionary.lock() {
-                    task_status.candidate_count = candidate_count;
-                }
-                Ok(RecoveryDictionary {
-                    path: dictionary_path,
-                    candidate_count,
-                })
-            },
-            |update| {
-                let event_update = update.clone();
-                if last_logged_phase != Some(update.phase) {
-                    write_log(
-                        &logger_for_worker,
-                        LogLevel::Debug,
-                        "recovery",
-                        "recovery.phase_changed",
-                        "恢复任务阶段已切换。",
-                        [
-                            ("task_id".into(), worker_task_id.clone()),
-                            ("phase".into(), format!("{:?}", update.phase).to_lowercase()),
-                            ("engine".into(), update.engine.clone().unwrap_or_default()),
-                        ],
-                    );
-                    last_logged_phase = Some(update.phase);
-                }
-                if let Ok(mut task_status) = status_for_worker.lock() {
-                    task_status.phase = update.phase;
-                    task_status.engine = update.engine;
-                    task_status.message = update.message;
-                    if let Some(attempted_count) = update.attempted_count {
-                        task_status.attempted_count = attempted_count;
+        let outcome = catch_recovery_panic(|| {
+            recover_and_extract_recursive_lazy(
+                &job,
+                &tools,
+                &cancellation,
+                RecursiveRecoveryOptions {
+                    enabled: initial.recursive_enabled,
+                    max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
+                    max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
+                    compute_mode: initial.compute_mode,
+                },
+                move || {
+                    if dictionary_cancellation.is_cancelled() {
+                        return Err(RecoveryError::Cancelled);
                     }
-                    if let Some(total_count) = update.total_count {
-                        task_status.candidate_count = total_count;
+                    let store = DictionaryCandidateStore::open(dictionary_database_path).map_err(
+                        |error| RecoveryError::Message(format!("打开全局字典失败：{error}")),
+                    )?;
+                    let candidate_count =
+                        store.export_wordlist(&dictionary_path).map_err(|error| {
+                            RecoveryError::Message(format!("准备恢复字典失败：{error}"))
+                        })?;
+                    if let Ok(mut task_status) = status_for_dictionary.lock() {
+                        task_status.candidate_count = candidate_count;
                     }
-                    if let Some(recursive_depth) = update.recursive_depth {
-                        task_status.recursive_depth = recursive_depth;
+                    Ok(RecoveryDictionary {
+                        path: dictionary_path,
+                        candidate_count,
+                    })
+                },
+                |update| {
+                    let event_update = update.clone();
+                    if last_logged_phase != Some(update.phase) {
+                        write_log(
+                            &logger_for_updates,
+                            LogLevel::Debug,
+                            "recovery",
+                            "recovery.phase_changed",
+                            "恢复任务阶段已切换。",
+                            [
+                                ("task_id".into(), update_task_id.clone()),
+                                ("phase".into(), format!("{:?}", update.phase).to_lowercase()),
+                                ("engine".into(), update.engine.clone().unwrap_or_default()),
+                            ],
+                        );
+                        last_logged_phase = Some(update.phase);
                     }
-                    if let Some(current_archive_path) = update.current_archive_path {
-                        task_status.current_archive_path = Some(current_archive_path);
+                    if let Ok(mut task_status) = status_for_updates.lock() {
+                        task_status.phase = update.phase;
+                        task_status.engine = update.engine;
+                        task_status.message = update.message;
+                        if let Some(attempted_count) = update.attempted_count {
+                            task_status.attempted_count = attempted_count;
+                        }
+                        if let Some(total_count) = update.total_count {
+                            task_status.candidate_count = total_count;
+                        }
+                        if let Some(recursive_depth) = update.recursive_depth {
+                            task_status.recursive_depth = recursive_depth;
+                        }
+                        if let Some(current_archive_path) = update.current_archive_path {
+                            task_status.current_archive_path = Some(current_archive_path);
+                        }
+                        if let Some(nested_archive_count) = update.nested_archive_count {
+                            task_status.nested_archive_count = nested_archive_count;
+                        }
+                        if let Some(extracted_count) = update.extracted_nested_archive_count {
+                            task_status.extracted_nested_archive_count = extracted_count;
+                        }
+                        if let Some(skipped_count) = update.skipped_nested_archive_count {
+                            task_status.skipped_nested_archive_count = skipped_count;
+                        }
+                        if let Some(scanned_file_count) = update.scanned_file_count {
+                            task_status.scanned_file_count = scanned_file_count;
+                        }
+                        if let Some(root_extraction_completed) = update.root_extraction_completed {
+                            task_status.root_extraction_completed = root_extraction_completed;
+                        }
+                        append_recovery_update_event(&mut task_status, &event_update);
                     }
-                    if let Some(nested_archive_count) = update.nested_archive_count {
-                        task_status.nested_archive_count = nested_archive_count;
-                    }
-                    if let Some(extracted_count) = update.extracted_nested_archive_count {
-                        task_status.extracted_nested_archive_count = extracted_count;
-                    }
-                    if let Some(skipped_count) = update.skipped_nested_archive_count {
-                        task_status.skipped_nested_archive_count = skipped_count;
-                    }
-                    if let Some(scanned_file_count) = update.scanned_file_count {
-                        task_status.scanned_file_count = scanned_file_count;
-                    }
-                    append_recovery_update_event(&mut task_status, &event_update);
-                }
-            },
-        );
-        if let Ok(mut task_status) = status_for_worker.lock() {
+                },
+            )
+        });
+        let mut task_status = match status_for_worker.lock() {
+            Ok(status) => status,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        {
             task_status.running = false;
             task_status.completed = true;
             task_status.elapsed_ms = current_time_ms().saturating_sub(task_status.started_at_ms);
@@ -1954,6 +2052,7 @@ async fn recovery_start(
                     task_status.extracted_nested_archive_count = result.extracted_nested_archives;
                     task_status.skipped_nested_archive_count = result.skipped_nested_archives;
                     task_status.scanned_file_count = result.scanned_files;
+                    task_status.root_extraction_completed = result.root.success;
                     task_status.depth_limit_reached = result.depth_limit_reached;
                     task_status.count_limit_reached = result.count_limit_reached;
                     task_status.current_archive_path = None;
@@ -2035,7 +2134,8 @@ async fn recovery_start(
                 }
             }
         }
-        let _ = std::fs::remove_dir_all(work_directory);
+        drop(task_status);
+        completion_guard.mark_finalized();
     });
 
     Ok(initial)
@@ -2456,9 +2556,42 @@ mod tests {
             extracted_nested_archive_count: 0,
             skipped_nested_archive_count: 0,
             scanned_file_count: 0,
+            root_extraction_completed: false,
             depth_limit_reached: false,
             count_limit_reached: false,
             events: VecDeque::new(),
         }
+    }
+
+    #[test]
+    fn recovery_panics_become_failed_outcomes() {
+        let outcome: Result<(), RecoveryError> =
+            catch_recovery_panic(|| panic!("simulated recovery panic"));
+
+        assert!(matches!(
+            outcome,
+            Err(RecoveryError::Message(message))
+                if message.contains("simulated recovery panic")
+        ));
+    }
+
+    #[test]
+    fn recovery_completion_guard_finalizes_and_cleans_after_unwind() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let work_directory = directory.path().join("recovery-work");
+        std::fs::create_dir_all(&work_directory).expect("work directory");
+        std::fs::write(work_directory.join("partial"), b"partial").expect("partial output");
+        let status = Arc::new(Mutex::new(test_recovery_status()));
+
+        {
+            let _guard =
+                RecoveryTaskCompletionGuard::new(Arc::clone(&status), work_directory.clone());
+        }
+
+        let status = status.lock().expect("status");
+        assert!(!status.running);
+        assert!(status.completed);
+        assert_eq!(status.phase, RecoveryPhase::Failed);
+        assert!(!work_directory.exists());
     }
 }

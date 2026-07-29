@@ -87,6 +87,7 @@ export type RecoveryTaskStatus = {
   extractedNestedArchiveCount: number
   skippedNestedArchiveCount: number
   scannedFileCount: number
+  rootExtractionCompleted: boolean
   depthLimitReached: boolean
   countLimitReached: boolean
   events: RecoveryTaskEvent[]
