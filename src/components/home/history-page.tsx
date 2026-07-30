@@ -19,6 +19,11 @@ import {
 import * as React from "react"
 
 import {
+  WorkbenchPage,
+  WorkbenchPageContent,
+  WorkbenchPageHeader,
+} from "@/components/layout/workbench-page"
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -280,44 +285,40 @@ export function HistoryPage() {
   const displayedPage = Math.min(pageIndex + 1, pageCount)
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="workbench-page flex h-full min-h-0 flex-col gap-2 px-5 pt-6 pb-2">
-        <header className="flex shrink-0 flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-[11px] font-medium tracking-[0.16em] text-muted-foreground uppercase">
-              Recall
-            </p>
-            <h1 className="mt-1 text-lg font-semibold tracking-tight">历史</h1>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              按内容指纹归并成功记录，不保存来源文件名或路径
-            </p>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={handleRefresh}
-            >
-              <RefreshCw
-                data-icon="inline-start"
-                className={cn(
-                  busy && "animate-spin motion-reduce:animate-none"
-                )}
-              />
-              刷新
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              disabled={busy || (result?.totalCount ?? 0) === 0}
-              onClick={() => setClearDialogOpen(true)}
-            >
-              <Trash2 data-icon="inline-start" />
-              清空
-            </Button>
-          </div>
-        </header>
+    <WorkbenchPage>
+      <WorkbenchPageContent className="gap-2">
+        <WorkbenchPageHeader
+          eyebrow="Recall"
+          title="历史"
+          description="按内容指纹归并成功记录，不保存来源文件名或路径"
+          actions={
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={handleRefresh}
+              >
+                <RefreshCw
+                  data-icon="inline-start"
+                  className={cn(
+                    busy && "animate-spin motion-reduce:animate-none"
+                  )}
+                />
+                刷新
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={busy || (result?.totalCount ?? 0) === 0}
+                onClick={() => setClearDialogOpen(true)}
+              >
+                <Trash2 data-icon="inline-start" />
+                清空
+              </Button>
+            </>
+          }
+        />
 
         <Card
           size="sm"
@@ -551,7 +552,7 @@ export function HistoryPage() {
             </Pagination>
           </div>
         </Card>
-      </div>
+      </WorkbenchPageContent>
 
       <AlertDialog
         open={deleteTarget != null}
@@ -602,7 +603,7 @@ export function HistoryPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </WorkbenchPage>
   )
 }
 

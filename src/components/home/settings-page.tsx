@@ -15,6 +15,11 @@ import {
 import * as React from "react"
 
 import { AiSettingsPanel } from "@/components/home/ai-settings-panel"
+import {
+  WorkbenchPage,
+  WorkbenchPageContent,
+  WorkbenchPageHeader,
+} from "@/components/layout/workbench-page"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -507,22 +512,14 @@ export function SettingsPage({
     Boolean(hashcat?.installed) || Boolean(hashcat?.configuredExists)
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="workbench-page flex h-full min-h-0 flex-col gap-2 px-5 pt-6 pb-2">
-        <header className="shrink-0">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[11px] font-medium tracking-[0.16em] text-muted-foreground uppercase">
-                Preferences
-              </p>
-              <h1 className="mt-1 text-lg font-semibold tracking-tight">
-                设置
-              </h1>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                {activeMeta.description}
-              </p>
-            </div>
-            {onReturnToCompression ? (
+    <WorkbenchPage>
+      <WorkbenchPageContent className="gap-2">
+        <WorkbenchPageHeader
+          eyebrow="Preferences"
+          title="设置"
+          description={activeMeta.description}
+          actions={
+            onReturnToCompression ? (
               <Button
                 type="button"
                 size="sm"
@@ -532,9 +529,9 @@ export function SettingsPage({
                 <ArrowLeft data-icon="inline-start" />
                 返回压缩
               </Button>
-            ) : null}
-          </div>
-        </header>
+            ) : null
+          }
+        />
 
         <Tabs
           value={category}
@@ -1287,8 +1284,8 @@ export function SettingsPage({
             </TabsContent>
           </div>
         </Tabs>
-      </div>
-    </div>
+      </WorkbenchPageContent>
+    </WorkbenchPage>
   )
 }
 

@@ -21,6 +21,11 @@ import {
 import * as React from "react"
 
 import { OutputLocationField } from "@/components/home/output-location-field"
+import {
+  WorkbenchPage,
+  WorkbenchPageContent,
+  WorkbenchPageHeader,
+} from "@/components/layout/workbench-page"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -478,19 +483,15 @@ export function ExtractPage() {
   )
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="workbench-page flex h-full min-h-0 scroll-fade flex-col overflow-y-auto px-5 pt-6 pb-4">
-        <header className="mb-5 shrink-0">
-          <p className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
-            ArcRecall
-          </p>
-          <h1 className="mt-1 text-xl font-semibold tracking-tight">
-            恢复并解压
-          </h1>
-          <p className="mt-1 text-xs text-muted-foreground">
-            选择压缩包后自动识别格式、恢复密码并安全解压。
-          </p>
-        </header>
+    <WorkbenchPage>
+      <WorkbenchPageContent className="pb-4">
+        <WorkbenchPageHeader
+          eyebrow="ArcRecall"
+          title="恢复并解压"
+          description="选择压缩包后自动识别格式、恢复密码并安全解压。"
+          size="large"
+          className="mb-5"
+        />
 
         <Card
           size="sm"
@@ -783,7 +784,7 @@ export function ExtractPage() {
         </Sheet>
 
         {analysis ? (
-          <section className="mt-3 flex shrink-0 flex-col gap-2">
+          <section className="mt-3 flex min-h-0 flex-1 scroll-fade flex-col gap-2 overflow-y-auto pr-1 pb-1">
             <div className="grid gap-2 sm:grid-cols-2">
               <StatusCard
                 title="归档分析"
@@ -905,8 +906,8 @@ export function ExtractPage() {
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         ) : null}
-      </div>
-    </div>
+      </WorkbenchPageContent>
+    </WorkbenchPage>
   )
 }
 

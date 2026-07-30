@@ -16,6 +16,11 @@ import {
 import * as React from "react"
 
 import {
+  WorkbenchPage,
+  WorkbenchPageContent,
+  WorkbenchPageHeader,
+} from "@/components/layout/workbench-page"
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -298,57 +303,54 @@ export function LogsPage() {
     (resultEntries?.length ?? 0) - visibleEntries.length
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="workbench-page flex h-full min-h-0 flex-col gap-2 px-5 pt-6 pb-2">
-        <header className="flex shrink-0 flex-wrap items-start justify-between gap-3 pr-12 lg:pr-0">
-          <div className="min-w-0">
-            <p className="text-[11px] font-medium tracking-[0.16em] text-muted-foreground uppercase">
-              Operations
-            </p>
-            <h1 className="mt-1 text-lg font-semibold tracking-tight">日志</h1>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              默认显示重要结果；过程记录可在“全部事件”中查看。
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-1.5">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={isBusy}
-              onClick={handleOpenDirectory}
-            >
-              <FolderOpen data-icon="inline-start" />
-              目录
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={isBusy}
-              onClick={handleBackup}
-            >
-              <DatabaseBackup data-icon="inline-start" />
-              备份数据库
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={isBusy}
-              onClick={handleExport}
-            >
-              <Download data-icon="inline-start" />
-              导出
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              disabled={isBusy || (result?.totalCount ?? 0) === 0}
-              onClick={() => setClearDialogOpen(true)}
-            >
-              <Trash2 data-icon="inline-start" />
-              清空
-            </Button>
-          </div>
-        </header>
+    <WorkbenchPage>
+      <WorkbenchPageContent className="gap-2">
+        <WorkbenchPageHeader
+          eyebrow="Operations"
+          title="日志"
+          description="默认显示重要结果；过程记录可在“全部事件”中查看。"
+          className="pr-12 lg:pr-0"
+          actions={
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isBusy}
+                onClick={handleOpenDirectory}
+              >
+                <FolderOpen data-icon="inline-start" />
+                目录
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isBusy}
+                onClick={handleBackup}
+              >
+                <DatabaseBackup data-icon="inline-start" />
+                备份数据库
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isBusy}
+                onClick={handleExport}
+              >
+                <Download data-icon="inline-start" />
+                导出
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={isBusy || (result?.totalCount ?? 0) === 0}
+                onClick={() => setClearDialogOpen(true)}
+              >
+                <Trash2 data-icon="inline-start" />
+                清空
+              </Button>
+            </>
+          }
+        />
 
         <Card
           size="sm"
@@ -570,7 +572,7 @@ export function LogsPage() {
             ) : null}
           </CardContent>
         </Card>
-      </div>
+      </WorkbenchPageContent>
 
       <AlertDialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
         <AlertDialogContent size="default">
@@ -592,7 +594,7 @@ export function LogsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </WorkbenchPage>
   )
 }
 

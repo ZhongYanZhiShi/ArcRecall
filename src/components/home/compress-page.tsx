@@ -21,6 +21,11 @@ import {
 import * as React from "react"
 
 import { OutputLocationField } from "@/components/home/output-location-field"
+import {
+  WorkbenchPage,
+  WorkbenchPageContent,
+  WorkbenchPageHeader,
+} from "@/components/layout/workbench-page"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -478,30 +483,28 @@ export function CompressPage({
   const activeLevel = LEVELS.find((item) => item.value === level)
 
   return (
-    <div className="h-full min-h-0 overflow-hidden">
-      <div
+    <WorkbenchPage>
+      <WorkbenchPageContent
+        width="wide"
         data-testid="compress-page"
-        className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col overflow-hidden px-5 pt-6 pb-5"
+        className="pb-5"
       >
-        <header className="flex shrink-0 items-end justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
-              Pack
-            </p>
-            <h1 className="mt-1 text-xl font-semibold tracking-tight">
-              创建归档
-            </h1>
-            <p className="mt-1 text-xs text-muted-foreground">
-              先整理来源，再设置归档参数；主操作始终保持可见。
-            </p>
-          </div>
-          <div className="hidden shrink-0 items-center gap-2 sm:flex">
-            <Badge variant="outline">
-              {format === "sevenZip" ? "7z" : "ZIP"}
-            </Badge>
-            <Badge variant="secondary">{activeLevel?.label ?? "标准"}</Badge>
-          </div>
-        </header>
+        <WorkbenchPageHeader
+          eyebrow="Pack"
+          title="创建归档"
+          description="先整理来源，再设置归档参数；主操作始终保持可见。"
+          size="large"
+          className="items-end gap-4"
+          actionsClassName="hidden gap-2 sm:flex"
+          actions={
+            <>
+              <Badge variant="outline">
+                {format === "sevenZip" ? "7z" : "ZIP"}
+              </Badge>
+              <Badge variant="secondary">{activeLevel?.label ?? "标准"}</Badge>
+            </>
+          }
+        />
 
         <div className="mt-4 grid min-h-0 flex-1 grid-rows-[minmax(11rem,0.85fr)_minmax(0,1.15fr)] gap-3 lg:grid-cols-[minmax(18rem,0.85fr)_minmax(0,1.4fr)] lg:grid-rows-1">
           <Card
@@ -1045,8 +1048,8 @@ export function CompressPage({
             </CardFooter>
           </Card>
         </div>
-      </div>
-    </div>
+      </WorkbenchPageContent>
+    </WorkbenchPage>
   )
 }
 

@@ -13,6 +13,11 @@ import {
 import * as React from "react"
 
 import {
+  WorkbenchPage,
+  WorkbenchPageContent,
+  WorkbenchPageHeader,
+} from "@/components/layout/workbench-page"
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -364,22 +369,14 @@ export function DictionaryPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="workbench-page flex h-full min-h-0 flex-col gap-2 px-5 pt-6 pb-2">
-        <header className="shrink-0">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[11px] font-medium tracking-[0.16em] text-muted-foreground uppercase">
-                Candidates
-              </p>
-              <h1 className="mt-1 text-lg font-semibold tracking-tight">
-                字典
-              </h1>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                管理本机全局密码候选集 · 解压验密直接读取此处
-              </p>
-            </div>
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+    <WorkbenchPage>
+      <WorkbenchPageContent className="gap-2">
+        <WorkbenchPageHeader
+          eyebrow="Candidates"
+          title="字典"
+          description="管理本机全局密码候选集 · 解压验密直接读取此处"
+          actions={
+            <>
               <Button
                 size="sm"
                 disabled={isBusy}
@@ -406,9 +403,9 @@ export function DictionaryPage() {
                 <Trash2 data-icon="inline-start" />
                 删除
               </Button>
-            </div>
-          </div>
-        </header>
+            </>
+          }
+        />
 
         <Card
           size="sm"
@@ -605,7 +602,7 @@ export function DictionaryPage() {
             {status}
           </AlertDescription>
         </Alert>
-      </div>
+      </WorkbenchPageContent>
 
       {/* 添加候选：右侧抽屉，保留字典列表上下文 */}
       <Sheet open={addPanelOpen} onOpenChange={setAddPanelOpen}>
@@ -745,7 +742,7 @@ export function DictionaryPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </WorkbenchPage>
   )
 }
 
