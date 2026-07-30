@@ -129,10 +129,13 @@ const LOG_CAPACITY_PRESETS = [25, 100, 250, 500] as const
 
 export function SettingsPage({
   initialCategory = "engine",
-  onReturnToCompression,
+  returnAction,
 }: {
   initialCategory?: SettingsCategory
-  onReturnToCompression?: () => void
+  returnAction?: {
+    label: string
+    onClick: () => void
+  }
 }) {
   const [category, setCategory] =
     React.useState<SettingsCategory>(initialCategory)
@@ -527,15 +530,15 @@ export function SettingsPage({
           title="设置"
           description={activeMeta.description}
           actions={
-            onReturnToCompression ? (
+            returnAction ? (
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                onClick={onReturnToCompression}
+                onClick={returnAction.onClick}
               >
                 <ArrowLeft data-icon="inline-start" />
-                返回压缩
+                {returnAction.label}
               </Button>
             ) : null
           }
@@ -654,7 +657,7 @@ export function SettingsPage({
                           style={{
                             animationDelay: `${Math.min(index, 4) * 45}ms`,
                           }}
-                          variant={method.available ? "success" : "outline"}
+                          variant={method.available ? "outline" : "warning"}
                           className="animate-status-chip-enter motion-safe-only"
                         >
                           {method.label} ·{" "}
@@ -682,9 +685,7 @@ export function SettingsPage({
                         <Badge variant="secondary">
                           清单 v{fullBundle?.manifestVersion ?? 1}
                         </Badge>
-                        <Badge
-                          variant={fullBundle?.bundled ? "success" : "warning"}
-                        >
+                        <Badge variant="secondary">
                           {fullBundle?.bundled ? "资源已内置" : "精简构建"}
                         </Badge>
                         <Badge
@@ -725,7 +726,7 @@ export function SettingsPage({
                     ].map(({ id, component }) => (
                       <Badge
                         key={id}
-                        variant={component?.runnable ? "success" : "warning"}
+                        variant={component?.runnable ? "outline" : "warning"}
                       >
                         {component?.name ?? "检测中"}{" "}
                         {component?.version ?? "—"} ·{" "}
@@ -735,22 +736,22 @@ export function SettingsPage({
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     <Badge
-                      variant={fullBundle?.has7z2john ? "success" : "warning"}
+                      variant={fullBundle?.has7z2john ? "outline" : "warning"}
                     >
                       7z2john {fullBundle?.has7z2john ? "可用" : "缺失"}
                     </Badge>
                     <Badge
-                      variant={fullBundle?.hasRar2john ? "success" : "warning"}
+                      variant={fullBundle?.hasRar2john ? "outline" : "warning"}
                     >
                       rar2john {fullBundle?.hasRar2john ? "可用" : "缺失"}
                     </Badge>
                     <Badge
-                      variant={fullBundle?.hasZip2john ? "success" : "warning"}
+                      variant={fullBundle?.hasZip2john ? "outline" : "warning"}
                     >
                       zip2john {fullBundle?.hasZip2john ? "可用" : "缺失"}
                     </Badge>
                     <Badge
-                      variant={fullBundle?.johnCpuReady ? "success" : "warning"}
+                      variant={fullBundle?.johnCpuReady ? "outline" : "warning"}
                     >
                       CPU 回退 {fullBundle?.johnCpuReady ? "可用" : "缺失"}
                     </Badge>
@@ -1006,7 +1007,7 @@ export function SettingsPage({
                   <div className="flex flex-wrap gap-1.5">
                     <Badge
                       variant={
-                        johnPerl?.sevenZipConverterReady ? "success" : "warning"
+                        johnPerl?.sevenZipConverterReady ? "outline" : "warning"
                       }
                     >
                       7z2john{" "}
@@ -1014,25 +1015,25 @@ export function SettingsPage({
                     </Badge>
                     <Badge
                       variant={
-                        johnPerl?.rarConverterReady ? "success" : "warning"
+                        johnPerl?.rarConverterReady ? "outline" : "warning"
                       }
                     >
                       rar2john {johnPerl?.rarConverterReady ? "可用" : "缺失"}
                     </Badge>
                     <Badge
                       variant={
-                        johnPerl?.zipConverterReady ? "success" : "warning"
+                        johnPerl?.zipConverterReady ? "outline" : "warning"
                       }
                     >
                       zip2john {johnPerl?.zipConverterReady ? "可用" : "缺失"}
                     </Badge>
                     <Badge
-                      variant={johnPerl?.johnCpuReady ? "success" : "warning"}
+                      variant={johnPerl?.johnCpuReady ? "outline" : "warning"}
                     >
                       John CPU {johnPerl?.johnCpuReady ? "可用" : "缺失"}
                     </Badge>
                     <Badge
-                      variant={johnPerl?.perlExists ? "success" : "warning"}
+                      variant={johnPerl?.perlExists ? "outline" : "warning"}
                     >
                       perl {johnPerl?.perlExists ? "可用" : "未配置"}
                     </Badge>

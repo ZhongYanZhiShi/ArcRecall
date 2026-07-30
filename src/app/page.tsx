@@ -19,6 +19,7 @@ import {
 import { cn } from "@/lib/utils"
 
 type SlideDirection = "forward" | "backward" | null
+type SettingsReturnTarget = "extract" | "compress"
 
 function prefersReducedMotion() {
   if (typeof window === "undefined") {
@@ -40,7 +41,8 @@ export default function Page() {
   )
   const [settingsCategory, setSettingsCategory] =
     React.useState<SettingsCategory>("engine")
-  const [returnToCompression, setReturnToCompression] = React.useState(false)
+  const [settingsReturnTarget, setSettingsReturnTarget] =
+    React.useState<SettingsReturnTarget | null>(null)
 
   const handleNavChange = React.useCallback(
     (next: NavId) => {
@@ -68,7 +70,7 @@ export default function Page() {
     (next: NavId) => {
       if (next === "settings") {
         setSettingsCategory("engine")
-        setReturnToCompression(false)
+        setSettingsReturnTarget(null)
       }
       handleNavChange(next)
     },
@@ -77,18 +79,28 @@ export default function Page() {
 
   const handleOpenAiSettings = React.useCallback(() => {
     setSettingsCategory("ai")
-    setReturnToCompression(true)
+    setSettingsReturnTarget("compress")
     handleNavChange("settings")
   }, [handleNavChange])
 
-  const handleReturnToCompression = React.useCallback(() => {
-    setReturnToCompression(false)
-    handleNavChange("compress")
+  const handleOpenEngineSettings = React.useCallback(() => {
+    setSettingsCategory("engine")
+    setSettingsReturnTarget("extract")
+    handleNavChange("settings")
   }, [handleNavChange])
+
+  const handleReturnFromSettings = React.useCallback(() => {
+    if (!settingsReturnTarget) {
+      return
+    }
+    const target = settingsReturnTarget
+    setSettingsReturnTarget(null)
+    handleNavChange(target)
+  }, [handleNavChange, settingsReturnTarget])
 
   const page = (() => {
     if (activeNav === "extract") {
-      return <ExtractPage />
+      return <ExtractPage onOpenEngineSettings={handleOpenEngineSettings} />
     }
     if (activeNav === "compress") {
       return (
@@ -106,8 +118,16 @@ export default function Page() {
       return (
         <SettingsPage
           initialCategory={settingsCategory}
-          onReturnToCompression={
-            returnToCompression ? handleReturnToCompression : undefined
+          returnAction={
+            settingsReturnTarget
+              ? {
+                  label:
+                    settingsReturnTarget === "extract"
+                      ? "返回解压"
+                      : "返回压缩",
+                  onClick: handleReturnFromSettings,
+                }
+              : undefined
           }
         />
       )
