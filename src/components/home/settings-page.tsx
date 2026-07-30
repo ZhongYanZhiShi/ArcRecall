@@ -52,6 +52,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   getRecoveryCapabilities,
+  refreshRecoveryCapabilities,
   type RecoveryCapabilities,
   type RecoveryComputeMode,
 } from "@/lib/recovery"
@@ -166,7 +167,7 @@ export function SettingsPage({
         getFullEngineBundleStatus(),
         getHashcatStatus(),
         getJohnPerlStatus(),
-        getRecoveryCapabilities(),
+        refreshRecoveryCapabilities(),
       ])
       setFullBundle(bundle)
       setHashcat(status)

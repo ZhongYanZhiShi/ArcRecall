@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core"
 import { open } from "@tauri-apps/plugin-dialog"
 
+import { createAsyncRefreshCache } from "@/lib/async-refresh-cache"
 import { isDesktopRuntime } from "@/lib/dictionary"
 
 export type ArchiveFormat = "sevenZip" | "zip" | "rar3" | "rar5"
@@ -140,7 +141,7 @@ export async function analyzeArchive(path: string): Promise<ArchiveAnalysis> {
   return invoke<ArchiveAnalysis>("archive_analyze", { path })
 }
 
-export async function getRecoveryCapabilities(): Promise<RecoveryCapabilities> {
+async function probeRecoveryCapabilities(): Promise<RecoveryCapabilities> {
   if (!isDesktopRuntime()) {
     return {
       gpuAvailable: false,
@@ -182,6 +183,16 @@ export async function getRecoveryCapabilities(): Promise<RecoveryCapabilities> {
     }
   }
   return invoke<RecoveryCapabilities>("recovery_capabilities")
+}
+
+const recoveryCapabilities = createAsyncRefreshCache(probeRecoveryCapabilities)
+
+export function getRecoveryCapabilities(): Promise<RecoveryCapabilities> {
+  return recoveryCapabilities.get()
+}
+
+export function refreshRecoveryCapabilities(): Promise<RecoveryCapabilities> {
+  return recoveryCapabilities.refresh()
 }
 
 export async function startRecovery(
