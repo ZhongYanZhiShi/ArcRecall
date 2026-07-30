@@ -113,6 +113,8 @@ pub struct RecoveryMethodCapability {
     pub device: RecoveryComputeDevice,
     pub supported: bool,
     pub available: bool,
+    #[serde(default)]
+    pub optional: bool,
     pub message: String,
 }
 
@@ -1472,9 +1474,16 @@ fn recover_with_dictionary(
 
     let mut verified_candidates = HashSet::new();
     let mut hashcat_completed = false;
+    let mut hashcat_attempted = false;
     if let Some(records) = records.as_ref() {
         if tools.hashcat.is_file() {
-            for &(device_type, engine) in hashcat_device_plan(compute_mode) {
+            let hashcat_probe = probe_hashcat_devices(&tools.hashcat);
+            let device_plan = hashcat_device_plan(compute_mode, hashcat_probe.availability);
+            if device_plan.is_empty() {
+                fallback_reasons.push(hashcat_probe.unavailable_message(compute_mode));
+            }
+            for device in device_plan {
+                let engine = device.engine_label();
                 let mut device_completed = false;
                 for (record_index, record) in records.iter().enumerate() {
                     ensure_not_cancelled(cancellation)?;
@@ -1494,7 +1503,8 @@ fn recover_with_dictionary(
                                 job.dictionary_count
                             ),
                         ));
-                        match run_hashcat(job, tools, &hash_file, mode, device_type, cancellation) {
+                        hashcat_attempted = true;
+                        match run_hashcat(job, tools, &hash_file, mode, device, cancellation) {
                             Ok(attempt) => {
                                 let completed = attempt == CrackAttempt::Exhausted;
                                 device_completed |= completed;
@@ -1543,10 +1553,14 @@ fn recover_with_dictionary(
             report(RecoveryUpdate::stage(
                 RecoveryPhase::John,
                 Some("John CPU"),
-                format!(
-                    "Hashcat 未找到可用密码，正在用 John CPU 复跑 {} 条候选。",
-                    job.dictionary_count
-                ),
+                if hashcat_attempted {
+                    format!(
+                        "Hashcat 未找到可用密码，正在用 John CPU 复跑 {} 条候选。",
+                        job.dictionary_count
+                    )
+                } else {
+                    format!("正在用 John CPU 尝试 {} 条候选。", job.dictionary_count)
+                },
             ));
             match run_john(job, tools, records, cancellation) {
                 Ok(attempt) => {
@@ -1646,17 +1660,107 @@ fn converter_name(format: ArchiveFormat) -> &'static str {
     }
 }
 
-fn hashcat_device_plan(mode: RecoveryComputeMode) -> &'static [(&'static str, &'static str)] {
-    const GPU_PREFERRED: [(&str, &str); 2] = [("2", "Hashcat GPU"), ("1", "Hashcat CPU")];
-    const CPU_ONLY: [(&str, &str); 1] = [("1", "Hashcat CPU")];
-    match mode {
-        RecoveryComputeMode::GpuPreferred => &GPU_PREFERRED,
-        RecoveryComputeMode::CpuOnly => &CPU_ONLY,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HashcatComputeDevice {
+    Gpu,
+    Cpu,
+}
+
+impl HashcatComputeDevice {
+    const fn opencl_type(self) -> &'static str {
+        match self {
+            Self::Gpu => "2",
+            Self::Cpu => "1",
+        }
+    }
+
+    const fn engine_label(self) -> &'static str {
+        match self {
+            Self::Gpu => "Hashcat GPU",
+            Self::Cpu => "Hashcat CPU",
+        }
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct HashcatDeviceAvailability {
+    gpu: bool,
+    cpu: bool,
+}
+
+impl HashcatDeviceAvailability {
+    const fn supports(self, device: HashcatComputeDevice) -> bool {
+        match device {
+            HashcatComputeDevice::Gpu => self.gpu,
+            HashcatComputeDevice::Cpu => self.cpu,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HashcatDeviceProbe {
+    availability: HashcatDeviceAvailability,
+    failure: Option<String>,
+}
+
+impl HashcatDeviceProbe {
+    fn method_message(&self, device: HashcatComputeDevice) -> String {
+        if self.availability.supports(device) {
+            return match device {
+                HashcatComputeDevice::Gpu => "Hashcat 已检测到可用的 GPU 计算设备。".to_owned(),
+                HashcatComputeDevice::Cpu => {
+                    "Hashcat 已检测到可用的 CPU OpenCL 计算设备。".to_owned()
+                }
+            };
+        }
+        if let Some(failure) = &self.failure {
+            return failure.clone();
+        }
+        match device {
+            HashcatComputeDevice::Gpu => "Hashcat 未检测到可用的 GPU 计算设备。".to_owned(),
+            HashcatComputeDevice::Cpu => {
+                "Hashcat 未检测到 CPU OpenCL；Hashcat CPU 是可选能力。".to_owned()
+            }
+        }
+    }
+
+    fn unavailable_message(&self, mode: RecoveryComputeMode) -> String {
+        if let Some(failure) = &self.failure {
+            return failure.clone();
+        }
+        match mode {
+            RecoveryComputeMode::GpuPreferred => {
+                "Hashcat 未检测到适用于当前模式的 GPU 或 CPU OpenCL 设备".to_owned()
+            }
+            RecoveryComputeMode::CpuOnly => {
+                "Hashcat 未检测到 CPU OpenCL，已跳过可选的 Hashcat CPU".to_owned()
+            }
+        }
+    }
+}
+
+fn hashcat_device_plan(
+    mode: RecoveryComputeMode,
+    availability: HashcatDeviceAvailability,
+) -> Vec<HashcatComputeDevice> {
+    const GPU_PREFERRED: [HashcatComputeDevice; 2] =
+        [HashcatComputeDevice::Gpu, HashcatComputeDevice::Cpu];
+    const CPU_ONLY: [HashcatComputeDevice; 1] = [HashcatComputeDevice::Cpu];
+    let requested = match mode {
+        RecoveryComputeMode::GpuPreferred => GPU_PREFERRED.as_slice(),
+        RecoveryComputeMode::CpuOnly => CPU_ONLY.as_slice(),
+    };
+    requested
+        .iter()
+        .copied()
+        .filter(|device| availability.supports(*device))
+        .collect()
+}
+
 pub fn probe_recovery_capabilities(tools: &RecoveryToolPaths) -> RecoveryCapabilities {
-    let (hashcat_gpu, hashcat_cpu, hashcat_message) = probe_hashcat_devices(&tools.hashcat);
+    let hashcat_probe = probe_hashcat_devices(&tools.hashcat);
+    let hashcat_gpu = hashcat_probe.availability.gpu;
+    let hashcat_cpu = hashcat_probe.availability.cpu;
     let john_available = tools.john_tools_directory.join("john.exe").is_file();
     let seven_zip_available = tools.seven_zip.is_file();
     let cpu_available = hashcat_cpu || john_available || seven_zip_available;
@@ -1671,7 +1775,8 @@ pub fn probe_recovery_capabilities(tools: &RecoveryToolPaths) -> RecoveryCapabil
                 device: RecoveryComputeDevice::Gpu,
                 supported: true,
                 available: hashcat_gpu,
-                message: hashcat_message.clone(),
+                optional: false,
+                message: hashcat_probe.method_message(HashcatComputeDevice::Gpu),
             },
             RecoveryMethodCapability {
                 id: "hashcatCpu".into(),
@@ -1679,7 +1784,8 @@ pub fn probe_recovery_capabilities(tools: &RecoveryToolPaths) -> RecoveryCapabil
                 device: RecoveryComputeDevice::Cpu,
                 supported: true,
                 available: hashcat_cpu,
-                message: hashcat_message,
+                optional: true,
+                message: hashcat_probe.method_message(HashcatComputeDevice::Cpu),
             },
             RecoveryMethodCapability {
                 id: "johnCpu".into(),
@@ -1687,6 +1793,7 @@ pub fn probe_recovery_capabilities(tools: &RecoveryToolPaths) -> RecoveryCapabil
                 device: RecoveryComputeDevice::Cpu,
                 supported: true,
                 available: john_available,
+                optional: false,
                 message: if john_available {
                     "John CPU 引擎已就绪。".into()
                 } else {
@@ -1699,6 +1806,7 @@ pub fn probe_recovery_capabilities(tools: &RecoveryToolPaths) -> RecoveryCapabil
                 device: RecoveryComputeDevice::Cpu,
                 supported: true,
                 available: seven_zip_available,
+                optional: false,
                 message: if seven_zip_available {
                     "7-Zip CPU 兼容验密已就绪。".into()
                 } else {
@@ -1709,9 +1817,12 @@ pub fn probe_recovery_capabilities(tools: &RecoveryToolPaths) -> RecoveryCapabil
     }
 }
 
-fn probe_hashcat_devices(hashcat: &Path) -> (bool, bool, String) {
+fn probe_hashcat_devices(hashcat: &Path) -> HashcatDeviceProbe {
     if !hashcat.is_file() {
-        return (false, false, "Hashcat 尚未安装。".into());
+        return HashcatDeviceProbe {
+            availability: HashcatDeviceAvailability::default(),
+            failure: Some("Hashcat 尚未安装。".into()),
+        };
     }
     let mut request = ProcessRequest::new(hashcat);
     request.args = vec![OsString::from("-I")];
@@ -1722,15 +1833,15 @@ fn probe_hashcat_devices(hashcat: &Path) -> (bool, bool, String) {
         Ok(output) => {
             let combined = format!("{}\n{}", output.stdout, output.stderr);
             let (gpu, cpu) = parse_hashcat_device_types(&combined);
-            let message = match (gpu, cpu) {
-                (true, true) => "Hashcat 已检测到 GPU 与 CPU 计算设备。",
-                (true, false) => "Hashcat 已检测到 GPU 计算设备。",
-                (false, true) => "Hashcat 已检测到 CPU 计算设备。",
-                (false, false) => "Hashcat 可启动，但未检测到可用计算设备。",
-            };
-            (gpu, cpu, message.into())
+            HashcatDeviceProbe {
+                availability: HashcatDeviceAvailability { gpu, cpu },
+                failure: None,
+            }
         }
-        Err(error) => (false, false, format!("Hashcat 计算设备探测失败：{error}")),
+        Err(error) => HashcatDeviceProbe {
+            availability: HashcatDeviceAvailability::default(),
+            failure: Some(format!("Hashcat 计算设备探测失败：{error}")),
+        },
     }
 }
 
@@ -1931,12 +2042,12 @@ fn run_hashcat(
     tools: &RecoveryToolPaths,
     hash_file: &Path,
     mode: u32,
-    device_type: &str,
+    device: HashcatComputeDevice,
     cancellation: &CancellationToken,
 ) -> Result<CrackAttempt, RecoveryError> {
     let output_file = job
         .work_directory
-        .join(format!("hashcat-{mode}-{device_type}.found"));
+        .join(format!("hashcat-{mode}-{}.found", device.opencl_type()));
     let _ = fs::remove_file(&output_file);
     let mut request = ProcessRequest::new(&tools.hashcat);
     request.args = vec![
@@ -1945,7 +2056,7 @@ fn run_hashcat(
         OsString::from("-a"),
         OsString::from("0"),
         OsString::from("-D"),
-        OsString::from(device_type),
+        OsString::from(device.opencl_type()),
         OsString::from("--status"),
         OsString::from("--status-json"),
         OsString::from("--status-timer"),
@@ -2387,15 +2498,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compute_mode_selects_expected_hashcat_devices() {
+    fn hashcat_plan_only_selects_available_devices() {
+        let both = HashcatDeviceAvailability {
+            gpu: true,
+            cpu: true,
+        };
         assert_eq!(
-            hashcat_device_plan(RecoveryComputeMode::GpuPreferred),
-            [("2", "Hashcat GPU"), ("1", "Hashcat CPU")]
+            hashcat_device_plan(RecoveryComputeMode::GpuPreferred, both),
+            [HashcatComputeDevice::Gpu, HashcatComputeDevice::Cpu]
         );
         assert_eq!(
-            hashcat_device_plan(RecoveryComputeMode::CpuOnly),
-            [("1", "Hashcat CPU")]
+            hashcat_device_plan(RecoveryComputeMode::CpuOnly, both),
+            [HashcatComputeDevice::Cpu]
         );
+
+        let gpu_only = HashcatDeviceAvailability {
+            gpu: true,
+            cpu: false,
+        };
+        assert_eq!(
+            hashcat_device_plan(RecoveryComputeMode::GpuPreferred, gpu_only),
+            [HashcatComputeDevice::Gpu]
+        );
+        assert!(hashcat_device_plan(RecoveryComputeMode::CpuOnly, gpu_only).is_empty());
+
+        let cpu_only = HashcatDeviceAvailability {
+            gpu: false,
+            cpu: true,
+        };
+        assert_eq!(
+            hashcat_device_plan(RecoveryComputeMode::GpuPreferred, cpu_only),
+            [HashcatComputeDevice::Cpu]
+        );
+        assert_eq!(
+            hashcat_device_plan(RecoveryComputeMode::CpuOnly, cpu_only),
+            [HashcatComputeDevice::Cpu]
+        );
+
+        let none = HashcatDeviceAvailability::default();
+        assert!(hashcat_device_plan(RecoveryComputeMode::GpuPreferred, none).is_empty());
+        assert!(hashcat_device_plan(RecoveryComputeMode::CpuOnly, none).is_empty());
     }
 
     #[test]

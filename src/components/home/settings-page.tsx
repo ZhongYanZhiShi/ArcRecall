@@ -515,6 +515,16 @@ export function SettingsPage({
 
   const hashcatReady =
     Boolean(hashcat?.installed) || Boolean(hashcat?.configuredExists)
+  const hashcatCpuAvailable = Boolean(
+    recoveryCapabilities?.methods.find((method) => method.id === "hashcatCpu")
+      ?.available
+  )
+  const cpuRecoveryChain =
+    recoveryCapabilities === null
+      ? "正在探测 CPU 引擎…"
+      : hashcatCpuAvailable
+        ? "Hashcat CPU → John CPU → 7-Zip CPU"
+        : "John CPU → 7-Zip CPU（Hashcat CPU 可选）"
   const parsedLogMaxDisk = Number(logMaxDiskInput)
   const logCapacityInvalid =
     appSettings !== null &&
@@ -622,7 +632,7 @@ export function SettingsPage({
                           <FieldContent>
                             <FieldTitle>GPU 优先</FieldTitle>
                             <FieldDescription>
-                              Hashcat GPU → Hashcat / John / 7-Zip CPU
+                              Hashcat GPU → {cpuRecoveryChain}
                             </FieldDescription>
                           </FieldContent>
                           <RadioGroupItem
@@ -637,7 +647,7 @@ export function SettingsPage({
                           <FieldContent>
                             <FieldTitle>仅 CPU</FieldTitle>
                             <FieldDescription>
-                              Hashcat CPU → John CPU → 7-Zip CPU
+                              {cpuRecoveryChain}
                             </FieldDescription>
                           </FieldContent>
                           <RadioGroupItem id="compute-cpu" value="cpuOnly" />
@@ -647,7 +657,7 @@ export function SettingsPage({
                   </FieldSet>
                   <div>
                     <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">
-                      当前支持的恢复方式
+                      恢复方式与可选能力
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {recoveryCapabilities?.methods.map((method, index) => (
@@ -657,11 +667,21 @@ export function SettingsPage({
                           style={{
                             animationDelay: `${Math.min(index, 4) * 45}ms`,
                           }}
-                          variant={method.available ? "outline" : "warning"}
+                          variant={
+                            method.available
+                              ? "outline"
+                              : method.optional
+                                ? "secondary"
+                                : "warning"
+                          }
                           className="animate-status-chip-enter motion-safe-only"
                         >
                           {method.label} ·{" "}
-                          {method.available ? "可用" : "未就绪"}
+                          {method.available
+                            ? "可用"
+                            : method.optional
+                              ? "可选未启用"
+                              : "未就绪"}
                         </Badge>
                       )) ?? <Badge variant="outline">正在探测…</Badge>}
                     </div>

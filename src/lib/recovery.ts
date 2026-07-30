@@ -14,6 +14,7 @@ export type RecoveryMethodCapability = {
   device: RecoveryComputeDevice
   supported: boolean
   available: boolean
+  optional: boolean
   message: string
 }
 
@@ -153,6 +154,7 @@ async function probeRecoveryCapabilities(): Promise<RecoveryCapabilities> {
           device: "gpu",
           supported: true,
           available: false,
+          optional: false,
           message: "浏览器预览不包含桌面计算设备。",
         },
         {
@@ -161,6 +163,7 @@ async function probeRecoveryCapabilities(): Promise<RecoveryCapabilities> {
           device: "cpu",
           supported: true,
           available: false,
+          optional: true,
           message: "浏览器预览不包含桌面计算设备。",
         },
         {
@@ -169,6 +172,7 @@ async function probeRecoveryCapabilities(): Promise<RecoveryCapabilities> {
           device: "cpu",
           supported: true,
           available: false,
+          optional: false,
           message: "浏览器预览不包含桌面引擎。",
         },
         {
@@ -177,6 +181,7 @@ async function probeRecoveryCapabilities(): Promise<RecoveryCapabilities> {
           device: "cpu",
           supported: true,
           available: false,
+          optional: false,
           message: "浏览器预览不包含桌面引擎。",
         },
       ],

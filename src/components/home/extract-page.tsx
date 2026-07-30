@@ -764,12 +764,14 @@ export function ExtractPage({
                 </p>
                 <div className="flex flex-wrap items-center gap-1.5">
                   {capabilities ? (
-                    capabilities.methods.map((method) => (
-                      <RecoveryCapabilityBadge
-                        key={method.id}
-                        method={method}
-                      />
-                    ))
+                    capabilities.methods
+                      .filter((method) => method.available || !method.optional)
+                      .map((method) => (
+                        <RecoveryCapabilityBadge
+                          key={method.id}
+                          method={method}
+                        />
+                      ))
                   ) : capabilityError ? null : (
                     <span className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
                       <Spinner className="size-3" />
@@ -1274,7 +1276,9 @@ function RecoveryCapabilityBadge({
     ? "不支持"
     : method.available
       ? "可用"
-      : "未就绪"
+      : method.optional
+        ? "可选未启用"
+        : "未就绪"
 
   return (
     <Badge
@@ -1283,14 +1287,16 @@ function RecoveryCapabilityBadge({
           ? "secondary"
           : method.available
             ? "outline"
-            : "warning"
+            : method.optional
+              ? "secondary"
+              : "warning"
       }
       className="font-normal"
       aria-label={`${method.label}，${status}。${method.message}`}
     >
       {method.available ? (
         <Check data-icon="inline-start" aria-hidden />
-      ) : method.supported ? (
+      ) : method.supported && !method.optional ? (
         <CircleAlert data-icon="inline-start" aria-hidden />
       ) : null}
       {method.label} · {status}
@@ -1367,7 +1373,7 @@ function resolveRecoveryCapabilityNotice(
       (computeMode === "gpuPreferred" || method.device === "cpu")
   )
   const unavailableMethods = relevantMethods.filter(
-    (method) => !method.available
+    (method) => !method.available && !method.optional
   )
   if (unavailableMethods.length === 0) {
     return null
