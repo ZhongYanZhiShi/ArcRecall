@@ -26,18 +26,26 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import {
   Field,
   FieldContent,
   FieldDescription,
   FieldLabel,
   FieldLegend,
-  FieldSeparator,
   FieldSet,
 } from "@/components/ui/field"
 import {
@@ -52,8 +60,17 @@ import {
   listAiProfiles,
   type AiSettings,
 } from "@/lib/ai"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Progress } from "@/components/ui/progress"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
@@ -115,6 +132,11 @@ const LEVELS: {
   { value: 7, label: "较高", description: "体积优先" },
   { value: 9, label: "极限", description: "耗时更长" },
 ]
+
+const LEVEL_OPTIONS = LEVELS.map((item) => ({
+  value: String(item.value),
+  label: `${item.label} · ${item.description}`,
+}))
 
 const COUNT_FORMATTER = new Intl.NumberFormat("zh-CN")
 
@@ -453,461 +475,576 @@ export function CompressPage({
     ? parentPathForDisplay(sources[0])
     : "首个来源的上级目录"
   const extension = format === "sevenZip" ? ".7z" : ".zip"
+  const activeLevel = LEVELS.find((item) => item.value === level)
 
   return (
     <div className="h-full min-h-0 overflow-hidden">
-      <div className="workbench-page flex h-full min-h-0 scroll-fade flex-col overflow-y-auto px-5 pt-6 pb-5">
-        <header className="shrink-0">
-          <p className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
-            Pack
-          </p>
-          <h1 className="mt-1 text-xl font-semibold tracking-tight">
-            创建归档
-          </h1>
-          <p className="mt-1 text-xs text-muted-foreground">
-            混合添加文件与文件夹，默认输出到首个来源的同级目录。
-          </p>
+      <div
+        data-testid="compress-page"
+        className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col overflow-hidden px-5 pt-6 pb-5"
+      >
+        <header className="flex shrink-0 items-end justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
+              Pack
+            </p>
+            <h1 className="mt-1 text-xl font-semibold tracking-tight">
+              创建归档
+            </h1>
+            <p className="mt-1 text-xs text-muted-foreground">
+              先整理来源，再设置归档参数；主操作始终保持可见。
+            </p>
+          </div>
+          <div className="hidden shrink-0 items-center gap-2 sm:flex">
+            <Badge variant="outline">
+              {format === "sevenZip" ? "7z" : "ZIP"}
+            </Badge>
+            <Badge variant="secondary">{activeLevel?.label ?? "标准"}</Badge>
+          </div>
         </header>
 
-        <Card
-          size="sm"
-          className={cn(
-            "mt-4 shrink-0 gap-0 border-dashed py-0 shadow-none",
-            dragOver ? "border-foreground/40 bg-muted/50" : "bg-card"
-          )}
-          aria-label="压缩来源"
-        >
-          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 px-4 py-4">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground">
-                <PackagePlus className="size-5" strokeWidth={1.8} />
-              </div>
-              <div className="min-w-0">
-                <CardTitle className="text-sm font-semibold">
-                  {dragOver
-                    ? "松开以添加来源"
-                    : sources.length > 0
-                      ? `已选择 ${COUNT_FORMATTER.format(sources.length)} 个来源`
-                      : "拖入文件或文件夹"}
-                </CardTitle>
-                <CardDescription className="mt-0.5 text-xs">
-                  父文件夹已选中时，内部重复项目会在开始压缩前自动去重。
-                </CardDescription>
-              </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handlePickFiles}
-                disabled={running}
-              >
-                <FilePlus2 data-icon="inline-start" />
-                添加文件
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handlePickFolder}
-                disabled={running}
-              >
-                <FolderPlus data-icon="inline-start" />
-                添加文件夹
-              </Button>
-            </div>
-          </CardHeader>
-
-          {sources.length > 0 ? (
-            <>
-              <Separator />
-              <CardContent className="px-4 py-3">
-                <ol
-                  className="flex flex-col gap-1.5"
-                  aria-label="已选来源，可调整顺序"
-                >
-                  {sources.map((source, index) => (
-                    <li
-                      key={sourceIdentity(source)}
-                      className="flex min-w-0 items-center gap-2 rounded-xl border border-border/80 bg-background px-2.5 py-2"
-                    >
-                      <FileArchive
-                        aria-hidden
-                        className="size-4 shrink-0 text-muted-foreground"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-xs font-medium">
-                          {fileNameFromPath(source)}
-                        </p>
-                        <p
-                          className="mt-0.5 truncate text-[10px] text-muted-foreground"
-                          title={source}
-                        >
-                          {source}
-                        </p>
-                      </div>
-                      <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
-                        {index + 1}
-                      </span>
-                      <SourceAction
-                        label="上移"
-                        disabled={running || index === 0}
-                        onClick={() => handleMoveSource(index, -1)}
-                      >
-                        <ArrowUp />
-                      </SourceAction>
-                      <SourceAction
-                        label="下移"
-                        disabled={running || index === sources.length - 1}
-                        onClick={() => handleMoveSource(index, 1)}
-                      >
-                        <ArrowDown />
-                      </SourceAction>
-                      <SourceAction
-                        label="移除"
-                        disabled={running}
-                        onClick={() =>
-                          setSources((current) =>
-                            current.filter(
-                              (_, sourceIndex) => sourceIndex !== index
-                            )
-                          )
-                        }
-                      >
-                        <Trash2 />
-                      </SourceAction>
-                    </li>
-                  ))}
-                </ol>
-              </CardContent>
-            </>
-          ) : null}
-        </Card>
-
-        <section className="workbench-panel mt-3 shrink-0 rounded-2xl border border-border/80 bg-card p-3">
-          <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-            <OutputLocationField
-              className="sm:col-span-2"
-              mode={outputMode}
-              onModeChange={(mode) => updateDraft("outputMode", mode)}
-              siblingLabel="来源同级"
-              path={
-                outputMode === "custom"
-                  ? outputDirectory
-                  : sources[0]
-                    ? defaultOutput
-                    : null
-              }
-              pathTitle={
-                outputMode === "custom"
-                  ? outputDirectory
-                  : sources[0]
-                    ? defaultOutput
-                    : null
-              }
-              emptyLabel={
-                outputMode === "custom" ? "尚未选择目录" : "首个来源的上级目录"
-              }
-              onPick={handlePickOutput}
-              onClear={() => updateDraft("outputDirectory", null)}
-              disabled={running}
-            />
-
-            <Field
-              orientation="horizontal"
-              className="min-w-0 rounded-xl border border-border/70 bg-muted/20 p-3 sm:col-span-2"
-            >
-              <FieldContent className="min-w-0">
-                <FieldLabel
-                  htmlFor="compress-open-when-done"
-                  className="text-xs"
-                >
-                  完成后打开
-                </FieldLabel>
-                <FieldDescription className="text-[10px]">
-                  自动打开输出文件夹
-                </FieldDescription>
-              </FieldContent>
-              <Switch
-                id="compress-open-when-done"
-                size="sm"
-                checked={openWhenDone}
-                onCheckedChange={(checked) =>
-                  updateDraft("openWhenDone", checked)
-                }
-              />
-            </Field>
-          </div>
-        </section>
-
-        <section className="workbench-panel mt-3 shrink-0 rounded-2xl border border-border/80 bg-card p-3">
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_176px]">
-            <Field className="gap-1.5">
-              <FieldLabel htmlFor="archive-name">归档基础名称</FieldLabel>
-              <InputGroup>
-                <InputGroupInput
-                  id="archive-name"
-                  value={baseName}
-                  onChange={(event) =>
-                    updateDraft("baseName", event.target.value)
-                  }
-                  placeholder="例如：项目交付资料"
-                  disabled={running}
-                  aria-describedby="archive-name-hint"
-                />
-                <InputGroupAddon align="inline-end">
-                  <InputGroupText>{extension}</InputGroupText>
-                </InputGroupAddon>
-              </InputGroup>
-              <FieldDescription
-                id="archive-name-hint"
-                className="text-[10px] leading-relaxed text-muted-foreground"
-              >
-                名称由你提供；无效文件名字符会在本机安全替换。
-              </FieldDescription>
-            </Field>
-
-            <FieldSet className="gap-1.5">
-              <FieldLegend variant="label" className="mb-0 text-xs">
-                归档格式
-              </FieldLegend>
-              <ToggleGroup
-                variant="outline"
-                spacing={0}
-                value={[format]}
-                disabled={running}
-                onValueChange={(values) => {
-                  const next = values[0] as CompressionFormat | undefined
-                  if (!next) {
-                    return
-                  }
-                  updateDraft("format", next)
-                  if (next === "zip") {
-                    updateDraft("encryptFileNames", false)
-                  }
-                }}
-                className="w-full"
-              >
-                <ToggleGroupItem value="sevenZip" className="flex-1 text-xs">
-                  7z
-                </ToggleGroupItem>
-                <ToggleGroupItem value="zip" className="flex-1 text-xs">
-                  ZIP
-                </ToggleGroupItem>
-              </ToggleGroup>
-              <FieldDescription className="text-[10px] leading-relaxed">
-                {format === "sevenZip"
-                  ? "压缩率更高，支持文件名加密"
-                  : "兼容性更好，密码使用 AES-256"}
-              </FieldDescription>
-            </FieldSet>
-          </div>
-
-          <div className="mt-3 rounded-xl border border-border/80 bg-muted/30 px-3 py-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-2.5">
-                <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-background text-muted-foreground">
-                  <WandSparkles className="size-4" />
-                </div>
+        <div className="mt-4 grid min-h-0 flex-1 grid-rows-[minmax(11rem,0.85fr)_minmax(0,1.15fr)] gap-3 lg:grid-cols-[minmax(18rem,0.85fr)_minmax(0,1.4fr)] lg:grid-rows-1">
+          <Card
+            size="sm"
+            className={cn(
+              "min-h-0 gap-0 py-0 shadow-none",
+              dragOver && "border-foreground/40 bg-muted/50"
+            )}
+            aria-label="压缩来源"
+          >
+            <CardHeader className="shrink-0 px-4 py-3">
+              <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <p className="text-xs font-medium">使用 AI 优化名称</p>
-                    {activeAiProfile ? (
-                      <Badge variant="outline" className="font-normal">
-                        {activeAiProfile.name} ·{" "}
-                        {activeAiProfile.model || "未选择模型"}
+                  <div className="flex items-center gap-2">
+                    <CardTitle className="text-sm font-semibold">
+                      压缩来源
+                    </CardTitle>
+                    {sources.length > 0 ? (
+                      <Badge variant="secondary">
+                        {COUNT_FORMATTER.format(sources.length)} 个
                       </Badge>
-                    ) : (
-                      <Badge variant="outline" className="font-normal">
-                        未配置
-                      </Badge>
-                    )}
+                    ) : null}
                   </div>
-                  <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
-                    只发送你填写的基础名称与提示词，不读取来源文件、路径或内容。
-                  </p>
+                  <CardDescription className="mt-0.5 text-xs">
+                    {dragOver
+                      ? "松开即可加入当前列表"
+                      : "支持混合添加文件与文件夹，可调整归档顺序。"}
+                  </CardDescription>
                 </div>
-              </div>
-              <SwitchControl
-                checked={useAiRename}
-                onCheckedChange={(checked) => {
-                  updateDraft("useAiRename", checked)
-                  setAiError(
-                    checked && !activeAiProfile
-                      ? "尚未配置可用的 AI 模型，请先前往设置。"
-                      : null
-                  )
-                }}
-                label="AI 重命名"
-                disabled={running}
-              />
-            </div>
-            {useAiRename && (!activeAiProfile || aiError) ? (
-              <Alert className="animate-reveal-down motion-safe-only mt-2">
-                <CircleAlert />
-                <AlertDescription className="min-w-0 flex-1 text-[11px]">
-                  {aiError ?? "尚未配置可用的 AI 模型，请先前往设置。"}
-                </AlertDescription>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {activeAiProfile && aiError ? (
-                    <>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        disabled={busy}
-                        onClick={() => void handleStart(false)}
-                      >
-                        重试
-                      </Button>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        disabled={busy}
-                        onClick={() => void handleStart(true)}
-                      >
-                        使用原名称
-                      </Button>
-                    </>
-                  ) : null}
+                <div className="flex shrink-0 items-center gap-2">
                   <Button
                     type="button"
-                    size="xs"
                     variant="outline"
-                    disabled={busy}
-                    onClick={onOpenAiSettings}
+                    size="sm"
+                    onClick={handlePickFiles}
+                    disabled={running}
                   >
-                    前往 AI 设置
+                    <FilePlus2 data-icon="inline-start" />
+                    添加文件
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handlePickFolder}
+                    disabled={running}
+                  >
+                    <FolderPlus data-icon="inline-start" />
+                    添加文件夹
                   </Button>
                 </div>
-              </Alert>
-            ) : null}
-          </div>
-
-          <FieldSeparator className="mt-3" />
-          <div className="grid gap-3 md:grid-cols-[176px_minmax(0,1fr)]">
-            <Field className="gap-1.5">
-              <FieldLabel htmlFor="compression-level">压缩级别</FieldLabel>
-              <NativeSelect
-                id="compression-level"
-                className="w-full"
-                value={level}
-                disabled={running}
-                onChange={(event) =>
-                  updateDraft(
-                    "level",
-                    Number(event.target.value) as CompressionLevel
-                  )
-                }
-              >
-                {LEVELS.map((item) => (
-                  <NativeSelectOption key={item.value} value={item.value}>
-                    {item.label} · {item.description}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </Field>
-
-            <Field className="gap-1.5">
-              <div className="flex items-center justify-between gap-2">
-                <FieldLabel htmlFor="compression-password">
-                  密码（可选）
-                </FieldLabel>
-                <span className="text-[10px] text-muted-foreground">
-                  不保存、不写入日志
-                </span>
               </div>
-              <div className="flex gap-2">
-                <InputGroup className="min-w-0 flex-1">
-                  <InputGroupInput
-                    id="compression-password"
-                    type={showPassword ? "text" : "password"}
-                    value={password}
-                    onChange={(event) =>
-                      updateDraft("password", event.target.value)
-                    }
-                    placeholder="留空则创建无密码归档"
-                    disabled={running}
-                    autoComplete="off"
-                  />
-                  <InputGroupAddon align="inline-end">
-                    <InputGroupButton
-                      size="icon-xs"
-                      onClick={() => setShowPassword((value) => !value)}
-                      aria-label={showPassword ? "隐藏密码" : "显示密码"}
+            </CardHeader>
+            <Separator />
+
+            <CardContent className="min-h-0 flex-1 px-0">
+              {sources.length > 0 ? (
+                <ScrollArea
+                  data-testid="compress-source-scroll"
+                  className="h-full"
+                  aria-label="已选来源，可调整顺序"
+                >
+                  <ol className="flex flex-col gap-1.5 p-3 pr-4">
+                    {sources.map((source, index) => (
+                      <li
+                        key={sourceIdentity(source)}
+                        className="flex min-w-0 items-center gap-2 rounded-xl border border-border/80 bg-background px-2.5 py-2"
+                      >
+                        <FileArchive
+                          aria-hidden
+                          className="size-4 shrink-0 text-muted-foreground"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-medium">
+                            {fileNameFromPath(source)}
+                          </p>
+                          <p
+                            className="mt-0.5 truncate text-[10px] text-muted-foreground"
+                            title={source}
+                          >
+                            {source}
+                          </p>
+                        </div>
+                        <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                          {index + 1}
+                        </span>
+                        <SourceAction
+                          label="上移"
+                          disabled={running || index === 0}
+                          onClick={() => handleMoveSource(index, -1)}
+                        >
+                          <ArrowUp />
+                        </SourceAction>
+                        <SourceAction
+                          label="下移"
+                          disabled={running || index === sources.length - 1}
+                          onClick={() => handleMoveSource(index, 1)}
+                        >
+                          <ArrowDown />
+                        </SourceAction>
+                        <SourceAction
+                          label="移除"
+                          disabled={running}
+                          onClick={() =>
+                            setSources((current) =>
+                              current.filter(
+                                (_, sourceIndex) => sourceIndex !== index
+                              )
+                            )
+                          }
+                        >
+                          <Trash2 />
+                        </SourceAction>
+                      </li>
+                    ))}
+                  </ol>
+                </ScrollArea>
+              ) : (
+                <Empty className="h-full min-h-0 gap-2 rounded-none p-4">
+                  <EmptyHeader className="gap-1.5">
+                    <EmptyMedia variant="icon">
+                      <PackagePlus />
+                    </EmptyMedia>
+                    <EmptyTitle className="text-sm">
+                      {dragOver ? "松开以添加来源" : "拖入文件或文件夹"}
+                    </EmptyTitle>
+                    <EmptyDescription className="hidden max-w-xs text-xs sm:block">
+                      父文件夹已选中时，内部重复项目会在开始压缩前自动去重。
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card size="sm" className="min-h-0 gap-0 py-0">
+            <CardHeader className="shrink-0 px-4 py-3">
+              <CardTitle className="text-sm font-semibold">归档设置</CardTitle>
+              <CardDescription className="text-xs">
+                输出、格式、命名与安全选项
+              </CardDescription>
+              <CardAction>
+                <Badge variant="secondary">
+                  {extension} · {activeLevel?.label ?? "标准"}
+                </Badge>
+              </CardAction>
+            </CardHeader>
+            <Separator />
+
+            <CardContent className="min-h-0 flex-1 px-0">
+              <ScrollArea
+                data-testid="compress-settings-scroll"
+                className="h-full"
+                aria-label="归档设置"
+              >
+                <div className="flex flex-col gap-3 p-4">
+                  {error ? (
+                    <Alert variant="destructive">
+                      <CircleAlert />
+                      <AlertDescription>{error}</AlertDescription>
+                    </Alert>
+                  ) : null}
+
+                  {task ? (
+                    <CompressionTaskCard
+                      task={task}
+                      onOpen={() =>
+                        void openPath(task.outputPath).catch((reason) =>
+                          setError(toErrorMessage(reason))
+                        )
+                      }
+                    />
+                  ) : null}
+
+                  <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+                    <OutputLocationField
+                      className="sm:col-span-2"
+                      mode={outputMode}
+                      onModeChange={(mode) => updateDraft("outputMode", mode)}
+                      siblingLabel="来源同级"
+                      path={
+                        outputMode === "custom"
+                          ? outputDirectory
+                          : sources[0]
+                            ? defaultOutput
+                            : null
+                      }
+                      pathTitle={
+                        outputMode === "custom"
+                          ? outputDirectory
+                          : sources[0]
+                            ? defaultOutput
+                            : null
+                      }
+                      emptyLabel={
+                        outputMode === "custom"
+                          ? "尚未选择目录"
+                          : "首个来源的上级目录"
+                      }
+                      onPick={handlePickOutput}
+                      onClear={() => updateDraft("outputDirectory", null)}
+                      disabled={running}
+                    />
+
+                    <Field
+                      orientation="horizontal"
+                      className="min-w-0 rounded-xl border border-border/70 bg-muted/20 p-3 sm:col-span-2"
                     >
-                      {showPassword ? <EyeOff /> : <Eye />}
-                    </InputGroupButton>
-                  </InputGroupAddon>
-                </InputGroup>
-                <SwitchControl
-                  checked={encryptFileNames}
-                  onCheckedChange={(checked) =>
-                    updateDraft("encryptFileNames", checked)
-                  }
-                  label="加密文件名"
-                  disabled={running || format !== "sevenZip"}
-                  title={
-                    format === "zip"
-                      ? "ZIP 不支持隐藏归档内的文件名"
-                      : undefined
-                  }
-                />
+                      <FieldContent className="min-w-0">
+                        <FieldLabel
+                          htmlFor="compress-open-when-done"
+                          className="text-xs"
+                        >
+                          完成后打开
+                        </FieldLabel>
+                        <FieldDescription className="text-[10px]">
+                          自动打开输出文件夹
+                        </FieldDescription>
+                      </FieldContent>
+                      <Switch
+                        id="compress-open-when-done"
+                        size="sm"
+                        checked={openWhenDone}
+                        onCheckedChange={(checked) =>
+                          updateDraft("openWhenDone", checked)
+                        }
+                      />
+                    </Field>
+                  </div>
+
+                  <Separator />
+
+                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_176px]">
+                    <Field className="gap-1.5">
+                      <FieldLabel htmlFor="archive-name">
+                        归档基础名称
+                      </FieldLabel>
+                      <InputGroup>
+                        <InputGroupInput
+                          id="archive-name"
+                          value={baseName}
+                          onChange={(event) =>
+                            updateDraft("baseName", event.target.value)
+                          }
+                          placeholder="例如：项目交付资料"
+                          disabled={running}
+                          aria-describedby="archive-name-hint"
+                        />
+                        <InputGroupAddon align="inline-end">
+                          <InputGroupText>{extension}</InputGroupText>
+                        </InputGroupAddon>
+                      </InputGroup>
+                      <FieldDescription
+                        id="archive-name-hint"
+                        className="text-[10px] leading-relaxed text-muted-foreground"
+                      >
+                        名称由你提供；无效文件名字符会在本机安全替换。
+                      </FieldDescription>
+                    </Field>
+
+                    <FieldSet className="gap-1.5">
+                      <FieldLegend
+                        variant="label"
+                        className="mb-1.5 leading-snug"
+                      >
+                        归档格式
+                      </FieldLegend>
+                      <ToggleGroup
+                        variant="outline"
+                        spacing={0}
+                        value={[format]}
+                        disabled={running}
+                        onValueChange={(values) => {
+                          const next = values[0] as
+                            | CompressionFormat
+                            | undefined
+                          if (!next) {
+                            return
+                          }
+                          updateDraft("format", next)
+                          if (next === "zip") {
+                            updateDraft("encryptFileNames", false)
+                          }
+                        }}
+                        className="w-full"
+                      >
+                        <ToggleGroupItem
+                          value="sevenZip"
+                          className="flex-1 text-xs"
+                        >
+                          7z
+                        </ToggleGroupItem>
+                        <ToggleGroupItem value="zip" className="flex-1 text-xs">
+                          ZIP
+                        </ToggleGroupItem>
+                      </ToggleGroup>
+                      <FieldDescription className="text-[10px] leading-relaxed">
+                        {format === "sevenZip"
+                          ? "压缩率更高，支持文件名加密"
+                          : "兼容性更好，密码使用 AES-256"}
+                      </FieldDescription>
+                    </FieldSet>
+                  </div>
+
+                  <Field
+                    orientation="horizontal"
+                    data-disabled={running || undefined}
+                    className="items-center rounded-xl border border-border/80 bg-muted/30 p-3"
+                  >
+                    <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-background text-muted-foreground">
+                      <WandSparkles aria-hidden className="size-4" />
+                    </div>
+                    <FieldContent className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <FieldLabel
+                          htmlFor="compress-ai-rename"
+                          className="text-xs"
+                        >
+                          使用 AI 优化名称
+                        </FieldLabel>
+                        {activeAiProfile ? (
+                          <Badge variant="outline" className="font-normal">
+                            {activeAiProfile.name} ·{" "}
+                            {activeAiProfile.model || "未选择模型"}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="font-normal">
+                            未配置
+                          </Badge>
+                        )}
+                      </div>
+                      <FieldDescription className="text-[10px] leading-relaxed">
+                        只发送你填写的基础名称与提示词，不读取来源文件、路径或内容。
+                      </FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      id="compress-ai-rename"
+                      size="sm"
+                      checked={useAiRename}
+                      disabled={running}
+                      onCheckedChange={(checked) => {
+                        updateDraft("useAiRename", checked)
+                        setAiError(
+                          checked && !activeAiProfile
+                            ? "尚未配置可用的 AI 模型，请先前往设置。"
+                            : null
+                        )
+                      }}
+                    />
+                  </Field>
+
+                  {useAiRename && (!activeAiProfile || aiError) ? (
+                    <Alert className="animate-reveal-down motion-safe-only">
+                      <CircleAlert />
+                      <AlertDescription className="min-w-0 flex-1 text-[11px]">
+                        {aiError ?? "尚未配置可用的 AI 模型，请先前往设置。"}
+                      </AlertDescription>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {activeAiProfile && aiError ? (
+                          <>
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="outline"
+                              disabled={busy}
+                              onClick={() => void handleStart(false)}
+                            >
+                              重试
+                            </Button>
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="outline"
+                              disabled={busy}
+                              onClick={() => void handleStart(true)}
+                            >
+                              使用原名称
+                            </Button>
+                          </>
+                        ) : null}
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={onOpenAiSettings}
+                        >
+                          前往 AI 设置
+                        </Button>
+                      </div>
+                    </Alert>
+                  ) : null}
+
+                  <Separator />
+
+                  <div className="grid gap-3 md:grid-cols-[176px_minmax(0,1fr)]">
+                    <Field
+                      data-disabled={running || undefined}
+                      className="gap-1.5"
+                    >
+                      <FieldLabel htmlFor="compression-level">
+                        压缩级别
+                      </FieldLabel>
+                      <Select
+                        items={LEVEL_OPTIONS}
+                        value={String(level)}
+                        disabled={running}
+                        onValueChange={(value) => {
+                          if (value === null) {
+                            return
+                          }
+                          updateDraft(
+                            "level",
+                            Number(value) as CompressionLevel
+                          )
+                        }}
+                      >
+                        <SelectTrigger
+                          id="compression-level"
+                          className="w-full"
+                          aria-describedby="compression-level-hint"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent
+                          align="start"
+                          alignItemWithTrigger={false}
+                          className="min-w-56"
+                        >
+                          <SelectGroup>
+                            <SelectLabel>速度与体积平衡</SelectLabel>
+                            {LEVELS.map((item) => (
+                              <SelectItem
+                                key={item.value}
+                                value={String(item.value)}
+                              >
+                                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                  <span>{item.label}</span>
+                                  <span className="text-xs font-normal text-muted-foreground">
+                                    {item.description}
+                                  </span>
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      <FieldDescription
+                        id="compression-level-hint"
+                        className="text-[10px] leading-relaxed"
+                      >
+                        级别越高通常体积越小，但耗时和资源占用也会增加。
+                      </FieldDescription>
+                    </Field>
+
+                    <Field className="gap-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <FieldLabel htmlFor="compression-password">
+                          密码（可选）
+                        </FieldLabel>
+                        <span className="text-[10px] text-muted-foreground">
+                          不保存、不写入日志
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        <InputGroup className="min-w-0 flex-1">
+                          <InputGroupInput
+                            id="compression-password"
+                            type={showPassword ? "text" : "password"}
+                            value={password}
+                            onChange={(event) =>
+                              updateDraft("password", event.target.value)
+                            }
+                            placeholder="留空则创建无密码归档"
+                            disabled={running}
+                            autoComplete="off"
+                          />
+                          <InputGroupAddon align="inline-end">
+                            <InputGroupButton
+                              size="icon-xs"
+                              onClick={() => setShowPassword((value) => !value)}
+                              aria-label={
+                                showPassword ? "隐藏密码" : "显示密码"
+                              }
+                            >
+                              {showPassword ? <EyeOff /> : <Eye />}
+                            </InputGroupButton>
+                          </InputGroupAddon>
+                        </InputGroup>
+                        <SwitchControl
+                          checked={encryptFileNames}
+                          onCheckedChange={(checked) =>
+                            updateDraft("encryptFileNames", checked)
+                          }
+                          label="加密文件名"
+                          disabled={running || format !== "sevenZip"}
+                          title={
+                            format === "zip"
+                              ? "ZIP 不支持隐藏归档内的文件名"
+                              : undefined
+                          }
+                        />
+                      </div>
+                    </Field>
+                  </div>
+                </div>
+              </ScrollArea>
+            </CardContent>
+
+            <Separator />
+            <CardFooter className="shrink-0 justify-between gap-3 px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium">
+                  {format === "sevenZip" ? "7z 标准归档" : "ZIP AES-256 归档"}
+                </p>
+                <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                  {sources.length > 0
+                    ? `${COUNT_FORMATTER.format(sources.length)} 个来源 · 同名文件自动使用 “(1)” 后缀`
+                    : "添加来源后即可开始压缩"}
+                </p>
               </div>
-            </Field>
-          </div>
-
-          <FieldSeparator className="mt-3" />
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-xs font-medium">
-                {format === "sevenZip" ? "7z 标准归档" : "ZIP AES-256 归档"}
-              </p>
-              <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
-                同名文件自动使用 “(1)” 后缀；失败或取消时清理临时文件。
-              </p>
-            </div>
-            {running ? (
-              <Button type="button" variant="outline" onClick={handleCancel}>
-                <Square data-icon="inline-start" />
-                取消压缩
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                onClick={() => void handleStart(false)}
-                disabled={busy || sources.length === 0}
-              >
-                {busy ? (
-                  <Spinner data-icon="inline-start" />
-                ) : (
-                  <Archive data-icon="inline-start" />
-                )}
-                开始压缩
-              </Button>
-            )}
-          </div>
-        </section>
-
-        {task ? (
-          <CompressionTaskCard
-            task={task}
-            onOpen={() =>
-              void openPath(task.outputPath).catch((reason) =>
-                setError(toErrorMessage(reason))
-              )
-            }
-          />
-        ) : null}
-
-        {error ? (
-          <Alert variant="destructive" className="mt-3 shrink-0">
-            <CircleAlert />
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        ) : null}
+              {running ? (
+                <Button type="button" variant="outline" onClick={handleCancel}>
+                  <Square data-icon="inline-start" />
+                  取消压缩
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  onClick={() => void handleStart(false)}
+                  disabled={busy || sources.length === 0}
+                >
+                  {busy ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <Archive data-icon="inline-start" />
+                  )}
+                  开始压缩
+                </Button>
+              )}
+            </CardFooter>
+          </Card>
+        </div>
       </div>
     </div>
   )
@@ -930,7 +1067,7 @@ function CompressionTaskCard({
   return (
     <section
       className={cn(
-        "workbench-panel animate-task-card-enter motion-safe-only mt-3 shrink-0 overflow-hidden rounded-2xl border bg-card",
+        "workbench-panel animate-task-card-enter motion-safe-only shrink-0 overflow-hidden rounded-2xl border bg-card",
         task.success
           ? "border-success/35"
           : task.phase === "failed"
