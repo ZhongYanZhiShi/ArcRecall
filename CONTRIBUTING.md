@@ -1,51 +1,51 @@
-# Contributing to ArcRecall
+# 参与 ArcRecall
 
-English | [中文](./CONTRIBUTING.zh-CN.md)
+[English](./CONTRIBUTING.en.md) | 中文
 
-Thanks for helping improve ArcRecall. Issues and pull requests may be written in English or Chinese.
+感谢你帮助改进 ArcRecall。Issue 和 Pull Request 均可使用中文或英文。
 
-## Before you start
+## 开始之前
 
-- Search existing issues and pull requests before opening a new one.
-- Use an issue to discuss larger features or changes that affect the project structure.
-- Do not include passwords, private file names, archive contents, or other sensitive data in examples and logs.
+- 新建 Issue 或 Pull Request 前，请先搜索是否已有相同内容。
+- 较大的功能或涉及项目结构的改动，建议先通过 Issue 讨论。
+- 示例和日志中不要包含密码、私人文件名、压缩包内容或其他敏感信息。
 
-## Reporting a bug
+## 报告问题
 
-Use the bug report template and include:
+请使用 Bug 模板，并尽量提供：
 
-- Clear reproduction steps
-- The expected and actual behavior
-- The affected application and environment
-- A minimal sample or sanitized logs when they are safe to share
+- 清晰的复现步骤
+- 预期行为与实际结果
+- 受影响的应用和运行环境
+- 可以安全公开的最小示例或脱敏日志
 
-## Suggesting a feature
+## 提议功能
 
-Describe the use case before the proposed implementation. Explain what is difficult today, what result you want, and any alternatives you considered.
+请先说明使用场景，再描述期望的实现方式。内容应包括当前遇到的困难、期望结果，以及考虑过的其他方案。
 
-## Pull requests
+## 提交 Pull Request
 
-- Keep each pull request focused on one concern.
-- Link the related issue when one exists.
-- Explain both the reason for the change and the resulting behavior.
-- Add screenshots for visible desktop interface changes.
-- Update documentation when setup, commands, or behavior changes.
-- Avoid unrelated formatting changes, generated output, and dependency updates.
+- 每个 Pull Request 只处理一个明确问题。
+- 如果已有相关 Issue，请在说明中关联。
+- 同时说明改动原因和改动后的行为。
+- 桌面端的可见界面改动需要附截图。
+- 安装方式、命令或行为发生变化时，请同步更新文档。
+- 避免夹带无关的格式化、生成文件或依赖更新。
 
-## Validation
+## 验证
 
-Run the checks relevant to the part of the project you changed. Record the commands and results in the pull request instead of checking boxes for components you did not touch.
+请运行与本次改动相关的检查，并在 Pull Request 中记录命令和结果。未修改的应用不需要勾选对应检查项。
 
-Running `pnpm install` enables the pre-commit hook. Before each commit, it
-checks Oxfmt and `cargo fmt`; if the check fails, run:
+执行 `pnpm install` 会启用提交前钩子。每次提交前，
+钩子都会执行 Oxfmt 和 `cargo fmt` 格式检查；如果检查失败，请先运行：
 
 ```powershell
 pnpm format
 cargo fmt --all
 ```
 
-The repository does not currently enforce a commit message format.
+项目目前不强制提交信息格式。
 
-## License
+## 许可证
 
-By contributing, you agree that your contributions will be licensed under the [Apache License 2.0](./LICENSE).
+提交贡献即表示你同意相关内容按照 [Apache License 2.0](./LICENSE) 授权。
