@@ -44,7 +44,6 @@ type WorkbenchPageHeaderProps = Omit<
   React.ComponentProps<"header">,
   "title"
 > & {
-  eyebrow: React.ReactNode
   title: React.ReactNode
   description?: React.ReactNode
   actions?: React.ReactNode
@@ -54,7 +53,6 @@ type WorkbenchPageHeaderProps = Omit<
 }
 
 function WorkbenchPageHeader({
-  eyebrow,
   title,
   description,
   actions,
@@ -76,17 +74,9 @@ function WorkbenchPageHeader({
       {...props}
     >
       <div className={cn("min-w-0", contentClassName)}>
-        <p
-          className={cn(
-            "text-[11px] font-medium text-muted-foreground uppercase",
-            large ? "tracking-[0.18em]" : "tracking-[0.16em]"
-          )}
-        >
-          {eyebrow}
-        </p>
         <h1
           className={cn(
-            "mt-1 font-semibold tracking-tight",
+            "font-semibold tracking-tight",
             large ? "text-xl" : "text-lg"
           )}
         >

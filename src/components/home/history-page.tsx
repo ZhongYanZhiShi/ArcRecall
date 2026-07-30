@@ -34,6 +34,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -288,7 +289,6 @@ export function HistoryPage() {
     <WorkbenchPage>
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
-          eyebrow="Recall"
           title="历史"
           description="按内容指纹归并成功记录，不保存来源文件名或路径"
           actions={
@@ -323,7 +323,7 @@ export function HistoryPage() {
         <Card
           size="sm"
           aria-label="历史概览"
-          className="grid shrink-0 grid-cols-3 gap-0 divide-x divide-border/70 py-0 shadow-sm"
+          className="grid shrink-0 grid-cols-1 gap-px overflow-hidden bg-border py-0 shadow-sm sm:grid-cols-3"
         >
           <SummaryMetric
             icon={<History className="size-4" />}
@@ -335,7 +335,7 @@ export function HistoryPage() {
             icon={<KeyRound className="size-4" />}
             label="已存密码"
             value={String(result?.passwordCount ?? 0)}
-            hint="本机数据库明文保存"
+            hint="仅存本机，不同步或写入日志"
           />
           <SummaryMetric
             icon={<ShieldCheck className="size-4" />}
@@ -383,10 +383,10 @@ export function HistoryPage() {
         >
           <Alert
             aria-live="polite"
-            variant={error ? "destructive" : "default"}
+            variant={error ? "destructive" : notice ? "success" : "default"}
             className="shrink-0 rounded-none border-x-0 border-t-0 px-3 py-1.5"
           >
-            <AlertDescription className="text-[11px]">
+            <AlertDescription className="text-xs">
               {error ??
                 notice ??
                 (result
@@ -395,116 +395,157 @@ export function HistoryPage() {
             </AlertDescription>
           </Alert>
           <CardContent className="min-h-0 flex-1 p-0">
-            <ScrollArea className="h-full max-h-full [&_[data-slot=table-container]]:overflow-visible">
-              <Table>
-                <TableHeader className="sticky top-0 z-10 bg-card">
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead className="h-9 min-w-40 px-3 text-xs">
-                      内容指纹
-                    </TableHead>
-                    <TableHead className="h-9 w-16 px-3 text-xs">
-                      格式
-                    </TableHead>
-                    <TableHead className="h-9 w-28 px-3 text-right text-xs">
-                      大小 / 分卷
-                    </TableHead>
-                    <TableHead className="h-9 w-36 px-3 text-xs">
-                      首次成功
-                    </TableHead>
-                    <TableHead className="h-9 w-36 px-3 text-xs">
-                      最近验证
-                    </TableHead>
-                    <TableHead className="h-9 min-w-44 px-3 text-xs">
-                      密码
-                    </TableHead>
-                    <TableHead className="h-9 w-10 px-2">
-                      <span className="sr-only">操作</span>
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {loading ? (
-                    <StateRow
-                      icon={<Spinner />}
-                      title="正在读取历史"
-                      description="正在查询本机恢复记录。"
-                    />
-                  ) : result?.entries.length ? (
-                    result.entries.map((entry) => (
-                      <TableRow key={entry.id}>
-                        <TableCell className="px-3 py-2.5">
-                          <div className="flex items-center gap-2">
-                            <Fingerprint className="size-3.5 shrink-0 text-muted-foreground" />
-                            <div className="min-w-0">
-                              <p className="font-mono text-xs">
-                                {entry.fingerprintPrefix}…
-                              </p>
-                              <p className="mt-0.5 text-[10px] text-muted-foreground">
-                                已验证 {entry.verificationCount} 次
-                              </p>
+            <div className="hidden h-full sm:block">
+              <ScrollArea className="h-full max-h-full [&_[data-slot=table-container]]:overflow-visible">
+                <Table>
+                  <TableHeader className="sticky top-0 z-10 bg-card">
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="h-9 min-w-40 px-3 text-xs">
+                        内容指纹
+                      </TableHead>
+                      <TableHead className="h-9 w-16 px-3 text-xs">
+                        格式
+                      </TableHead>
+                      <TableHead className="h-9 w-28 px-3 text-right text-xs">
+                        大小 / 分卷
+                      </TableHead>
+                      <TableHead className="h-9 w-36 px-3 text-xs">
+                        首次成功
+                      </TableHead>
+                      <TableHead className="h-9 w-36 px-3 text-xs">
+                        最近验证
+                      </TableHead>
+                      <TableHead className="h-9 min-w-44 px-3 text-xs">
+                        密码
+                      </TableHead>
+                      <TableHead className="h-9 w-10 px-2">
+                        <span className="sr-only">操作</span>
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {loading ? (
+                      <StateRow
+                        icon={<Spinner />}
+                        title="正在读取历史"
+                        description="正在查询本机恢复记录。"
+                      />
+                    ) : result?.entries.length ? (
+                      result.entries.map((entry) => (
+                        <TableRow key={entry.id}>
+                          <TableCell className="px-3 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <Fingerprint className="size-3.5 shrink-0 text-muted-foreground" />
+                              <div className="min-w-0">
+                                <p className="font-mono text-xs">
+                                  {entry.fingerprintPrefix}…
+                                </p>
+                                <p className="mt-0.5 text-xs text-muted-foreground">
+                                  已验证 {entry.verificationCount} 次
+                                </p>
+                              </div>
                             </div>
-                          </div>
-                        </TableCell>
-                        <TableCell className="px-3 py-2.5 text-xs font-medium">
-                          {entry.archiveFormat}
-                        </TableCell>
-                        <TableCell className="px-3 py-2.5 text-right text-xs tabular-nums">
-                          <p>{formatBytes(entry.fileSize)}</p>
-                          <p className="mt-0.5 text-[10px] text-muted-foreground">
-                            {entry.volumeCount} 卷
-                          </p>
-                        </TableCell>
-                        <TableCell className="px-3 py-2.5 text-[11px] text-muted-foreground tabular-nums">
-                          {formatDate(entry.firstSuccessAtMs)}
-                        </TableCell>
-                        <TableCell className="px-3 py-2.5 text-[11px] text-muted-foreground tabular-nums">
-                          <span className="inline-flex items-center gap-1">
-                            <Clock3 className="size-3" />
-                            {formatDate(entry.lastVerifiedAtMs)}
-                          </span>
-                        </TableCell>
-                        <TableCell className="px-3 py-2">
-                          <PasswordCell
-                            entry={entry}
-                            revealed={
-                              revealed?.id === entry.id ? revealed.value : null
-                            }
-                            copied={copiedId === entry.id}
-                            busy={busy}
-                            onReveal={() => handleReveal(entry)}
-                            onCopy={() => handleCopy(entry)}
-                          />
-                        </TableCell>
-                        <TableCell className="px-2 py-2">
-                          <Button
-                            size="icon-xs"
-                            variant="ghost"
-                            disabled={busy}
-                            onClick={() => setDeleteTarget(entry)}
-                            aria-label={`删除指纹 ${entry.fingerprintPrefix} 的记录`}
-                            title="删除"
-                          >
-                            <Trash2 />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  ) : (
-                    <StateRow
-                      icon={<History className="size-5" />}
-                      title={
-                        appliedSearch ? "没有匹配的历史" : "还没有成功记录"
-                      }
-                      description={
-                        appliedSearch
-                          ? "请检查指纹前缀，或清空查询后重试。"
-                          : "成功解压归档后，会在这里按内容指纹自动归档。"
-                      }
-                    />
-                  )}
-                </TableBody>
-              </Table>
-            </ScrollArea>
+                          </TableCell>
+                          <TableCell className="px-3 py-2.5 text-xs font-medium">
+                            {entry.archiveFormat}
+                          </TableCell>
+                          <TableCell className="px-3 py-2.5 text-right text-xs tabular-nums">
+                            <p>{formatBytes(entry.fileSize)}</p>
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              {entry.volumeCount} 卷
+                            </p>
+                          </TableCell>
+                          <TableCell className="px-3 py-2.5 text-xs text-muted-foreground tabular-nums">
+                            {formatDate(entry.firstSuccessAtMs)}
+                          </TableCell>
+                          <TableCell className="px-3 py-2.5 text-xs text-muted-foreground tabular-nums">
+                            <span className="inline-flex items-center gap-1">
+                              <Clock3 className="size-3" />
+                              {formatDate(entry.lastVerifiedAtMs)}
+                            </span>
+                          </TableCell>
+                          <TableCell className="px-3 py-2">
+                            <PasswordCell
+                              entry={entry}
+                              revealed={
+                                revealed?.id === entry.id
+                                  ? revealed.value
+                                  : null
+                              }
+                              copied={copiedId === entry.id}
+                              busy={busy}
+                              onReveal={() => handleReveal(entry)}
+                              onCopy={() => handleCopy(entry)}
+                            />
+                          </TableCell>
+                          <TableCell className="px-2 py-2">
+                            <Button
+                              size="icon-xs"
+                              variant="ghost"
+                              disabled={busy}
+                              onClick={() => setDeleteTarget(entry)}
+                              aria-label={`删除指纹 ${entry.fingerprintPrefix} 的记录`}
+                              title="删除"
+                            >
+                              <Trash2 />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <StateRow
+                        icon={<History className="size-5" />}
+                        title={
+                          appliedSearch ? "没有匹配的历史" : "还没有成功记录"
+                        }
+                        description={
+                          appliedSearch
+                            ? "请检查指纹前缀，或清空查询后重试。"
+                            : "成功解压归档后，会在这里按内容指纹自动归档。"
+                        }
+                      />
+                    )}
+                  </TableBody>
+                </Table>
+              </ScrollArea>
+            </div>
+            <div className="h-full overflow-y-auto sm:hidden">
+              {loading ? (
+                <HistoryMobileState
+                  icon={<Spinner />}
+                  title="正在读取历史"
+                  description="正在查询本机恢复记录。"
+                />
+              ) : result?.entries.length ? (
+                <ul className="divide-y divide-border/70">
+                  {result.entries.map((entry) => (
+                    <li key={entry.id}>
+                      <HistoryMobileEntry
+                        entry={entry}
+                        revealed={
+                          revealed?.id === entry.id ? revealed.value : null
+                        }
+                        copied={copiedId === entry.id}
+                        busy={busy}
+                        onReveal={() => handleReveal(entry)}
+                        onCopy={() => handleCopy(entry)}
+                        onDelete={() => setDeleteTarget(entry)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <HistoryMobileState
+                  icon={<History className="size-5" />}
+                  title={appliedSearch ? "没有匹配的历史" : "还没有成功记录"}
+                  description={
+                    appliedSearch
+                      ? "请检查指纹前缀，或清空查询后重试。"
+                      : "成功解压归档后，会在这里按内容指纹自动归档。"
+                  }
+                />
+              )}
+            </div>
           </CardContent>
           <Separator />
           <div className="flex h-10 shrink-0 items-center justify-between px-3">
@@ -518,7 +559,7 @@ export function HistoryPage() {
               <PaginationContent>
                 <PaginationItem>
                   <Button
-                    size="icon-xs"
+                    size="sm"
                     variant="ghost"
                     disabled={busy || pageIndex <= 0}
                     onClick={() =>
@@ -529,12 +570,13 @@ export function HistoryPage() {
                     aria-label="上一页"
                     title="上一页"
                   >
-                    <ChevronLeft />
+                    <ChevronLeft data-icon="inline-start" />
+                    上一页
                   </Button>
                 </PaginationItem>
                 <PaginationItem>
                   <Button
-                    size="icon-xs"
+                    size="sm"
                     variant="ghost"
                     disabled={busy || pageIndex + 1 >= pageCount}
                     onClick={() =>
@@ -545,7 +587,8 @@ export function HistoryPage() {
                     aria-label="下一页"
                     title="下一页"
                   >
-                    <ChevronRight />
+                    下一页
+                    <ChevronRight data-icon="inline-end" />
                   </Button>
                 </PaginationItem>
               </PaginationContent>
@@ -619,22 +662,151 @@ function SummaryMetric({
   hint: string
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2.5 px-3 py-2.5">
+    <div className="flex min-w-0 items-center gap-2.5 bg-card px-3 py-2.5">
       <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted/80 text-muted-foreground">
         {icon}
       </div>
       <div className="min-w-0">
         <div className="flex items-baseline gap-2">
           <p className="shrink-0 text-sm font-semibold tabular-nums">{value}</p>
-          <p className="truncate text-[10px] font-medium tracking-wide text-muted-foreground">
+          <p className="truncate text-xs font-medium tracking-wide text-muted-foreground">
             {label}
           </p>
         </div>
-        <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
-          {hint}
-        </p>
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">{hint}</p>
       </div>
     </div>
+  )
+}
+
+function HistoryMobileEntry({
+  entry,
+  revealed,
+  copied,
+  busy,
+  onReveal,
+  onCopy,
+  onDelete,
+}: {
+  entry: RecoveryHistoryEntry
+  revealed: string | null
+  copied: boolean
+  busy: boolean
+  onReveal: () => void
+  onCopy: () => void
+  onDelete: () => void
+}) {
+  return (
+    <article className="flex flex-col gap-3 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="flex items-center gap-1.5 font-mono text-xs">
+            <Fingerprint
+              aria-hidden
+              className="size-3.5 shrink-0 text-muted-foreground"
+            />
+            <span className="truncate">{entry.fingerprintPrefix}…</span>
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            已验证 {entry.verificationCount} 次
+          </p>
+        </div>
+        <Badge variant="outline">{entry.archiveFormat}</Badge>
+      </div>
+
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+        <div>
+          <dt className="text-muted-foreground">大小 / 分卷</dt>
+          <dd className="mt-0.5 font-medium tabular-nums">
+            {formatBytes(entry.fileSize)} · {entry.volumeCount} 卷
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">最近验证</dt>
+          <dd className="mt-0.5 font-medium tabular-nums">
+            {formatDate(entry.lastVerifiedAtMs)}
+          </dd>
+        </div>
+      </dl>
+
+      <div className="flex min-w-0 items-center gap-2">
+        <code
+          className={cn(
+            "min-w-0 flex-1 truncate rounded-lg bg-muted/70 px-2.5 py-2 text-xs",
+            !revealed && "tracking-[0.14em] text-muted-foreground"
+          )}
+          title={revealed ?? undefined}
+        >
+          {entry.hasPassword ? (revealed ?? "••••••••") : "未保存密码"}
+        </code>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-11"
+          disabled={busy || !entry.hasPassword}
+          onClick={onReveal}
+        >
+          {revealed ? (
+            <EyeOff data-icon="inline-start" />
+          ) : (
+            <Eye data-icon="inline-start" />
+          )}
+          {revealed ? "隐藏" : "查看"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-11"
+          disabled={busy || !entry.hasPassword}
+          onClick={onCopy}
+        >
+          {copied ? (
+            <Check data-icon="inline-start" />
+          ) : (
+            <Clipboard data-icon="inline-start" />
+          )}
+          {copied ? "已复制" : "复制"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="destructive"
+          className="h-11"
+          disabled={busy}
+          onClick={onDelete}
+        >
+          <Trash2 data-icon="inline-start" />
+          删除
+        </Button>
+      </div>
+    </article>
+  )
+}
+
+function HistoryMobileState({
+  icon,
+  title,
+  description,
+}: {
+  icon: React.ReactNode
+  title: string
+  description: string
+}) {
+  return (
+    <Empty className="h-full min-h-56 border-0 px-6 py-10">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">{icon}</EmptyMedia>
+        <EmptyTitle className="text-sm">{title}</EmptyTitle>
+        <EmptyDescription className="max-w-sm text-xs">
+          {description}
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   )
 }
 
@@ -654,14 +826,14 @@ function PasswordCell({
   onCopy: () => void
 }) {
   if (!entry.hasPassword) {
-    return <span className="text-[11px] text-muted-foreground">未保存</span>
+    return <span className="text-xs text-muted-foreground">未保存</span>
   }
 
   return (
     <div className="flex min-w-0 items-center gap-1">
       <code
         className={cn(
-          "min-w-0 flex-1 truncate rounded-md bg-muted/70 px-2 py-1 text-[11px]",
+          "min-w-0 flex-1 truncate rounded-md bg-muted/70 px-2 py-1 text-xs",
           !revealed && "tracking-[0.14em] text-muted-foreground"
         )}
         title={revealed ?? undefined}

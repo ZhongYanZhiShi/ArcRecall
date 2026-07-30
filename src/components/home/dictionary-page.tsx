@@ -87,7 +87,7 @@ import {
   listDictionary,
 } from "@/lib/dictionary"
 
-type StatusTone = "neutral" | "busy" | "ok" | "warn"
+type StatusTone = "neutral" | "busy" | "ok" | "error"
 
 export function DictionaryPage() {
   const [entries, setEntries] = React.useState<DictionaryCandidateEntry[]>([])
@@ -168,7 +168,7 @@ export function DictionaryPage() {
       } catch (error) {
         const message =
           error instanceof Error ? error.message : String(error ?? "未知错误")
-        setStatusTone("warn")
+        setStatusTone("error")
         setStatus(`操作失败：${message}`)
       } finally {
         setIsBusy(false)
@@ -195,7 +195,7 @@ export function DictionaryPage() {
             "浏览器预览使用内存字典（刷新即清空）；桌面端写入本机 SQLite。"
           )
         } else {
-          setStatusTone("warn")
+          setStatusTone("error")
           setStatus(`加载失败：${message}`)
         }
       } finally {
@@ -268,7 +268,7 @@ export function DictionaryPage() {
       } catch (error) {
         const message =
           error instanceof Error ? error.message : String(error ?? "未知错误")
-        setStatusTone("warn")
+        setStatusTone("error")
         setStatus(`导入失败：${message}`)
       }
     })
@@ -372,7 +372,6 @@ export function DictionaryPage() {
     <WorkbenchPage>
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
-          eyebrow="Candidates"
           title="字典"
           description="管理本机全局密码候选集 · 解压验密直接读取此处"
           actions={
@@ -532,7 +531,7 @@ export function DictionaryPage() {
                               <p className="truncate font-mono text-xs">
                                 {entry.value}
                               </p>
-                              <p className="mt-0.5 text-[10px] text-muted-foreground">
+                              <p className="mt-0.5 text-xs text-muted-foreground">
                                 #{entry.id}
                               </p>
                             </div>
@@ -594,7 +593,13 @@ export function DictionaryPage() {
         </Card>
 
         <Alert
-          variant={statusTone === "warn" ? "destructive" : "default"}
+          variant={
+            statusTone === "error"
+              ? "destructive"
+              : statusTone === "ok"
+                ? "success"
+                : "default"
+          }
           className="shrink-0 py-2.5 shadow-sm"
         >
           {statusTone === "busy" ? <Spinner /> : null}
@@ -608,9 +613,6 @@ export function DictionaryPage() {
       <Sheet open={addPanelOpen} onOpenChange={setAddPanelOpen}>
         <SheetContent side="right" showCloseButton className="gap-0 p-0">
           <SheetHeader className="shrink-0 border-b border-border/80 pr-12">
-            <p className="text-[11px] font-medium tracking-[0.16em] text-muted-foreground uppercase">
-              Add Candidates
-            </p>
             <SheetTitle>添加候选</SheetTitle>
             <SheetDescription>
               导入文本字典，或单条 / 多行新增；重复项自动跳过。

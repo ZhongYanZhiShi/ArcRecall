@@ -8,6 +8,7 @@ import {
   Download,
   FileJson,
   FolderOpen,
+  MoreHorizontal,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -41,6 +42,15 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -54,6 +64,15 @@ import {
 } from "@/components/ui/input-group"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
@@ -84,7 +103,11 @@ const LEVELS: { value: LevelFilter; label: string }[] = [
 
 const LEVEL_META: Record<
   LogLevel,
-  { label: string; dot: string; badge: "destructive" | "secondary" | "outline" }
+  {
+    label: string
+    dot: string
+    badge: "destructive" | "secondary" | "outline" | "warning"
+  }
 > = {
   error: {
     label: "错误",
@@ -93,18 +116,18 @@ const LEVEL_META: Record<
   },
   warn: {
     label: "警告",
-    dot: "bg-amber-500",
-    badge: "secondary",
+    dot: "bg-warning",
+    badge: "warning",
   },
   info: {
     label: "信息",
-    dot: "bg-emerald-500",
+    dot: "bg-muted-foreground",
     badge: "outline",
   },
   debug: {
     label: "调试",
-    dot: "bg-sky-500",
-    badge: "outline",
+    dot: "bg-muted-foreground/60",
+    badge: "secondary",
   },
 }
 
@@ -306,56 +329,58 @@ export function LogsPage() {
     <WorkbenchPage>
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
-          eyebrow="Operations"
           title="日志"
           description="默认显示重要结果；过程记录可在“全部事件”中查看。"
           className="pr-12 lg:pr-0"
           actions={
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={isBusy}
-                onClick={handleOpenDirectory}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button variant="outline" size="sm" disabled={isBusy} />
+                }
               >
-                <FolderOpen data-icon="inline-start" />
-                目录
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={isBusy}
-                onClick={handleBackup}
-              >
-                <DatabaseBackup data-icon="inline-start" />
-                备份数据库
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={isBusy}
-                onClick={handleExport}
-              >
-                <Download data-icon="inline-start" />
-                导出
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={isBusy || (result?.totalCount ?? 0) === 0}
-                onClick={() => setClearDialogOpen(true)}
-              >
-                <Trash2 data-icon="inline-start" />
-                清空
-              </Button>
-            </>
+                <MoreHorizontal data-icon="inline-start" />
+                日志工具
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" sideOffset={8}>
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>诊断与维护</DropdownMenuLabel>
+                  <DropdownMenuItem
+                    disabled={isBusy}
+                    onClick={handleOpenDirectory}
+                  >
+                    <FolderOpen />
+                    打开日志目录
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={isBusy} onClick={handleBackup}>
+                    <DatabaseBackup />
+                    备份数据库
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={isBusy} onClick={handleExport}>
+                    <Download />
+                    导出诊断记录
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <DropdownMenuItem
+                    variant="destructive"
+                    disabled={isBusy || (result?.totalCount ?? 0) === 0}
+                    onClick={() => setClearDialogOpen(true)}
+                  >
+                    <Trash2 />
+                    清空本机日志
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
           }
         />
 
         <Card
           size="sm"
           aria-label="日志概览"
-          className="grid shrink-0 grid-cols-4 gap-0 divide-x divide-border/70 py-0 shadow-sm"
+          className="grid shrink-0 grid-cols-2 gap-px overflow-hidden bg-border py-0 shadow-sm sm:grid-cols-4"
         >
           <SummaryMetric
             label={compactMode ? "摘要" : "事件"}
@@ -393,48 +418,7 @@ export function LogsPage() {
         <Card size="sm" className="min-h-0 flex-1 gap-0 overflow-hidden py-0">
           <CardContent className="flex h-full min-h-0 flex-col p-0">
             <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border/80 p-2.5">
-              <ToggleGroup
-                value={[level]}
-                onValueChange={(value) => {
-                  const next = value[0] as LevelFilter | undefined
-                  if (next) {
-                    setLevel(next)
-                    setTake(PAGE_SIZE)
-                  }
-                }}
-                variant="outline"
-                size="sm"
-                spacing={0}
-                aria-label="按日志级别筛选"
-                className="flex-wrap"
-              >
-                {LEVELS.map((item) => (
-                  <ToggleGroupItem key={item.value} value={item.value}>
-                    {item.label}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-
-              <span
-                aria-hidden
-                className="hidden h-5 w-px bg-border sm:block"
-              />
-              <ToggleGroup
-                value={[displayMode]}
-                onValueChange={(value) => {
-                  const next = value[0] as DisplayMode | undefined
-                  if (next) {
-                    setDisplayMode(next)
-                  }
-                }}
-                size="sm"
-                aria-label="日志显示方式"
-              >
-                <ToggleGroupItem value="summary">简洁</ToggleGroupItem>
-                <ToggleGroupItem value="all">全部事件</ToggleGroupItem>
-              </ToggleGroup>
-
-              <div className="min-w-[180px] flex-1">
+              <div className="min-w-48 flex-1">
                 <Label htmlFor="log-search" className="sr-only">
                   搜索日志
                 </Label>
@@ -455,6 +439,51 @@ export function LogsPage() {
                 </InputGroup>
               </div>
 
+              <Select
+                value={level}
+                onValueChange={(value) => {
+                  if (value) {
+                    setLevel(value as LevelFilter)
+                    setTake(PAGE_SIZE)
+                  }
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label="按日志级别筛选"
+                  className="w-24"
+                >
+                  <SelectValue>
+                    {LEVELS.find((item) => item.value === level)?.label}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    <SelectLabel>日志级别</SelectLabel>
+                    {LEVELS.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+
+              <ToggleGroup
+                value={[displayMode]}
+                onValueChange={(value) => {
+                  const next = value[0] as DisplayMode | undefined
+                  if (next) {
+                    setDisplayMode(next)
+                  }
+                }}
+                size="sm"
+                aria-label="日志显示方式"
+              >
+                <ToggleGroupItem value="summary">摘要</ToggleGroupItem>
+                <ToggleGroupItem value="all">全部</ToggleGroupItem>
+              </ToggleGroup>
+
               <div className="flex items-center gap-2">
                 <Checkbox
                   id="logs-auto-refresh"
@@ -469,18 +498,19 @@ export function LogsPage() {
                 </Label>
                 <Button
                   variant="ghost"
-                  size="icon-xs"
+                  size="sm"
                   aria-label="立即刷新日志"
                   title="立即刷新"
                   disabled={refreshing}
                   onClick={() => void refresh()}
                 >
                   <RefreshCw
+                    data-icon="inline-start"
                     className={cn(
-                      "size-3.5",
                       refreshing && "animate-spin motion-reduce:animate-none"
                     )}
                   />
+                  刷新
                 </Button>
               </div>
             </div>
@@ -488,10 +518,10 @@ export function LogsPage() {
             <Alert
               aria-live="polite"
               aria-atomic="true"
-              variant={error ? "destructive" : "default"}
+              variant={error ? "destructive" : notice ? "success" : "default"}
               className="shrink-0 rounded-none border-x-0 border-t-0 px-3 py-1.5"
             >
-              <AlertDescription className="text-[11px]">
+              <AlertDescription className="text-xs">
                 {error ??
                   notice ??
                   (result
@@ -512,7 +542,7 @@ export function LogsPage() {
               ) : result?.entries.length ? (
                 <>
                   {hiddenRoutineCount > 0 ? (
-                    <div className="flex items-center justify-between gap-3 border-b border-border/70 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
+                    <div className="flex items-center justify-between gap-3 border-b border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
                       <p>已收起 {hiddenRoutineCount} 条技术与过程记录。</p>
                       <Button
                         type="button"
@@ -614,7 +644,7 @@ function SummaryMetric({
   return (
     <div
       className={cn(
-        "flex min-w-0 items-center gap-2.5 px-3 py-2.5",
+        "flex min-w-0 items-center gap-2.5 bg-card px-3 py-2.5",
         tone === "danger" && "bg-destructive/[0.035]"
       )}
     >
@@ -631,13 +661,11 @@ function SummaryMetric({
           <p className="shrink-0 text-sm font-semibold tracking-tight tabular-nums">
             {value}
           </p>
-          <p className="truncate text-[10px] font-medium tracking-wide text-muted-foreground">
+          <p className="truncate text-xs font-medium tracking-wide text-muted-foreground">
             {label}
           </p>
         </div>
-        <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
-          {hint}
-        </p>
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">{hint}</p>
       </div>
     </div>
   )
@@ -649,10 +677,10 @@ function LogRow({ entry }: { entry: LogEntry }) {
   const context = Object.entries(entry.context)
 
   return (
-    <li className="grid grid-cols-[7.25rem_4rem_minmax(0,1fr)] gap-2 px-3 py-2.5 text-xs transition-colors [contain-intrinsic-size:auto_76px] [content-visibility:auto] hover:bg-muted/30">
+    <li className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1.5 px-3 py-2.5 text-xs transition-colors [contain-intrinsic-size:auto_76px] [content-visibility:auto] hover:bg-muted/30 sm:grid-cols-[7.25rem_4rem_minmax(0,1fr)] sm:gap-2">
       <time
         dateTime={new Date(entry.timestampMs).toISOString()}
-        className="font-mono text-[10px] leading-5 whitespace-nowrap text-muted-foreground"
+        className="font-mono text-xs leading-5 whitespace-nowrap text-muted-foreground"
       >
         {formatTimestamp(entry.timestampMs)}
       </time>
@@ -662,27 +690,27 @@ function LogRow({ entry }: { entry: LogEntry }) {
           {meta.label}
         </Badge>
       </div>
-      <div className="min-w-0">
+      <div className="col-span-2 min-w-0 sm:col-span-1">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <span className="font-medium text-foreground">
             {presentation.title}
           </span>
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-xs text-muted-foreground">
             {sourceLabel(entry.source)}
           </span>
         </div>
         {presentation.description ? (
-          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             {presentation.description}
           </p>
         ) : null}
         <Collapsible className="group mt-1.5">
-          <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-md text-[10px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30">
+          <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-md text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30">
             技术详情
             <ChevronDown className="size-3 transition-transform group-data-[open]/collapsible:rotate-180" />
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <dl className="mt-2 grid gap-1.5 rounded-lg border border-border/70 bg-muted/20 p-2 text-[10px] sm:grid-cols-2">
+            <dl className="mt-2 grid gap-1.5 rounded-lg border border-border/70 bg-muted/20 p-2 text-xs sm:grid-cols-2">
               <TechnicalField
                 label="来源"
                 value={`${sourceLabel(entry.source)}（${entry.source}）`}

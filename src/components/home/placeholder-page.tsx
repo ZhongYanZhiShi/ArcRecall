@@ -11,21 +11,15 @@ import {
 } from "@/components/ui/empty"
 
 type PlaceholderPageProps = {
-  eyebrow: string
   title: string
   description: string
 }
 
-export function PlaceholderPage({
-  eyebrow,
-  title,
-  description,
-}: PlaceholderPageProps) {
+export function PlaceholderPage({ title, description }: PlaceholderPageProps) {
   return (
     <WorkbenchPage>
       <WorkbenchPageContent>
         <WorkbenchPageHeader
-          eyebrow={eyebrow}
           title={title}
           description={description}
           className="mb-3 text-center"

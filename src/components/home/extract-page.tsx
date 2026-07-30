@@ -497,9 +497,8 @@ export function ExtractPage({
     <WorkbenchPage>
       <WorkbenchPageContent className="pb-4">
         <WorkbenchPageHeader
-          eyebrow="ArcRecall"
           title="恢复并解压"
-          description="选择压缩包后自动识别格式、恢复密码并安全解压。"
+          description="按文件内容识别格式，尝试已知或本机候选密码，并安全解包。"
           size="large"
           className="mb-5"
         />
@@ -534,7 +533,8 @@ export function ExtractPage({
             <Button
               type="button"
               variant="ghost"
-              size="icon-sm"
+              size="sm"
+              className="size-11 rounded-xl"
               aria-label="解压选项"
               title="解压选项"
               onClick={() => setOptionsOpen(true)}
@@ -574,7 +574,7 @@ export function ExtractPage({
             <CardDescription className="max-w-lg truncate text-xs">
               {analysis
                 ? `${analysis.formatLabel} · ${formatFileSize(analysis.fileSize)} · 不依赖扩展名`
-                : "按内容识别 7z / ZIP / RAR，支持乱后缀、无后缀与复合载体"}
+                : "按内容识别 7z / ZIP / RAR，支持乱后缀、无后缀与文件内嵌归档"}
             </CardDescription>
           </CardHeader>
           <CardContent
@@ -588,7 +588,7 @@ export function ExtractPage({
               {analysis ? "更换压缩包" : "选择压缩包"}
             </Button>
             {!analysis ? (
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 也可粘贴绝对路径
                 <Kbd className="ml-1">Ctrl + V</Kbd>
               </p>
@@ -599,6 +599,8 @@ export function ExtractPage({
         <button
           type="button"
           onClick={() => setOptionsOpen(true)}
+          aria-label="打开解压选项"
+          aria-describedby="extract-options-summary"
           className="workbench-panel mt-3 flex min-w-0 shrink-0 items-center gap-2 rounded-2xl border border-border/80 bg-card px-3 py-2.5 text-left transition-colors hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 focus-visible:outline-none"
         >
           <div className="flex min-w-0 flex-1 flex-col gap-1.5">
@@ -632,13 +634,14 @@ export function ExtractPage({
               ) : null}
             </div>
             <p
-              className="truncate text-[11px] text-muted-foreground"
+              id="extract-options-summary"
+              className="truncate text-xs text-muted-foreground"
               title={computeSummary}
             >
               {computeSummary}
             </p>
           </div>
-          <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-muted-foreground">
+          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground">
             选项
             <ChevronRight className="size-3.5" />
           </span>
@@ -694,7 +697,7 @@ export function ExtractPage({
                     >
                       完成后打开
                     </FieldLabel>
-                    <FieldDescription className="text-[10px]">
+                    <FieldDescription className="text-xs">
                       自动打开输出文件夹
                     </FieldDescription>
                   </FieldContent>
@@ -714,7 +717,7 @@ export function ExtractPage({
                     <FieldLabel htmlFor="extract-recursive" className="text-xs">
                       递归解密
                     </FieldLabel>
-                    <FieldDescription className="text-[10px]">
+                    <FieldDescription className="text-xs">
                       最多 5 层、100 个归档
                     </FieldDescription>
                   </FieldContent>
@@ -759,7 +762,7 @@ export function ExtractPage({
                     仅 CPU
                   </ToggleGroupItem>
                 </ToggleGroup>
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                <p className="text-xs leading-relaxed text-muted-foreground">
                   {computeSummary}
                 </p>
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -773,7 +776,7 @@ export function ExtractPage({
                         />
                       ))
                   ) : capabilityError ? null : (
-                    <span className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                       <Spinner className="size-3" />
                       正在探测计算设备与引擎…
                     </span>
@@ -826,28 +829,28 @@ export function ExtractPage({
                   自动回退
                 </Badge>
               </div>
-              <p
-                id="recovery-route"
-                className="mb-2 text-[11px] leading-relaxed text-muted-foreground"
-              >
-                免密检查 → 手动 / 历史密码 → Hashcat / John → 7-Zip CPU 兼容兜底
-                → 安全解压{recursive ? " → 递归扫描" : ""}
-              </p>
+              <RecoveryRoute recursive={recursive} />
               {analysis.hasSavedPassword ? (
-                <Alert className="mb-2 py-2 text-[11px]">
+                <Alert variant="success" className="mb-2 py-2">
                   <ShieldCheck />
-                  <AlertDescription className="text-[11px]">
+                  <AlertDescription className="text-xs">
                     已命中本机历史密码；留空时会优先自动复验，不会在任务开始前显示明文。
                   </AlertDescription>
                 </Alert>
               ) : analysis.historyMatched ? (
-                <Alert className="mb-2 py-2 text-[11px]">
+                <Alert variant="warning" className="mb-2 py-2">
                   <CircleAlert />
-                  <AlertDescription className="text-[11px]">
+                  <AlertDescription className="text-xs">
                     已找到相同内容的成功记录，但该记录没有保存密码。
                   </AlertDescription>
                 </Alert>
               ) : null}
+              <TaskPreflight
+                outputPath={outputSummaryLabel}
+                outputMode={outputMode}
+                computeMode={computeMode}
+                recursive={recursive}
+              />
               <div className="flex gap-2">
                 <InputGroup className="min-w-0 flex-1">
                   <InputGroupInput
@@ -876,13 +879,17 @@ export function ExtractPage({
                     取消
                   </Button>
                 ) : (
-                  <Button onClick={handleStart} disabled={busy}>
+                  <Button
+                    onClick={handleStart}
+                    disabled={busy}
+                    aria-describedby="recovery-start-summary"
+                  >
                     {busy ? (
                       <Spinner data-icon="inline-start" />
                     ) : (
                       <KeyRound data-icon="inline-start" />
                     )}
-                    开始智能恢复
+                    开始恢复尝试
                   </Button>
                 )}
               </div>
@@ -902,6 +909,8 @@ export function ExtractPage({
                     (reason) => setError(toErrorMessage(reason))
                   )
                 }
+                onOpenOptions={() => setOptionsOpen(true)}
+                onOpenEngineSettings={onOpenEngineSettings}
               />
             ) : null}
           </section>
@@ -910,11 +919,121 @@ export function ExtractPage({
         {error ? (
           <Alert variant="destructive" className="mt-2 shrink-0">
             <CircleAlert />
-            <AlertDescription>{error}</AlertDescription>
+            <AlertDescription>
+              <p>{error}</p>
+              {analysis ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={() => setOptionsOpen(true)}
+                  >
+                    <Settings2 data-icon="inline-start" />
+                    检查解压选项
+                  </Button>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={onOpenEngineSettings}
+                  >
+                    检查解密引擎
+                  </Button>
+                </div>
+              ) : null}
+            </AlertDescription>
           </Alert>
         ) : null}
       </WorkbenchPageContent>
     </WorkbenchPage>
+  )
+}
+
+function RecoveryRoute({ recursive }: { recursive: boolean }) {
+  const steps = [
+    "识别内容",
+    "校验已知密码",
+    "尝试本机候选",
+    "安全解包",
+    ...(recursive ? ["扫描嵌套归档"] : []),
+  ]
+
+  return (
+    <div id="recovery-route" className="mb-2">
+      <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+        本次处理路径
+      </p>
+      <ol
+        aria-label={`本次处理路径：${steps.join("、")}`}
+        className="flex flex-wrap items-center gap-x-1 gap-y-1.5"
+      >
+        {steps.map((step, index) => (
+          <li key={step} className="flex items-center gap-1">
+            <span className="inline-flex items-center gap-1 rounded-lg bg-muted/60 px-2 py-1 text-xs text-foreground">
+              <span className="flex size-5 items-center justify-center rounded-full bg-background text-xs font-semibold tabular-nums">
+                {index + 1}
+              </span>
+              {step}
+            </span>
+            {index < steps.length - 1 ? (
+              <ChevronRight
+                aria-hidden
+                className="size-3 text-muted-foreground/70"
+              />
+            ) : null}
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+function TaskPreflight({
+  outputPath,
+  outputMode,
+  computeMode,
+  recursive,
+}: {
+  outputPath: string
+  outputMode: OutputMode
+  computeMode: RecoveryComputeMode
+  recursive: boolean
+}) {
+  const collisionPolicy =
+    outputMode === "sibling"
+      ? "已有目录时自动使用新的序号目录"
+      : "同名文件自动改名，不覆盖已有文件"
+  const computePolicy =
+    computeMode === "cpuOnly"
+      ? "仅使用 CPU"
+      : "可用时使用 GPU，否则自动回退 CPU"
+
+  return (
+    <div
+      id="recovery-start-summary"
+      aria-label="任务启动摘要"
+      className="mb-2 grid gap-px overflow-hidden rounded-xl border border-border/70 bg-border sm:grid-cols-2"
+    >
+      <PreflightItem label="输出位置" value={outputPath} />
+      <PreflightItem label="同名处理" value={collisionPolicy} />
+      <PreflightItem label="计算方式" value={computePolicy} />
+      <PreflightItem
+        label="任务控制"
+        value={`${recursive ? "最多扫描 5 层嵌套归档" : "不扫描嵌套归档"} · 可随时取消 · 运行期间请保持应用开启`}
+      />
+    </div>
+  )
+}
+
+function PreflightItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 bg-card px-3 py-2">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className="mt-0.5 truncate text-xs text-foreground" title={value}>
+        {value}
+      </p>
+    </div>
   )
 }
 
@@ -925,6 +1044,8 @@ function TaskResult({
   onTogglePassword,
   onCopyPassword,
   onOpenOutput,
+  onOpenOptions,
+  onOpenEngineSettings,
 }: {
   task: RecoveryTaskStatus
   showPassword: boolean
@@ -932,6 +1053,8 @@ function TaskResult({
   onTogglePassword: () => void
   onCopyPassword: () => void
   onOpenOutput: () => void
+  onOpenOptions: () => void
+  onOpenEngineSettings: () => void
 }) {
   const progress = resolveTaskProgress(task)
   const hasCandidateProgress =
@@ -948,6 +1071,7 @@ function TaskResult({
     task.running && task.rootExtractionCompleted
       ? "递归处理"
       : PHASE_LABELS[task.phase]
+  const recoveryHint = taskRecoveryHint(task)
 
   return (
     <div
@@ -995,12 +1119,12 @@ function TaskResult({
             {task.message}
           </p>
           {task.running && task.rootExtractionCompleted ? (
-            <p className="mt-1 text-[11px] text-success-foreground">
+            <p className="mt-1 text-xs text-success-foreground">
               主归档已完成，当前仅处理递归发现的嵌套归档。
             </p>
           ) : null}
           {hasCandidateProgress || task.elapsedMs > 0 ? (
-            <p className="mt-1 text-[11px] text-muted-foreground tabular-nums">
+            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
               {hasCandidateProgress
                 ? `已尝试 ${formatCount(task.attemptedCount)} / ${formatCount(task.candidateCount)} 条候选 · `
                 : ""}
@@ -1008,7 +1132,7 @@ function TaskResult({
             </p>
           ) : null}
           {hasRecursiveProgress ? (
-            <div className="mt-1 flex flex-col gap-0.5 text-[11px] text-muted-foreground">
+            <div className="mt-1 flex flex-col gap-0.5 text-xs text-muted-foreground">
               <p className="tabular-nums">
                 已扫描 {formatCount(task.scannedFileCount)} 个文件 · 嵌套归档：
                 发现 {formatCount(task.nestedArchiveCount)} · 已解开{" "}
@@ -1034,6 +1158,30 @@ function TaskResult({
                   已达到递归安全限制，剩余嵌套归档未继续处理。
                 </p>
               ) : null}
+            </div>
+          ) : null}
+          {recoveryHint ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl bg-muted/40 px-3 py-2">
+              <p className="min-w-52 flex-1 text-xs leading-relaxed text-muted-foreground">
+                {recoveryHint}
+              </p>
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={onOpenOptions}
+              >
+                <Settings2 data-icon="inline-start" />
+                调整选项
+              </Button>
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={onOpenEngineSettings}
+              >
+                检查引擎
+              </Button>
             </div>
           ) : null}
           <RecoveryProcessDetails key={task.taskId} task={task} />
@@ -1069,19 +1217,36 @@ function TaskResult({
             </div>
           ) : null}
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          className="shrink-0"
-          disabled={!task.success && !task.rootExtractionCompleted}
-          onClick={onOpenOutput}
-        >
-          <PackageOpen data-icon="inline-start" />
-          打开输出
-        </Button>
+        {task.success || task.rootExtractionCompleted ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={onOpenOutput}
+          >
+            <PackageOpen data-icon="inline-start" />
+            打开输出
+          </Button>
+        ) : null}
       </div>
     </div>
   )
+}
+
+function taskRecoveryHint(task: RecoveryTaskStatus): string | null {
+  if (task.running || task.success) {
+    return null
+  }
+  if (task.cancelled) {
+    return "任务已取消，所选归档和当前设置仍然保留，可调整后重新开始。"
+  }
+  if (task.phase === "exhausted") {
+    return "没有找到可用密码。可补充已知密码、导入候选字典或检查解密引擎后重试。"
+  }
+  if (task.phase === "failed") {
+    return "请先查看详细过程定位原因，再调整输出选项或解密引擎后重试。"
+  }
+  return null
 }
 
 function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
@@ -1098,7 +1263,7 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
     <>
       <div className="mt-2 flex min-w-0 items-center gap-2 rounded-lg border border-border/70 bg-muted/20 px-2.5 py-1.5">
         <ListTree className="size-3.5 shrink-0 text-muted-foreground" />
-        <p className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
+        <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
           最近：{PHASE_LABELS[latest.phase]}
           {latest.engine ? ` · ${latest.engine}` : ""} ·{" "}
           {formatCompactElapsed(latest.elapsedMs)}
@@ -1107,7 +1272,7 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
           type="button"
           variant="ghost"
           size="sm"
-          className="h-7 shrink-0 rounded-md px-2 text-[11px]"
+          className="h-8 shrink-0 rounded-md px-2 text-xs"
           onClick={() => setOpen(true)}
         >
           详细过程
@@ -1157,7 +1322,7 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
                     key={event.sequence}
                     className="relative grid grid-cols-[50px_18px_minmax(0,1fr)] gap-2 py-3 before:absolute before:top-8 before:bottom-0 before:left-[60px] before:w-px before:bg-border last:before:hidden"
                   >
-                    <time className="pt-0.5 text-[10px] text-muted-foreground tabular-nums">
+                    <time className="pt-0.5 text-xs text-muted-foreground tabular-nums">
                       {formatCompactElapsed(event.elapsedMs)}
                     </time>
                     <span className="relative z-10 flex justify-center pt-0.5">
@@ -1195,11 +1360,11 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
                           ? ` · ${archiveNameFromPath(event.archivePath)}`
                           : ""}
                       </p>
-                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                         {event.message}
                       </p>
                       {metadata ? (
-                        <p className="mt-1 text-[10px] text-muted-foreground tabular-nums">
+                        <p className="mt-1 text-xs text-muted-foreground tabular-nums">
                           {metadata}
                         </p>
                       ) : null}
@@ -1211,7 +1376,7 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
           </ScrollArea>
 
           <Separator />
-          <p className="shrink-0 px-5 py-3 text-[10px] text-muted-foreground">
+          <p className="shrink-0 px-5 py-3 text-xs text-muted-foreground">
             为保护密码安全，仅展示候选进度，不展示或记录具体候选内容。
           </p>
         </SheetContent>
@@ -1451,7 +1616,7 @@ function StatusCard({
   return (
     <Card size="sm" className="gap-0 py-0">
       <CardHeader className="flex-row items-center justify-between gap-2 px-3 pt-2 pb-0">
-        <p className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+        <p className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground">
           {icon}
           {title}
         </p>
@@ -1583,8 +1748,11 @@ function pathForDisplay(path: string): string {
 }
 
 function toErrorMessage(reason: unknown): string {
-  if (reason instanceof Error) {
+  if (reason instanceof Error && reason.message.trim()) {
     return reason.message
   }
-  return String(reason)
+  if (typeof reason === "string" && reason.trim()) {
+    return reason
+  }
+  return "操作未完成。请检查所选文件和应用设置后重试。"
 }

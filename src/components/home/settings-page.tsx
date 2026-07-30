@@ -151,6 +151,8 @@ export function SettingsPage({
   const [recoverySettingsMessage, setRecoverySettingsMessage] = React.useState<
     string | null
   >(null)
+  const [recoverySettingsError, setRecoverySettingsError] =
+    React.useState(false)
   const [toolsDirInput, setToolsDirInput] = React.useState("")
   const [johnDirInput, setJohnDirInput] = React.useState("")
   const [perlPathInput, setPerlPathInput] = React.useState("")
@@ -161,6 +163,7 @@ export function SettingsPage({
   const [logSettingsMessage, setLogSettingsMessage] = React.useState<
     string | null
   >(null)
+  const [logSettingsError, setLogSettingsError] = React.useState(false)
   const [logMaxDiskInput, setLogMaxDiskInput] = React.useState(
     String(DEFAULT_LOG_MAX_DISK_MIB)
   )
@@ -413,14 +416,17 @@ export function SettingsPage({
     }
     setAppSettings(next)
     setLogSettingsBusy(true)
+    setLogSettingsError(false)
     setLogSettingsMessage("正在保存日志级别…")
     void (async () => {
       try {
         const saved = await setSettings(next)
         setAppSettings(saved)
+        setLogSettingsError(false)
         setLogSettingsMessage(`日志级别已切换为“${logLevelLabel(level)}”。`)
       } catch (error) {
         setAppSettings(previous)
+        setLogSettingsError(true)
         setLogSettingsMessage(`保存失败：${errorMessage(error)}`)
       } finally {
         setLogSettingsBusy(false)
@@ -438,6 +444,7 @@ export function SettingsPage({
       maxDiskMib < MIN_LOG_MAX_DISK_MIB ||
       maxDiskMib > MAX_LOG_MAX_DISK_MIB
     ) {
+      setLogSettingsError(true)
       setLogSettingsMessage(
         `请输入 ${MIN_LOG_MAX_DISK_MIB}–${MAX_LOG_MAX_DISK_MIB} 之间的整数。`
       )
@@ -447,6 +454,7 @@ export function SettingsPage({
       (appSettings.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB) ===
       maxDiskMib
     ) {
+      setLogSettingsError(false)
       setLogSettingsMessage(`日志最大占用已是 ${maxDiskMib} MiB。`)
       return
     }
@@ -459,6 +467,7 @@ export function SettingsPage({
       },
     }
     setLogSettingsBusy(true)
+    setLogSettingsError(false)
     setLogSettingsMessage("正在保存日志容量…")
     void (async () => {
       try {
@@ -467,8 +476,10 @@ export function SettingsPage({
           saved.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB
         setAppSettings(saved)
         setLogMaxDiskInput(String(savedMaxDiskMib))
+        setLogSettingsError(false)
         setLogSettingsMessage(`日志最大占用已调整为 ${savedMaxDiskMib} MiB。`)
       } catch (error) {
+        setLogSettingsError(true)
         setLogSettingsMessage(`保存失败：${errorMessage(error)}`)
       } finally {
         setLogSettingsBusy(false)
@@ -491,11 +502,13 @@ export function SettingsPage({
     }
     setAppSettings(next)
     setRecoverySettingsBusy(true)
+    setRecoverySettingsError(false)
     setRecoverySettingsMessage("正在保存默认解密方式…")
     void (async () => {
       try {
         const saved = await setSettings(next)
         setAppSettings(saved)
+        setRecoverySettingsError(false)
         setRecoverySettingsMessage(
           mode === "gpuPreferred"
             ? "默认使用 GPU 优先；GPU 不可用或执行失败时自动回退 CPU。"
@@ -503,6 +516,7 @@ export function SettingsPage({
         )
       } catch (error) {
         setAppSettings(previous)
+        setRecoverySettingsError(true)
         setRecoverySettingsMessage(`保存失败：${errorMessage(error)}`)
       } finally {
         setRecoverySettingsBusy(false)
@@ -536,7 +550,6 @@ export function SettingsPage({
     <WorkbenchPage>
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
-          eyebrow="Preferences"
           title="设置"
           description={activeMeta.description}
           actions={
@@ -656,7 +669,7 @@ export function SettingsPage({
                     </RadioGroup>
                   </FieldSet>
                   <div>
-                    <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">
+                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">
                       恢复方式与可选能力
                     </p>
                     <div className="flex flex-wrap gap-1.5">
@@ -687,7 +700,15 @@ export function SettingsPage({
                     </div>
                   </div>
                   {recoverySettingsMessage ? (
-                    <Alert>
+                    <Alert
+                      variant={
+                        recoverySettingsError
+                          ? "destructive"
+                          : recoverySettingsBusy
+                            ? "default"
+                            : "success"
+                      }
+                    >
                       <AlertDescription>
                         {recoverySettingsMessage}
                       </AlertDescription>
@@ -783,7 +804,15 @@ export function SettingsPage({
                     回退。
                   </p>
                   {engineMessage ? (
-                    <Alert variant={engineError ? "destructive" : "default"}>
+                    <Alert
+                      variant={
+                        engineError
+                          ? "destructive"
+                          : engineBusy
+                            ? "default"
+                            : "success"
+                      }
+                    >
                       <AlertDescription>{engineMessage}</AlertDescription>
                     </Alert>
                   ) : null}
@@ -1109,7 +1138,7 @@ export function SettingsPage({
                             <span className="block text-xs font-medium">
                               {item.label}
                             </span>
-                            <span className="block text-[10px] leading-tight text-muted-foreground">
+                            <span className="block text-xs leading-tight text-muted-foreground">
                               {item.description}
                             </span>
                           </ToggleGroupItem>
@@ -1198,7 +1227,15 @@ export function SettingsPage({
                       </FieldDescription>
                     </FieldSet>
                     {logSettingsMessage ? (
-                      <Alert>
+                      <Alert
+                        variant={
+                          logSettingsError
+                            ? "destructive"
+                            : logSettingsBusy
+                              ? "default"
+                              : "success"
+                        }
+                      >
                         <AlertDescription aria-live="polite">
                           {logSettingsMessage}
                         </AlertDescription>

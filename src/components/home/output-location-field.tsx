@@ -54,7 +54,7 @@ export function OutputLocationField({
       <div className="flex min-w-0 items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="text-xs leading-none font-medium">输出位置</p>
-          <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+          <p className="mt-1 text-xs leading-snug text-muted-foreground">
             {isCustom
               ? hasPath
                 ? "可随时重新选择或清除目录"

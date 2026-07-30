@@ -490,7 +490,6 @@ export function CompressPage({
         className="pb-5"
       >
         <WorkbenchPageHeader
-          eyebrow="Pack"
           title="创建归档"
           description="先整理来源，再设置归档参数；主操作始终保持可见。"
           size="large"
@@ -582,13 +581,13 @@ export function CompressPage({
                             {fileNameFromPath(source)}
                           </p>
                           <p
-                            className="mt-0.5 truncate text-[10px] text-muted-foreground"
+                            className="mt-0.5 truncate text-xs text-muted-foreground"
                             title={source}
                           >
                             {source}
                           </p>
                         </div>
-                        <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                           {index + 1}
                         </span>
                         <SourceAction
@@ -720,7 +719,7 @@ export function CompressPage({
                         >
                           完成后打开
                         </FieldLabel>
-                        <FieldDescription className="text-[10px]">
+                        <FieldDescription className="text-xs">
                           自动打开输出文件夹
                         </FieldDescription>
                       </FieldContent>
@@ -759,7 +758,7 @@ export function CompressPage({
                       </InputGroup>
                       <FieldDescription
                         id="archive-name-hint"
-                        className="text-[10px] leading-relaxed text-muted-foreground"
+                        className="text-xs leading-relaxed text-muted-foreground"
                       >
                         名称由你提供；无效文件名字符会在本机安全替换。
                       </FieldDescription>
@@ -801,7 +800,7 @@ export function CompressPage({
                           ZIP
                         </ToggleGroupItem>
                       </ToggleGroup>
-                      <FieldDescription className="text-[10px] leading-relaxed">
+                      <FieldDescription className="text-xs leading-relaxed">
                         {format === "sevenZip"
                           ? "压缩率更高，支持文件名加密"
                           : "兼容性更好，密码使用 AES-256"}
@@ -836,7 +835,7 @@ export function CompressPage({
                           </Badge>
                         )}
                       </div>
-                      <FieldDescription className="text-[10px] leading-relaxed">
+                      <FieldDescription className="text-xs leading-relaxed">
                         只发送你填写的基础名称与提示词，不读取来源文件、路径或内容。
                       </FieldDescription>
                     </FieldContent>
@@ -857,9 +856,12 @@ export function CompressPage({
                   </Field>
 
                   {useAiRename && (!activeAiProfile || aiError) ? (
-                    <Alert className="animate-reveal-down motion-safe-only">
+                    <Alert
+                      variant="warning"
+                      className="animate-reveal-down motion-safe-only"
+                    >
                       <CircleAlert />
-                      <AlertDescription className="min-w-0 flex-1 text-[11px]">
+                      <AlertDescription className="min-w-0 flex-1 text-xs">
                         {aiError ?? "尚未配置可用的 AI 模型，请先前往设置。"}
                       </AlertDescription>
                       <div className="flex shrink-0 items-center gap-1.5">
@@ -954,7 +956,7 @@ export function CompressPage({
                       </Select>
                       <FieldDescription
                         id="compression-level-hint"
-                        className="text-[10px] leading-relaxed"
+                        className="text-xs leading-relaxed"
                       >
                         级别越高通常体积越小，但耗时和资源占用也会增加。
                       </FieldDescription>
@@ -965,7 +967,7 @@ export function CompressPage({
                         <FieldLabel htmlFor="compression-password">
                           密码（可选）
                         </FieldLabel>
-                        <span className="text-[10px] text-muted-foreground">
+                        <span className="text-xs text-muted-foreground">
                           不保存、不写入日志
                         </span>
                       </div>
@@ -1020,7 +1022,7 @@ export function CompressPage({
                 <p className="text-xs font-medium">
                   {format === "sevenZip" ? "7z 标准归档" : "ZIP AES-256 归档"}
                 </p>
-                <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                <p className="mt-0.5 truncate text-xs text-muted-foreground">
                   {sources.length > 0
                     ? `${COUNT_FORMATTER.format(sources.length)} 个来源 · 同名文件自动使用 “(1)” 后缀`
                     : "添加来源后即可开始压缩"}
@@ -1115,12 +1117,12 @@ function CompressionTaskCard({
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             {task.message}
           </p>
-          <p className="mt-1 text-[11px] text-muted-foreground tabular-nums">
+          <p className="mt-1 text-xs text-muted-foreground tabular-nums">
             {task.processedSourceCount} / {task.totalSourceCount} 个来源 · 用时{" "}
             {formatElapsed(task.elapsedMs)}
           </p>
           <p
-            className="mt-1 truncate font-mono text-[10px] text-muted-foreground"
+            className="mt-1 truncate font-mono text-xs text-muted-foreground"
             title={task.outputPath}
           >
             {task.outputPath}
