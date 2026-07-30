@@ -34,6 +34,7 @@ import {
   Field,
   FieldContent,
   FieldDescription,
+  FieldError,
   FieldLabel,
   FieldLegend,
   FieldSeparator,
@@ -511,6 +512,12 @@ export function SettingsPage({
 
   const hashcatReady =
     Boolean(hashcat?.installed) || Boolean(hashcat?.configuredExists)
+  const parsedLogMaxDisk = Number(logMaxDiskInput)
+  const logCapacityInvalid =
+    appSettings !== null &&
+    (!Number.isInteger(parsedLogMaxDisk) ||
+      parsedLogMaxDisk < MIN_LOG_MAX_DISK_MIB ||
+      parsedLogMaxDisk > MAX_LOG_MAX_DISK_MIB)
 
   return (
     <WorkbenchPage>
@@ -544,16 +551,16 @@ export function SettingsPage({
           }}
           className="flex min-h-0 flex-1 flex-col gap-2"
         >
-          <TabsList className="h-auto w-full shrink-0 flex-wrap justify-start gap-0.5 rounded-2xl p-1">
+          <TabsList className="h-auto w-full shrink-0 flex-wrap justify-start gap-0.5">
             {CATEGORIES.map((item) => {
               const Icon = item.icon
               return (
                 <TabsTrigger
                   key={item.id}
                   value={item.id}
-                  className="flex-none gap-1.5 px-2.5 text-xs sm:text-sm"
+                  className="flex-none"
                 >
-                  <Icon className="size-3.5" strokeWidth={1.9} />
+                  <Icon data-icon="inline-start" />
                   {item.label}
                 </TabsTrigger>
               )
@@ -574,12 +581,10 @@ export function SettingsPage({
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="flex flex-col gap-1">
                       <div className="flex items-center gap-2">
-                        <CardTitle className="text-sm">默认解密方式</CardTitle>
-                        <Badge variant="secondary" className="font-normal">
-                          可在解压页快速切换
-                        </Badge>
+                        <CardTitle>默认解密方式</CardTitle>
+                        <Badge variant="secondary">可在解压页快速切换</Badge>
                       </div>
-                      <CardDescription className="text-xs">
+                      <CardDescription>
                         GPU 优先会自动回退 CPU；仅 CPU 模式不会启动 GPU
                         恢复进程。
                       </CardDescription>
@@ -594,7 +599,7 @@ export function SettingsPage({
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-3 pt-4">
+                <CardContent className="flex flex-col gap-3">
                   <FieldSet disabled={recoverySettingsBusy}>
                     <FieldLegend className="sr-only">默认解密方式</FieldLegend>
                     <RadioGroup
@@ -613,7 +618,7 @@ export function SettingsPage({
                           <Zap className="mt-0.5 size-4 shrink-0" />
                           <FieldContent>
                             <FieldTitle>GPU 优先</FieldTitle>
-                            <FieldDescription className="text-[11px]">
+                            <FieldDescription>
                               Hashcat GPU → Hashcat / John / 7-Zip CPU
                             </FieldDescription>
                           </FieldContent>
@@ -628,7 +633,7 @@ export function SettingsPage({
                           <Cpu className="mt-0.5 size-4 shrink-0" />
                           <FieldContent>
                             <FieldTitle>仅 CPU</FieldTitle>
-                            <FieldDescription className="text-[11px]">
+                            <FieldDescription>
                               Hashcat CPU → John CPU → 7-Zip CPU
                             </FieldDescription>
                           </FieldContent>
@@ -649,17 +654,13 @@ export function SettingsPage({
                           style={{
                             animationDelay: `${Math.min(index, 4) * 45}ms`,
                           }}
-                          variant={method.available ? "default" : "outline"}
-                          className="animate-status-chip-enter motion-safe-only font-normal"
+                          variant={method.available ? "success" : "outline"}
+                          className="animate-status-chip-enter motion-safe-only"
                         >
                           {method.label} ·{" "}
                           {method.available ? "可用" : "未就绪"}
                         </Badge>
-                      )) ?? (
-                        <Badge variant="outline" className="font-normal">
-                          正在探测…
-                        </Badge>
-                      )}
+                      )) ?? <Badge variant="outline">正在探测…</Badge>}
                     </div>
                   </div>
                   {recoverySettingsMessage ? (
@@ -677,28 +678,24 @@ export function SettingsPage({
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="flex min-w-0 flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <CardTitle className="text-sm">
-                          Windows x64 完整离线包
-                        </CardTitle>
-                        <Badge variant="secondary" className="font-normal">
+                        <CardTitle>Windows x64 完整离线包</CardTitle>
+                        <Badge variant="secondary">
                           清单 v{fullBundle?.manifestVersion ?? 1}
                         </Badge>
                         <Badge
-                          variant={fullBundle?.bundled ? "default" : "outline"}
-                          className="font-normal"
+                          variant={fullBundle?.bundled ? "success" : "warning"}
                         >
                           {fullBundle?.bundled ? "资源已内置" : "精简构建"}
                         </Badge>
                         <Badge
                           variant={
-                            fullBundle?.installed ? "default" : "outline"
+                            fullBundle?.installed ? "success" : "warning"
                           }
-                          className="font-normal"
                         >
                           {fullBundle?.installed ? "全部就绪" : "待部署"}
                         </Badge>
                       </div>
-                      <CardDescription className="text-xs">
+                      <CardDescription>
                         安装器内包含 7-Zip、Hashcat、John CPU 引擎、Strawberry
                         Perl，以及 7z2john / rar2john / zip2john。部署时逐包校验
                         SHA-256，再展开到可写工具目录。
@@ -718,7 +715,7 @@ export function SettingsPage({
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-3 pt-4">
+                <CardContent className="flex flex-col gap-3">
                   <div className="flex flex-wrap gap-1.5">
                     {[
                       { id: "7zip", component: fullBundle?.sevenZip },
@@ -728,8 +725,7 @@ export function SettingsPage({
                     ].map(({ id, component }) => (
                       <Badge
                         key={id}
-                        variant={component?.runnable ? "default" : "outline"}
-                        className="font-normal"
+                        variant={component?.runnable ? "success" : "warning"}
                       >
                         {component?.name ?? "检测中"}{" "}
                         {component?.version ?? "—"} ·{" "}
@@ -739,26 +735,22 @@ export function SettingsPage({
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     <Badge
-                      variant={fullBundle?.has7z2john ? "default" : "outline"}
-                      className="font-normal"
+                      variant={fullBundle?.has7z2john ? "success" : "warning"}
                     >
                       7z2john {fullBundle?.has7z2john ? "可用" : "缺失"}
                     </Badge>
                     <Badge
-                      variant={fullBundle?.hasRar2john ? "default" : "outline"}
-                      className="font-normal"
+                      variant={fullBundle?.hasRar2john ? "success" : "warning"}
                     >
                       rar2john {fullBundle?.hasRar2john ? "可用" : "缺失"}
                     </Badge>
                     <Badge
-                      variant={fullBundle?.hasZip2john ? "default" : "outline"}
-                      className="font-normal"
+                      variant={fullBundle?.hasZip2john ? "success" : "warning"}
                     >
                       zip2john {fullBundle?.hasZip2john ? "可用" : "缺失"}
                     </Badge>
                     <Badge
-                      variant={fullBundle?.johnCpuReady ? "default" : "outline"}
-                      className="font-normal"
+                      variant={fullBundle?.johnCpuReady ? "success" : "warning"}
                     >
                       CPU 回退 {fullBundle?.johnCpuReady ? "可用" : "缺失"}
                     </Badge>
@@ -779,18 +771,15 @@ export function SettingsPage({
 
               <Card size="sm">
                 <CardHeader className="border-b border-border/80">
-                  <CardTitle className="text-sm">工具公共目录</CardTitle>
-                  <CardDescription className="text-xs">
+                  <CardTitle>工具公共目录</CardTitle>
+                  <CardDescription>
                     引擎下载安装的根目录。可设为公共/共享路径，供本机多处复用；留空则使用应用默认
                     tools 目录。
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-3 pt-4">
+                <CardContent className="flex flex-col gap-3">
                   <Field>
-                    <FieldLabel
-                      htmlFor="tools-dir"
-                      className="text-xs text-muted-foreground"
-                    >
+                    <FieldLabel htmlFor="tools-dir">
                       公共目录（绝对路径）
                     </FieldLabel>
                     <InputGroup>
@@ -825,15 +814,15 @@ export function SettingsPage({
                             )
                           }
                         >
-                          <ExternalLink />
+                          <ExternalLink data-icon="inline-start" />
                           跳转
                         </InputGroupButton>
                       </InputGroupAddon>
                     </InputGroup>
-                    <FieldDescription className="text-[11px]">
+                    <FieldDescription>
                       默认：{hashcat?.defaultToolsDirectory || "—"}
                     </FieldDescription>
-                    <FieldDescription className="text-[11px]">
+                    <FieldDescription>
                       当前生效：{hashcat?.toolsDirectory || "—"}
                     </FieldDescription>
                   </Field>
@@ -862,18 +851,15 @@ export function SettingsPage({
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="flex min-w-0 flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <CardTitle className="text-sm">hashcat</CardTitle>
-                        <Badge variant="secondary" className="font-normal">
+                        <CardTitle>hashcat</CardTitle>
+                        <Badge variant="secondary">
                           v{hashcat?.version ?? "—"}
                         </Badge>
-                        <Badge
-                          variant={hashcatReady ? "default" : "outline"}
-                          className="font-normal"
-                        >
+                        <Badge variant={hashcatReady ? "success" : "warning"}>
                           {hashcatReady ? "已就绪" : "未安装"}
                         </Badge>
                       </div>
-                      <CardDescription className="text-xs">
+                      <CardDescription>
                         完整发行包已内置固定版本；这里保留 GitHub
                         下载作为精简构建或修复安装的后备路径。下载同样执行
                         SHA-256 校验，不静默更新、不提权。
@@ -889,7 +875,7 @@ export function SettingsPage({
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-3 pt-4">
+                <CardContent className="flex flex-col gap-3">
                   <InfoRow
                     icon={<HardDrive className="size-3.5" />}
                     label="可执行文件"
@@ -934,15 +920,14 @@ export function SettingsPage({
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="flex min-w-0 flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <CardTitle className="text-sm">John / Perl</CardTitle>
+                        <CardTitle>John / Perl</CardTitle>
                         <Badge
-                          variant={johnPerl?.ready ? "default" : "outline"}
-                          className="font-normal"
+                          variant={johnPerl?.ready ? "success" : "warning"}
                         >
                           {johnPerl?.ready ? "已就绪" : "未就绪"}
                         </Badge>
                       </div>
-                      <CardDescription className="text-xs">
+                      <CardDescription>
                         完整包会自动写入 John 工具目录与
                         perl.exe；也可在此覆盖为 自备版本。提供
                         7z2john、rar2john、zip2john 哈希转换及 John CPU 回退。
@@ -967,14 +952,9 @@ export function SettingsPage({
                     </div>
                   </div>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-3 pt-4">
+                <CardContent className="flex flex-col gap-3">
                   <Field>
-                    <FieldLabel
-                      htmlFor="john-dir"
-                      className="text-xs text-muted-foreground"
-                    >
-                      John 工具目录
-                    </FieldLabel>
+                    <FieldLabel htmlFor="john-dir">John 工具目录</FieldLabel>
                     <InputGroup>
                       <InputGroupInput
                         id="john-dir"
@@ -992,19 +972,14 @@ export function SettingsPage({
                           disabled={engineBusy || !johnDirInput.trim()}
                           onClick={() => handleOpenPath(johnDirInput)}
                         >
-                          <ExternalLink />
+                          <ExternalLink data-icon="inline-start" />
                           跳转
                         </InputGroupButton>
                       </InputGroupAddon>
                     </InputGroup>
                   </Field>
                   <Field>
-                    <FieldLabel
-                      htmlFor="perl-path"
-                      className="text-xs text-muted-foreground"
-                    >
-                      perl.exe 路径
-                    </FieldLabel>
+                    <FieldLabel htmlFor="perl-path">perl.exe 路径</FieldLabel>
                     <InputGroup>
                       <InputGroupInput
                         id="perl-path"
@@ -1022,7 +997,7 @@ export function SettingsPage({
                           disabled={engineBusy || !perlPathInput.trim()}
                           onClick={() => handleOpenPath(perlPathInput)}
                         >
-                          <ExternalLink />
+                          <ExternalLink data-icon="inline-start" />
                           跳转
                         </InputGroupButton>
                       </InputGroupAddon>
@@ -1031,38 +1006,33 @@ export function SettingsPage({
                   <div className="flex flex-wrap gap-1.5">
                     <Badge
                       variant={
-                        johnPerl?.sevenZipConverterReady ? "default" : "outline"
+                        johnPerl?.sevenZipConverterReady ? "success" : "warning"
                       }
-                      className="font-normal"
                     >
                       7z2john{" "}
                       {johnPerl?.sevenZipConverterReady ? "可用" : "缺失"}
                     </Badge>
                     <Badge
                       variant={
-                        johnPerl?.rarConverterReady ? "default" : "outline"
+                        johnPerl?.rarConverterReady ? "success" : "warning"
                       }
-                      className="font-normal"
                     >
                       rar2john {johnPerl?.rarConverterReady ? "可用" : "缺失"}
                     </Badge>
                     <Badge
                       variant={
-                        johnPerl?.zipConverterReady ? "default" : "outline"
+                        johnPerl?.zipConverterReady ? "success" : "warning"
                       }
-                      className="font-normal"
                     >
                       zip2john {johnPerl?.zipConverterReady ? "可用" : "缺失"}
                     </Badge>
                     <Badge
-                      variant={johnPerl?.johnCpuReady ? "default" : "outline"}
-                      className="font-normal"
+                      variant={johnPerl?.johnCpuReady ? "success" : "warning"}
                     >
                       John CPU {johnPerl?.johnCpuReady ? "可用" : "缺失"}
                     </Badge>
                     <Badge
-                      variant={johnPerl?.perlExists ? "default" : "outline"}
-                      className="font-normal"
+                      variant={johnPerl?.perlExists ? "success" : "warning"}
                     >
                       perl {johnPerl?.perlExists ? "可用" : "未配置"}
                     </Badge>
@@ -1081,19 +1051,19 @@ export function SettingsPage({
                 <Card size="sm">
                   <CardHeader className="border-b border-border/80">
                     <div className="flex items-center gap-2">
-                      <CardTitle className="text-sm">应用日志</CardTitle>
-                      <Badge variant="outline" className="font-normal">
+                      <CardTitle>应用日志</CardTitle>
+                      <Badge variant="outline">
                         {appSettings?.logging?.maxDiskMib ??
                           DEFAULT_LOG_MAX_DISK_MIB}{" "}
                         MiB 上限
                       </Badge>
                     </div>
-                    <CardDescription className="text-xs leading-relaxed">
+                    <CardDescription>
                       控制本机 JSONL
                       日志的详细程度和最大磁盘占用。密码、候选内容和用户路径会在写入前隐藏。
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="flex flex-col gap-3 pt-4">
+                  <CardContent className="flex flex-col gap-3">
                     <FieldSet
                       disabled={logSettingsBusy || appSettings === null}
                     >
@@ -1113,7 +1083,7 @@ export function SettingsPage({
                           <ToggleGroupItem
                             key={item.value}
                             value={item.value}
-                            className="h-auto min-h-14 flex-col items-start gap-0.5 rounded-xl px-2.5 py-2 text-left"
+                            className="h-auto min-h-14 flex-col items-start gap-0.5 text-left"
                           >
                             <span className="block text-xs font-medium">
                               {item.label}
@@ -1131,8 +1101,12 @@ export function SettingsPage({
                       disabled={logSettingsBusy || appSettings === null}
                     >
                       <FieldLegend className="sr-only">日志容量</FieldLegend>
-                      <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-                        <Field className="max-w-48 gap-1.5">
+                      <Field
+                        orientation="responsive"
+                        data-invalid={logCapacityInvalid}
+                        data-disabled={logSettingsBusy || appSettings === null}
+                      >
+                        <FieldContent className="max-w-64">
                           <FieldLabel htmlFor="log-max-disk-mib">
                             最大磁盘占用
                           </FieldLabel>
@@ -1149,20 +1123,28 @@ export function SettingsPage({
                                 setLogMaxDiskInput(event.target.value)
                               }
                               aria-describedby="log-max-disk-hint"
+                              aria-invalid={logCapacityInvalid}
                             />
                             <InputGroupAddon align="inline-end">
                               <InputGroupText>MiB</InputGroupText>
                             </InputGroupAddon>
                           </InputGroup>
-                        </Field>
+                          {logCapacityInvalid ? (
+                            <FieldError>
+                              请输入 {MIN_LOG_MAX_DISK_MIB}–
+                              {MAX_LOG_MAX_DISK_MIB} 之间的整数。
+                            </FieldError>
+                          ) : null}
+                        </FieldContent>
                         <Button
                           type="button"
                           size="sm"
+                          disabled={logCapacityInvalid}
                           onClick={handleSaveLogCapacity}
                         >
                           保存容量
                         </Button>
-                      </div>
+                      </Field>
                       <ToggleGroup
                         value={
                           LOG_CAPACITY_PRESETS.some(
@@ -1189,10 +1171,7 @@ export function SettingsPage({
                           </ToggleGroupItem>
                         ))}
                       </ToggleGroup>
-                      <FieldDescription
-                        id="log-max-disk-hint"
-                        className="text-[11px] leading-relaxed text-muted-foreground"
-                      >
+                      <FieldDescription id="log-max-disk-hint">
                         可设置 {MIN_LOG_MAX_DISK_MIB}–{MAX_LOG_MAX_DISK_MIB}{" "}
                         MiB；日志按 5 MiB 分片，到达总上限后自动删除最旧文件。
                       </FieldDescription>
@@ -1209,17 +1188,16 @@ export function SettingsPage({
                 <Card size="sm">
                   <CardHeader>
                     <div className="flex items-center gap-2">
-                      <CardTitle className="text-sm">内置 7-Zip</CardTitle>
+                      <CardTitle>内置 7-Zip</CardTitle>
                       <Badge
                         variant={
-                          fullBundle?.sevenZip.runnable ? "default" : "outline"
+                          fullBundle?.sevenZip.runnable ? "success" : "warning"
                         }
-                        className="font-normal"
                       >
                         {fullBundle?.sevenZip.runnable ? "可运行" : "未就绪"}
                       </Badge>
                     </div>
-                    <CardDescription className="text-xs leading-relaxed">
+                    <CardDescription>
                       {fullBundle?.sevenZip.message ??
                         "正在读取 7-Zip 进程探测状态…"}
                     </CardDescription>
@@ -1240,14 +1218,14 @@ export function SettingsPage({
                 <CardHeader className="border-b border-border/80">
                   <div className="flex items-center gap-2">
                     <Database className="size-4 text-muted-foreground" />
-                    <CardTitle className="text-sm">本地数据</CardTitle>
+                    <CardTitle>本地数据</CardTitle>
                   </div>
-                  <CardDescription className="text-xs">
+                  <CardDescription>
                     本机
                     SQLite，不在项目仓库内；缺失时自动创建。字典导入编码自动识别。
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-3 pt-4">
+                <CardContent className="flex flex-col gap-3">
                   <InfoRow
                     icon={<HardDrive className="size-3.5" />}
                     label="数据根目录"
@@ -1306,13 +1284,9 @@ function InfoRow({
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         {icon}
         <span>{label}</span>
-        {badge ? (
-          <Badge variant="outline" className="font-normal">
-            {badge}
-          </Badge>
-        ) : null}
+        {badge ? <Badge variant="outline">{badge}</Badge> : null}
       </div>
-      <p className="rounded-xl bg-muted/40 px-2.5 py-2 font-mono text-[11px] break-all text-foreground">
+      <p className="rounded-xl bg-muted/40 px-2.5 py-2 font-mono text-xs break-all text-foreground">
         {value}
       </p>
     </div>

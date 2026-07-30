@@ -1045,11 +1045,9 @@ async fn ai_generate_archive_name(
             .find(|profile| profile.id == selected_id)
             .ok_or_else(|| "尚未配置可用的 AI 模型，请先前往设置。".to_string())?;
         let api_key = get_ai_api_key(&profile.id)?;
-        if profile.provider == AiProviderKind::DeepSeek && api_key.is_none() {
-            return Err("当前 DeepSeek 配置缺少 API Key，请先前往设置。".into());
-        }
         (
             AiClientConfig {
+                provider: profile.provider,
                 base_url: profile.base_url.clone(),
                 model: profile.model.clone(),
                 api_key,
@@ -1196,10 +1194,8 @@ fn resolve_ai_client_config(
             .ok_or_else(|| "未找到可用的 AI 配置。".to_string())?
     };
     let api_key = get_ai_api_key(&profile.id)?;
-    if profile.provider == AiProviderKind::DeepSeek && api_key.is_none() {
-        return Err("当前 DeepSeek 配置缺少 API Key。".into());
-    }
     Ok(AiClientConfig {
+        provider: profile.provider,
         base_url: profile.base_url,
         model: profile.model,
         api_key,

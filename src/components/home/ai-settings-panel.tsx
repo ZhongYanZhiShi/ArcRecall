@@ -9,7 +9,6 @@ import {
   RefreshCw,
   Save,
   Server,
-  Sparkles,
   Trash2,
   Unplug,
 } from "lucide-react"
@@ -30,11 +29,21 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+  useComboboxAnchor,
+} from "@/components/ui/combobox"
 import {
   Empty,
   EmptyDescription,
@@ -45,12 +54,27 @@ import {
 import {
   Field,
   FieldDescription,
+  FieldError,
   FieldGroup,
   FieldLabel,
   FieldSeparator,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -78,17 +102,40 @@ type ProfileDraft = {
   clearApiKey: boolean
 }
 
+type InvalidProfileField = "name" | "baseUrl"
+
 const PROVIDERS = (Object.keys(AI_PROVIDER_DEFAULTS) as AiProviderKind[]).map(
-  (provider) => ({
-    value: provider,
-    ...AI_PROVIDER_DEFAULTS[provider],
-  })
+  (provider) => {
+    const defaults = AI_PROVIDER_DEFAULTS[provider]
+    return {
+      value: provider,
+      ...defaults,
+      label: `${defaults.label}${defaults.local ? "（本地）" : ""}`,
+    }
+  }
 )
 
+function formatModelSize(sizeBytes?: number): string | null {
+  if (!sizeBytes || !Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return null
+  }
+  const sizeGigabytes = sizeBytes / 1_000_000_000
+  return `${new Intl.NumberFormat("zh-CN", {
+    maximumFractionDigits: sizeGigabytes >= 10 ? 1 : 2,
+  }).format(sizeGigabytes)} GB`
+}
+
+function formatModelMetadata(model: AiModelInfo): string {
+  return [formatModelSize(model.sizeBytes), model.parameterSize?.trim() || null]
+    .filter((value): value is string => Boolean(value))
+    .join(" · ")
+}
+
 export function AiSettingsPanel() {
+  const modelComboboxAnchor = useComboboxAnchor()
   const [settings, setSettings] = React.useState<AiSettings | null>(null)
   const [draft, setDraft] = React.useState<ProfileDraft>(() =>
-    newProfileDraft("deepSeek")
+    newProfileDraft("ollama")
   )
   const [models, setModels] = React.useState<AiModelInfo[]>([])
   const [prompt, setPrompt] = React.useState("")
@@ -96,6 +143,8 @@ export function AiSettingsPanel() {
   const [message, setMessage] = React.useState<string | null>(null)
   const [error, setError] = React.useState(false)
   const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const [invalidField, setInvalidField] =
+    React.useState<InvalidProfileField | null>(null)
 
   const applySettings = React.useCallback(
     (next: AiSettings, preferredId?: string | null) => {
@@ -108,7 +157,7 @@ export function AiSettingsPanel() {
       if (selected) {
         setDraft(profileToDraft(selected))
       } else {
-        setDraft(newProfileDraft("deepSeek"))
+        setDraft(newProfileDraft("ollama"))
       }
     },
     []
@@ -141,6 +190,7 @@ export function AiSettingsPanel() {
     setModels([])
     setError(false)
     setMessage(null)
+    setInvalidField(null)
   }
 
   const handleProviderChange = (provider: AiProviderKind) => {
@@ -152,14 +202,23 @@ export function AiSettingsPanel() {
       model: defaults.model,
     }))
     setModels([])
+    setInvalidField(null)
+    setError(false)
+    setMessage(null)
   }
 
-  const validateDraft = (): string | null => {
+  const validateDraft = (): {
+    field: InvalidProfileField
+    message: string
+  } | null => {
     if (!draft.name.trim()) {
-      return "请输入配置名称。"
+      return { field: "name", message: "请输入配置名称。" }
     }
     if (!draft.baseUrl.trim()) {
-      return "请输入 OpenAI-compatible 服务地址。"
+      return {
+        field: "baseUrl",
+        message: "请输入 OpenAI-compatible 服务地址。",
+      }
     }
     return null
   }
@@ -187,10 +246,12 @@ export function AiSettingsPanel() {
     }
     const validationError = validateDraft()
     if (validationError) {
+      setInvalidField(validationError.field)
       setError(true)
-      setMessage(validationError)
+      setMessage(validationError.message)
       return
     }
+    setInvalidField(null)
     setBusy(true)
     setError(false)
     setMessage("正在保存 AI 配置…")
@@ -214,10 +275,12 @@ export function AiSettingsPanel() {
     }
     const validationError = validateDraft()
     if (validationError) {
+      setInvalidField(validationError.field)
       setError(true)
-      setMessage(validationError)
+      setMessage(validationError.message)
       return
     }
+    setInvalidField(null)
     setBusy(true)
     setError(false)
     setMessage("正在保存当前配置并获取模型列表…")
@@ -244,10 +307,12 @@ export function AiSettingsPanel() {
     }
     const validationError = validateDraft()
     if (validationError) {
+      setInvalidField(validationError.field)
       setError(true)
-      setMessage(validationError)
+      setMessage(validationError.message)
       return
     }
+    setInvalidField(null)
     setBusy(true)
     setError(false)
     setMessage("正在保存当前配置并测试 OpenAI-compatible 连接…")
@@ -308,45 +373,58 @@ export function AiSettingsPanel() {
 
   const isActive = draft.id !== null && settings?.activeProfileId === draft.id
   const providerMeta = AI_PROVIDER_DEFAULTS[draft.provider]
+  const renamePromptError =
+    settings !== null && !prompt.trim()
+      ? "提示词不能为空。"
+      : prompt.length > 2_000
+        ? "提示词不能超过 2000 个字符。"
+        : null
 
   return (
     <div className="flex flex-col gap-2">
       <Card size="sm">
         <CardHeader className="border-b border-border/80">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <Sparkles className="size-4 text-muted-foreground" />
-                <CardTitle className="text-sm">AI 模型配置</CardTitle>
-              </div>
-              <CardDescription className="mt-1 text-xs leading-relaxed">
-                可保存多个 OpenAI-compatible 配置。API Key
-                仅保存在系统凭据存储中，不写入 settings.json。
-              </CardDescription>
-            </div>
+          <CardTitle>AI 模型配置</CardTitle>
+          <CardDescription>
+            可保存多个 OpenAI-compatible 配置。API Key
+            仅保存在系统凭据存储中，不写入 settings.json。
+          </CardDescription>
+          <CardAction>
             <Button
               type="button"
               size="sm"
               variant="outline"
               disabled={busy}
               onClick={() => {
-                setDraft(newProfileDraft("deepSeek"))
+                setDraft(newProfileDraft("ollama"))
                 setModels([])
                 setMessage(null)
                 setError(false)
+                setInvalidField(null)
               }}
             >
               <Plus data-icon="inline-start" />
               新建配置
             </Button>
-          </div>
+          </CardAction>
         </CardHeader>
-        <CardContent className="grid gap-3 pt-4 lg:grid-cols-[190px_minmax(0,1fr)]">
+        <CardContent className="grid gap-3 lg:grid-cols-[190px_minmax(0,1fr)]">
           <aside className="flex flex-col gap-1.5" aria-label="已保存 AI 配置">
             {settings === null ? (
-              <div className="flex items-center gap-2 rounded-xl bg-muted/50 px-3 py-3 text-xs text-muted-foreground">
-                <Spinner />
-                正在读取配置…
+              <div
+                className="flex flex-col gap-2 p-1"
+                aria-label="正在读取 AI 配置"
+                aria-busy="true"
+              >
+                {[0, 1, 2].map((item) => (
+                  <div key={item} className="flex items-center gap-2">
+                    <Skeleton className="size-8 shrink-0" />
+                    <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                      <Skeleton className="h-3 w-2/3" />
+                      <Skeleton className="h-2.5 w-full" />
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : settings.profiles.length === 0 ? (
               <Empty className="gap-2 border px-3 py-4">
@@ -354,9 +432,9 @@ export function AiSettingsPanel() {
                   <EmptyMedia variant="icon">
                     <Bot />
                   </EmptyMedia>
-                  <EmptyTitle className="text-xs">尚无 AI 配置</EmptyTitle>
-                  <EmptyDescription className="text-[10px] leading-relaxed">
-                    右侧可直接创建 DeepSeek，也可切换为本地模型。
+                  <EmptyTitle>尚无 AI 配置</EmptyTitle>
+                  <EmptyDescription>
+                    右侧可创建本地模型或自定义兼容服务。
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
@@ -367,15 +445,16 @@ export function AiSettingsPanel() {
                   type="button"
                   variant={draft.id === profile.id ? "secondary" : "ghost"}
                   disabled={busy}
+                  aria-pressed={draft.id === profile.id}
                   onClick={() => handleSelectProfile(profile)}
-                  className="h-auto w-full justify-start rounded-xl px-2.5 py-2 text-left"
+                  className="h-auto w-full justify-start text-left"
                 >
                   <Server data-icon="inline-start" />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-medium">
+                    <span className="block truncate text-sm font-medium">
                       {profile.name}
                     </span>
-                    <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">
+                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">
                       {AI_PROVIDER_DEFAULTS[profile.provider].label}
                       {profile.model ? ` · ${profile.model}` : ""}
                     </span>
@@ -389,47 +468,63 @@ export function AiSettingsPanel() {
           </aside>
 
           <FieldGroup className="min-w-0 gap-3 rounded-xl border border-border/80 p-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field className="gap-1.5">
+            <FieldGroup className="grid gap-3 sm:grid-cols-2">
+              <Field className="gap-1.5" data-invalid={invalidField === "name"}>
                 <FieldLabel htmlFor="ai-profile-name">配置名称</FieldLabel>
                 <Input
                   id="ai-profile-name"
                   value={draft.name}
                   disabled={busy}
-                  onChange={(event) =>
+                  aria-invalid={invalidField === "name"}
+                  onChange={(event) => {
+                    if (invalidField === "name") {
+                      setInvalidField(null)
+                      setError(false)
+                      setMessage(null)
+                    }
                     setDraft((current) => ({
                       ...current,
                       name: event.target.value,
                     }))
-                  }
+                  }}
                   placeholder="例如：本机 Ollama"
                 />
+                {invalidField === "name" ? (
+                  <FieldError>请输入配置名称。</FieldError>
+                ) : null}
               </Field>
               <Field className="gap-1.5">
                 <FieldLabel htmlFor="ai-provider">服务类型</FieldLabel>
-                <NativeSelect
-                  id="ai-provider"
-                  className="w-full"
+                <Select
+                  items={PROVIDERS}
                   value={draft.provider}
                   disabled={busy}
-                  onChange={(event) =>
-                    handleProviderChange(event.target.value as AiProviderKind)
-                  }
+                  onValueChange={(value) => {
+                    if (value) {
+                      handleProviderChange(value as AiProviderKind)
+                    }
+                  }}
                 >
-                  {PROVIDERS.map((provider) => (
-                    <NativeSelectOption
-                      key={provider.value}
-                      value={provider.value}
-                    >
-                      {provider.label}
-                      {provider.local ? "（本地）" : ""}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
+                  <SelectTrigger id="ai-provider" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger={false}>
+                    <SelectGroup>
+                      {PROVIDERS.map((provider) => (
+                        <SelectItem key={provider.value} value={provider.value}>
+                          {provider.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
               </Field>
-            </div>
+            </FieldGroup>
 
-            <Field className="gap-1.5">
+            <Field
+              className="gap-1.5"
+              data-invalid={invalidField === "baseUrl"}
+            >
               <FieldLabel htmlFor="ai-base-url">
                 OpenAI-compatible 地址
               </FieldLabel>
@@ -437,78 +532,133 @@ export function AiSettingsPanel() {
                 id="ai-base-url"
                 value={draft.baseUrl}
                 disabled={busy}
-                onChange={(event) =>
+                aria-invalid={invalidField === "baseUrl"}
+                onChange={(event) => {
+                  if (invalidField === "baseUrl") {
+                    setInvalidField(null)
+                    setError(false)
+                    setMessage(null)
+                  }
                   setDraft((current) => ({
                     ...current,
                     baseUrl: event.target.value,
                   }))
-                }
+                }}
                 placeholder="http://127.0.0.1:11434/v1"
                 spellCheck={false}
               />
-              <FieldDescription className="text-[10px] leading-relaxed">
+              <FieldDescription>
                 将使用 GET /models 与 POST /chat/completions；本地服务无需联网。
               </FieldDescription>
+              {invalidField === "baseUrl" ? (
+                <FieldError>请输入 OpenAI-compatible 服务地址。</FieldError>
+              ) : null}
             </Field>
 
-            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-              <Field className="gap-1.5">
-                <FieldLabel htmlFor="ai-model">模型</FieldLabel>
-                <Input
-                  id="ai-model"
-                  list="ai-model-options"
-                  value={draft.model}
-                  disabled={busy}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      model: event.target.value,
-                    }))
+            <Field className="gap-1.5">
+              <FieldLabel htmlFor="ai-model">模型</FieldLabel>
+              <Combobox
+                items={models}
+                value={models.find((model) => model.id === draft.model) ?? null}
+                inputValue={draft.model}
+                itemToStringLabel={(model: AiModelInfo) => model.id}
+                itemToStringValue={(model: AiModelInfo) => model.id}
+                isItemEqualToValue={(model, value) => model.id === value.id}
+                onInputValueChange={(model, eventDetails) => {
+                  if (eventDetails.reason !== "input-change") {
+                    return
                   }
-                  placeholder={
-                    providerMeta.local
-                      ? "获取本地模型，或手动填写"
-                      : "例如：deepseek-chat"
+                  setDraft((current) => ({
+                    ...current,
+                    model,
+                  }))
+                }}
+                onValueChange={(model) => {
+                  if (!model) {
+                    return
                   }
-                  spellCheck={false}
-                />
-                <datalist id="ai-model-options">
-                  {models.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.ownedBy}
-                    </option>
-                  ))}
-                </datalist>
-              </Field>
-              <div className="flex items-end gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={handleLoadModels}
-                >
-                  <RefreshCw data-icon="inline-start" />
-                  获取模型
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={handleTest}
-                >
-                  <Unplug data-icon="inline-start" />
-                  测试
-                </Button>
-              </div>
-            </div>
+                  setDraft((current) => ({
+                    ...current,
+                    model: model.id,
+                  }))
+                }}
+              >
+                <div ref={modelComboboxAnchor}>
+                  <ComboboxInput
+                    id="ai-model"
+                    disabled={busy}
+                    className="w-full"
+                    placeholder={
+                      providerMeta.local
+                        ? "获取本地模型，或手动填写"
+                        : "输入服务提供的模型标识"
+                    }
+                    spellCheck={false}
+                  >
+                    <InputGroupAddon align="inline-end">
+                      <InputGroupButton
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={handleLoadModels}
+                        aria-label="获取模型"
+                        title="获取模型"
+                      >
+                        <RefreshCw data-icon="inline-start" />
+                        <span className="hidden sm:inline">获取模型</span>
+                      </InputGroupButton>
+                      <InputGroupButton
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={handleTest}
+                        aria-label="测试"
+                        title="测试"
+                      >
+                        <Unplug data-icon="inline-start" />
+                        <span className="hidden sm:inline">测试</span>
+                      </InputGroupButton>
+                    </InputGroupAddon>
+                  </ComboboxInput>
+                </div>
+                <ComboboxContent anchor={modelComboboxAnchor}>
+                  <ComboboxEmpty>
+                    {models.length === 0
+                      ? "暂无模型列表，可先获取模型或直接输入模型标识。"
+                      : "没有匹配模型，可直接使用当前输入。"}
+                  </ComboboxEmpty>
+                  <ComboboxList>
+                    {(model: AiModelInfo) => {
+                      const metadata = formatModelMetadata(model)
+                      return (
+                        <ComboboxItem key={model.id} value={model}>
+                          <span className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                            <span className="truncate">{model.id}</span>
+                            {metadata ? (
+                              <span className="shrink-0 text-xs font-normal text-muted-foreground tabular-nums">
+                                {metadata}
+                              </span>
+                            ) : null}
+                          </span>
+                        </ComboboxItem>
+                      )
+                    }}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
+            </Field>
 
             <Field className="gap-1.5">
               <div className="flex items-center justify-between gap-2">
                 <FieldLabel htmlFor="ai-api-key">API Key（可选）</FieldLabel>
-                <Badge variant="outline" className="font-normal">
-                  <KeyRound />
+                <Badge
+                  variant={
+                    draft.clearApiKey
+                      ? "warning"
+                      : draft.hasApiKey
+                        ? "success"
+                        : "outline"
+                  }
+                >
+                  <KeyRound data-icon="inline-start" />
                   {draft.clearApiKey
                     ? "保存后清除"
                     : draft.hasApiKey
@@ -516,8 +666,8 @@ export function AiSettingsPanel() {
                       : "尚未保存"}
                 </Badge>
               </div>
-              <div className="flex gap-2">
-                <Input
+              <InputGroup>
+                <InputGroupInput
                   id="ai-api-key"
                   type="password"
                   value={draft.apiKey}
@@ -539,35 +689,31 @@ export function AiSettingsPanel() {
                   autoComplete="off"
                 />
                 {draft.hasApiKey ? (
-                  <Button
-                    type="button"
-                    variant={draft.clearApiKey ? "secondary" : "outline"}
-                    size="sm"
-                    disabled={busy}
-                    aria-pressed={draft.clearApiKey}
-                    onClick={() =>
-                      setDraft((current) => ({
-                        ...current,
-                        apiKey: "",
-                        clearApiKey: !current.clearApiKey,
-                      }))
-                    }
-                  >
-                    清除密钥
-                  </Button>
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton
+                      variant={draft.clearApiKey ? "secondary" : "ghost"}
+                      disabled={busy}
+                      aria-pressed={draft.clearApiKey}
+                      onClick={() =>
+                        setDraft((current) => ({
+                          ...current,
+                          apiKey: "",
+                          clearApiKey: !current.clearApiKey,
+                        }))
+                      }
+                    >
+                      清除密钥
+                    </InputGroupButton>
+                  </InputGroupAddon>
                 ) : null}
-              </div>
+              </InputGroup>
             </Field>
 
             <FieldSeparator />
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
-                {isActive ? (
-                  <Badge variant="default" className="font-normal">
-                    当前使用
-                  </Badge>
-                ) : null}
-                <span className="text-[10px] text-muted-foreground">
+                {isActive ? <Badge variant="default">当前使用</Badge> : null}
+                <span className="text-xs text-muted-foreground">
                   {providerMeta.local
                     ? "本地模型仅连接此设备"
                     : "仅在启用 AI 重命名时发起请求"}
@@ -589,10 +735,9 @@ export function AiSettingsPanel() {
                     ) : null}
                     <Button
                       type="button"
-                      variant="ghost"
+                      variant="destructive"
                       size="sm"
                       disabled={busy}
-                      className="text-destructive hover:text-destructive"
                       onClick={() => setDeleteOpen(true)}
                     >
                       <Trash2 data-icon="inline-start" />
@@ -621,14 +766,14 @@ export function AiSettingsPanel() {
 
       <Card size="sm">
         <CardHeader className="border-b border-border/80">
-          <CardTitle className="text-sm">归档重命名提示词</CardTitle>
-          <CardDescription className="text-xs leading-relaxed">
+          <CardTitle>归档重命名提示词</CardTitle>
+          <CardDescription>
             AI
             只会收到此提示词和你在压缩页填写的基础名称，不会读取或上传来源文件、路径和内容。
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3 pt-4">
-          <Field>
+        <CardContent className="flex flex-col gap-3">
+          <Field data-invalid={Boolean(renamePromptError)}>
             <FieldLabel htmlFor="ai-rename-prompt" className="sr-only">
               AI 重命名提示词
             </FieldLabel>
@@ -636,19 +781,24 @@ export function AiSettingsPanel() {
               id="ai-rename-prompt"
               value={prompt}
               disabled={busy || settings === null}
+              aria-invalid={Boolean(renamePromptError)}
               onChange={(event) => setPrompt(event.target.value)}
               rows={4}
             />
+            {renamePromptError ? (
+              <FieldError>{renamePromptError}</FieldError>
+            ) : null}
+            <FieldDescription>
+              最长 2000 字符；AI 结果会再次经过本机文件名安全处理。当前{" "}
+              {prompt.length} / 2000。
+            </FieldDescription>
           </Field>
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-[10px] text-muted-foreground">
-              最长 2000 字符；AI 结果会再次经过本机文件名安全处理。
-            </p>
+          <div className="flex justify-end">
             <Button
               type="button"
               size="sm"
               variant="outline"
-              disabled={busy || settings === null}
+              disabled={busy || settings === null || Boolean(renamePromptError)}
               onClick={handleSaveRenameSettings}
             >
               <Save data-icon="inline-start" />
@@ -680,7 +830,11 @@ export function AiSettingsPanel() {
               disabled={busy}
               onClick={handleDelete}
             >
-              {busy ? <Spinner /> : <Trash2 />}
+              {busy ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Trash2 data-icon="inline-start" />
+              )}
               删除
             </AlertDialogAction>
           </AlertDialogFooter>

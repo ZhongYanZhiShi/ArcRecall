@@ -9,7 +9,8 @@ pub const DEFAULT_LOG_MAX_DISK_MIB: u16 = 25;
 pub const MIN_LOG_MAX_DISK_MIB: u16 = 5;
 pub const MAX_LOG_MAX_DISK_MIB: u16 = 500;
 pub const CURRENT_SETTINGS_VERSION: u32 = 1;
-pub const DEFAULT_AI_RENAME_PROMPT: &str = "在保留原意的前提下，将用户提供的归档基础名称改写为简洁、可读、适合文件系统的名称；只返回名称，不返回扩展名或解释。";
+pub const DEFAULT_AI_RENAME_PROMPT: &str = "命名规则要以windows的文件命名规则来进行";
+const LEGACY_AI_RENAME_PROMPT: &str = "在保留原意的前提下，将用户提供的归档基础名称改写为简洁、可读、适合文件系统的名称；只返回名称，不返回扩展名或解释。";
 
 /// Maximum log verbosity persisted by the desktop application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -85,17 +86,16 @@ pub struct RecoverySettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum AiProviderKind {
-    DeepSeek,
     Ollama,
     LmStudio,
     #[default]
+    #[serde(alias = "deepSeek")]
     Custom,
 }
 
 impl AiProviderKind {
     pub const fn default_base_url(self) -> &'static str {
         match self {
-            Self::DeepSeek => "https://api.deepseek.com/v1",
             Self::Ollama => "http://127.0.0.1:11434/v1",
             Self::LmStudio => "http://127.0.0.1:1234/v1",
             Self::Custom => "",
@@ -104,7 +104,6 @@ impl AiProviderKind {
 
     pub const fn default_model(self) -> &'static str {
         match self {
-            Self::DeepSeek => "deepseek-chat",
             Self::Ollama | Self::LmStudio | Self::Custom => "",
         }
     }
@@ -180,7 +179,7 @@ impl AiSettings {
                 .unwrap_or_default();
         }
         self.rename_prompt = self.rename_prompt.trim().to_string();
-        if self.rename_prompt.is_empty() {
+        if self.rename_prompt.is_empty() || self.rename_prompt == LEGACY_AI_RENAME_PROMPT {
             self.rename_prompt = DEFAULT_AI_RENAME_PROMPT.into();
         }
     }
@@ -373,6 +372,43 @@ mod tests {
         assert_eq!(loaded.version, CURRENT_SETTINGS_VERSION);
         assert!(loaded.ai.profiles.is_empty());
         assert_eq!(loaded.ai.rename_prompt, DEFAULT_AI_RENAME_PROMPT);
+    }
+
+    #[test]
+    fn migrates_legacy_ai_defaults_without_losing_profile_details() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            format!(
+                r#"{{
+                    "version": 1,
+                    "ai": {{
+                        "profiles": [{{
+                            "id": "legacy-remote",
+                            "name": "远程模型",
+                            "provider": "deepSeek",
+                            "baseUrl": "https://api.example.com/v1",
+                            "model": "legacy-chat"
+                        }}],
+                        "activeProfileId": "legacy-remote",
+                        "renamePrompt": "{LEGACY_AI_RENAME_PROMPT}"
+                    }}
+                }}"#
+            ),
+        )
+        .unwrap();
+
+        let loaded = SettingsStore::open(&path).unwrap().load().unwrap();
+
+        assert_eq!(loaded.ai.rename_prompt, DEFAULT_AI_RENAME_PROMPT);
+        assert_eq!(loaded.ai.profiles[0].provider, AiProviderKind::Custom);
+        assert_eq!(loaded.ai.profiles[0].base_url, "https://api.example.com/v1");
+        assert_eq!(loaded.ai.profiles[0].model, "legacy-chat");
+
+        let store = SettingsStore::open(&path).unwrap();
+        store.save(&loaded).unwrap();
+        assert!(!fs::read_to_string(path).unwrap().contains("deepSeek"));
     }
 
     #[test]

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core"
 
 import { isDesktopRuntime } from "@/lib/dictionary"
 
-export type AiProviderKind = "deepSeek" | "ollama" | "lmStudio" | "custom"
+export type AiProviderKind = "ollama" | "lmStudio" | "custom"
 
 export type AiProfile = {
   id: string
@@ -38,6 +38,8 @@ export type AiSettingsUpdateRequest = {
 export type AiModelInfo = {
   id: string
   ownedBy: string
+  sizeBytes?: number
+  parameterSize?: string
 }
 
 export type AiConnectionTestResult = {
@@ -47,18 +49,12 @@ export type AiConnectionTestResult = {
 }
 
 export const DEFAULT_AI_RENAME_PROMPT =
-  "在保留原意的前提下，将用户提供的归档基础名称改写为简洁、可读、适合文件系统的名称；只返回名称，不返回扩展名或解释。"
+  "命名规则要以windows的文件命名规则来进行"
 
 export const AI_PROVIDER_DEFAULTS: Record<
   AiProviderKind,
   { label: string; baseUrl: string; model: string; local: boolean }
 > = {
-  deepSeek: {
-    label: "DeepSeek",
-    baseUrl: "https://api.deepseek.com/v1",
-    model: "deepseek-chat",
-    local: false,
-  },
   ollama: {
     label: "Ollama",
     baseUrl: "http://127.0.0.1:11434/v1",
