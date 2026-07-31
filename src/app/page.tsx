@@ -77,32 +77,6 @@ export default function Page() {
     [handleNavChange]
   )
 
-  React.useEffect(() => {
-    const handleShortcut = (event: KeyboardEvent) => {
-      if (
-        event.defaultPrevented ||
-        event.repeat ||
-        (!event.ctrlKey && !event.metaKey) ||
-        event.altKey ||
-        event.shiftKey
-      ) {
-        return
-      }
-
-      const index = Number(event.key) - 1
-      const next = NAV_ORDER[index]
-      if (!next) {
-        return
-      }
-
-      event.preventDefault()
-      handleDockNavChange(next)
-    }
-
-    window.addEventListener("keydown", handleShortcut)
-    return () => window.removeEventListener("keydown", handleShortcut)
-  }, [handleDockNavChange])
-
   const handleOpenAiSettings = React.useCallback(() => {
     setSettingsCategory("ai")
     setSettingsReturnTarget("compress")

@@ -93,9 +93,9 @@
 .dark {
   --background: oklch(0.15 0.015 255);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.2 0.018 255);
+  --card: oklch(0.225 0.018 255);
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.2 0.018 255);
+  --popover: oklch(0.225 0.018 255);
   --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.86 0.035 252);
   --primary-foreground: oklch(0.2 0.018 255);
@@ -110,15 +110,15 @@
   --success-foreground: oklch(0.78 0.12 155);
   --warning: oklch(0.76 0.13 75);
   --warning-foreground: oklch(0.82 0.11 80);
-  --border: oklch(0.98 0.01 255 / 12%);
-  --input: oklch(0.98 0.01 255 / 16%);
+  --border: oklch(0.98 0.01 255 / 15%);
+  --input: oklch(0.98 0.01 255 / 18%);
   --ring: oklch(0.68 0.09 252);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.2 0.018 255);
+  --sidebar: oklch(0.225 0.018 255);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.68 0.11 252);
   --sidebar-primary-foreground: oklch(0.985 0 0);

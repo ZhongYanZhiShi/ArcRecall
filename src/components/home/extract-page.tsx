@@ -103,6 +103,13 @@ const PHASE_LABELS: Record<RecoveryPhase, string> = {
 }
 
 const COUNT_FORMATTER = new Intl.NumberFormat("zh-CN")
+const EMPTY_RECOVERY_STEPS = [
+  "内容识别",
+  "密码复验",
+  "候选尝试",
+  "安全解包",
+  "递归扫描",
+]
 
 type CapabilityNotice = {
   title: string
@@ -139,6 +146,7 @@ export function ExtractPage({
   const [dictionaryCount, setDictionaryCount] = React.useState<number | null>(
     null
   )
+  const [analyzingPath, setAnalyzingPath] = React.useState<string | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const openedTasks = React.useRef(new Set<string>())
@@ -217,9 +225,11 @@ export function ExtractPage({
       return
     }
     const requestId = ++analysisRequestId.current
+    setAnalyzingPath(normalizedPath)
     setBusy(true)
     setError(null)
     setTask(null)
+    setAnalysis(null)
     setKnownPassword("")
     setShowKnownPassword(false)
     setShowRecoveredPassword(false)
@@ -238,6 +248,7 @@ export function ExtractPage({
       setError(toErrorMessage(reason))
     } finally {
       if (requestId === analysisRequestId.current) {
+        setAnalyzingPath(null)
         setBusy(false)
       }
     }
@@ -492,6 +503,9 @@ export function ExtractPage({
     capabilities,
     computeModeBusy
   )
+  const analyzingName = analyzingPath
+    ? archiveNameFromPath(analyzingPath)
+    : null
 
   return (
     <WorkbenchPage>
@@ -524,25 +538,16 @@ export function ExtractPage({
             setDragOver(false)
           }}
           className={cn(
-            "relative flex min-h-0 flex-col justify-center gap-0 border-dashed py-0 shadow-none",
+            "relative flex min-h-0 flex-col justify-center gap-0 border-dashed py-0 shadow-none transition-[background-color,border-color] duration-200",
             analysis ? "min-h-36 shrink-0" : "min-h-52 flex-1",
-            dragOver ? "border-foreground/40 bg-muted/50" : "bg-card"
+            dragOver
+              ? "border-primary/70 bg-primary/10"
+              : "border-border bg-card dark:border-foreground/20"
           )}
         >
-          <div className="absolute top-2.5 right-2.5 z-10">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="size-11 rounded-xl"
-              aria-label="解压选项"
-              title="解压选项"
-              onClick={() => setOptionsOpen(true)}
-            >
-              <Settings2 />
-            </Button>
-          </div>
           <CardHeader
+            aria-live="polite"
+            aria-busy={Boolean(analyzingPath)}
             className={cn(
               "justify-items-center px-5 text-center",
               analysis ? "pt-5" : "pt-8"
@@ -565,16 +570,25 @@ export function ExtractPage({
               )}
             </div>
             <CardTitle className="mt-1 max-w-full truncate text-base font-semibold tracking-tight">
-              {dragOver
-                ? "松开以分析归档"
-                : analysis
-                  ? analysis.fileName
-                  : "将压缩包拖到这里"}
+              {analyzingName
+                ? analyzingName
+                : dragOver
+                  ? "松开以分析归档"
+                  : analysis
+                    ? analysis.fileName
+                    : "将压缩包拖到这里"}
             </CardTitle>
-            <CardDescription className="max-w-lg truncate text-xs">
-              {analysis
-                ? `${analysis.formatLabel} · ${formatFileSize(analysis.fileSize)} · 不依赖扩展名`
-                : "按内容识别 7z / ZIP / RAR，支持乱后缀、无后缀与文件内嵌归档"}
+            <CardDescription
+              className={cn(
+                "max-w-lg text-xs leading-relaxed",
+                analysis ? "truncate" : "text-pretty"
+              )}
+            >
+              {analyzingName
+                ? "正在按文件内容识别格式与加密状态…"
+                : analysis
+                  ? `${analysis.formatLabel} · ${formatFileSize(analysis.fileSize)} · 不依赖扩展名`
+                  : "按内容识别 7z / ZIP / RAR，支持乱后缀、无后缀与文件内嵌归档"}
             </CardDescription>
           </CardHeader>
           <CardContent
@@ -584,14 +598,55 @@ export function ExtractPage({
             )}
           >
             <Button onClick={handlePickArchive} disabled={busy || running}>
-              <Upload data-icon="inline-start" />
-              {analysis ? "更换压缩包" : "选择压缩包"}
+              {analyzingPath ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Upload data-icon="inline-start" />
+              )}
+              {analyzingPath
+                ? "正在识别"
+                : analysis
+                  ? "更换压缩包"
+                  : "选择压缩包"}
             </Button>
             {!analysis ? (
-              <p className="text-xs text-muted-foreground">
-                也可粘贴绝对路径
-                <Kbd className="ml-1">Ctrl + V</Kbd>
-              </p>
+              <div className="flex flex-col items-center gap-2 text-xs text-muted-foreground">
+                <p className="inline-flex items-center gap-1.5 text-center leading-relaxed">
+                  <ShieldCheck aria-hidden className="size-3.5 shrink-0" />
+                  文件与密码仅在本机处理，源文件保持不变
+                </p>
+                {!analyzingPath ? (
+                  <p>
+                    也可粘贴绝对路径
+                    <Kbd className="ml-1">Ctrl + V</Kbd>
+                  </p>
+                ) : null}
+                <ol
+                  aria-label={`恢复流程：${EMPTY_RECOVERY_STEPS.join("、")}`}
+                  className="mt-1 flex max-w-2xl flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-xs"
+                >
+                  {EMPTY_RECOVERY_STEPS.map((step, index) => (
+                    <li key={step} className="flex items-center gap-1.5">
+                      {index > 0 ? (
+                        <ChevronRight
+                          aria-hidden
+                          className="size-3 text-muted-foreground/55"
+                        />
+                      ) : null}
+                      <span
+                        className={cn(
+                          "whitespace-nowrap",
+                          analyzingPath && index === 0
+                            ? "font-medium text-foreground"
+                            : "text-muted-foreground"
+                        )}
+                      >
+                        {step}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
             ) : null}
           </CardContent>
         </Card>
@@ -625,7 +680,7 @@ export function ExtractPage({
                 <span className="truncate">{outputChipLabel}</span>
               </Badge>
               <Badge variant="secondary" className="font-normal">
-                {recursive ? "递归开" : "递归关"}
+                {recursive ? "递归扫描" : "仅主归档"}
               </Badge>
               {openWhenDone ? (
                 <Badge variant="outline" className="font-normal">
