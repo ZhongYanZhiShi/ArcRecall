@@ -27,7 +27,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -185,7 +184,7 @@ export function DictionaryPage() {
       try {
         const result = await loadEntries("")
         setStatusTone("ok")
-        setStatus(formatLoadStatus("已就绪", result.totalCount, 0, ""))
+        setStatus(`共 ${result.totalCount} 条`)
       } catch (error) {
         const message =
           error instanceof Error ? error.message : String(error ?? "未知错误")
@@ -551,16 +550,27 @@ export function DictionaryPage() {
             </ScrollArea>
           </CardContent>
           <Separator />
-          <div className="flex h-10 shrink-0 items-center justify-between px-3">
-            <p
-              className="text-xs text-muted-foreground tabular-nums"
-              aria-live="polite"
-            >
-              第 {displayedPage} / {pageCount} 页
-            </p>
+          <div className="flex h-10 shrink-0 items-center justify-between gap-3 px-3">
+            <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+              <span className="shrink-0 tabular-nums">
+                第 {displayedPage} / {pageCount} 页
+              </span>
+              <span aria-hidden="true">·</span>
+              <span
+                className={`flex min-w-0 items-center gap-1.5 ${
+                  statusTone === "error" ? "text-destructive" : ""
+                }`}
+                aria-live="polite"
+              >
+                {statusTone === "busy" ? (
+                  <Spinner className="size-3 shrink-0" />
+                ) : null}
+                <span className="truncate">{status}</span>
+              </span>
+            </div>
             <Pagination
               aria-label="字典分页"
-              className="mx-0 w-auto justify-end"
+              className="mx-0 w-auto shrink-0 justify-end"
             >
               <PaginationContent>
                 <PaginationItem>
@@ -591,22 +601,6 @@ export function DictionaryPage() {
             </Pagination>
           </div>
         </Card>
-
-        <Alert
-          variant={
-            statusTone === "error"
-              ? "destructive"
-              : statusTone === "ok"
-                ? "success"
-                : "default"
-          }
-          className="shrink-0 py-2.5 shadow-sm"
-        >
-          {statusTone === "busy" ? <Spinner /> : null}
-          <AlertDescription className="line-clamp-2 text-xs leading-relaxed">
-            {status}
-          </AlertDescription>
-        </Alert>
       </WorkbenchPageContent>
 
       {/* 添加候选：右侧抽屉，保留字典列表上下文 */}
