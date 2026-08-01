@@ -228,7 +228,7 @@ export function PillNav<T extends string>({
                   onBlur={() => animateTo(index, false)}
                   className={cn(
                     "group/pill relative inline-flex h-full min-w-12 items-center justify-center overflow-hidden rounded-full px-2",
-                    "bg-background/70 text-[11px] leading-none font-semibold text-foreground data-[active=true]:bg-accent data-[active=true]:text-accent-foreground",
+                    "bg-background/70 text-xs leading-none font-semibold text-foreground data-[active=true]:bg-accent data-[active=true]:text-accent-foreground",
                     "transition-[box-shadow,transform] duration-200 outline-none active:scale-[0.97]",
                     "focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-card"
                   )}

@@ -104,6 +104,23 @@ type ProfileDraft = {
 
 type InvalidProfileField = "name" | "baseUrl"
 
+type OperationFeedback = {
+  message: string
+  error: boolean
+}
+
+type PendingDraftAction =
+  | { type: "create" }
+  | { type: "select"; profile: AiProfile }
+
+export type AiSettingsPanelHandle = {
+  saveUnsavedChanges: () => Promise<boolean>
+}
+
+type AiSettingsPanelProps = {
+  onDirtyChange?: (dirty: boolean) => void
+}
+
 const PROVIDERS = (Object.keys(AI_PROVIDER_DEFAULTS) as AiProviderKind[]).map(
   (provider) => {
     const defaults = AI_PROVIDER_DEFAULTS[provider]
@@ -131,7 +148,10 @@ function formatModelMetadata(model: AiModelInfo): string {
     .join(" · ")
 }
 
-export function AiSettingsPanel() {
+export const AiSettingsPanel = React.forwardRef<
+  AiSettingsPanelHandle,
+  AiSettingsPanelProps
+>(function AiSettingsPanel({ onDirtyChange }, ref) {
   const modelComboboxAnchor = useComboboxAnchor()
   const [settings, setSettings] = React.useState<AiSettings | null>(null)
   const [draft, setDraft] = React.useState<ProfileDraft>(() =>
@@ -139,17 +159,28 @@ export function AiSettingsPanel() {
   )
   const [models, setModels] = React.useState<AiModelInfo[]>([])
   const [prompt, setPrompt] = React.useState("")
-  const [busy, setBusy] = React.useState(false)
-  const [message, setMessage] = React.useState<string | null>(null)
-  const [error, setError] = React.useState(false)
+  const [busyScope, setBusyScope] = React.useState<"profile" | "prompt" | null>(
+    null
+  )
+  const busy = busyScope !== null
+  const profileBusy = busyScope === "profile"
+  const promptBusy = busyScope === "prompt"
+  const [profileFeedback, setProfileFeedback] =
+    React.useState<OperationFeedback | null>(null)
+  const [promptFeedback, setPromptFeedback] =
+    React.useState<OperationFeedback | null>(null)
   const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const [pendingDraftAction, setPendingDraftAction] =
+    React.useState<PendingDraftAction | null>(null)
   const [invalidField, setInvalidField] =
     React.useState<InvalidProfileField | null>(null)
 
   const applySettings = React.useCallback(
-    (next: AiSettings, preferredId?: string | null) => {
+    (next: AiSettings, preferredId?: string | null, syncPrompt = true) => {
       setSettings(next)
-      setPrompt(next.renamePrompt)
+      if (syncPrompt) {
+        setPrompt(next.renamePrompt)
+      }
       const selected =
         next.profiles.find((profile) => profile.id === preferredId) ??
         next.profiles.find((profile) => profile.id === next.activeProfileId) ??
@@ -173,8 +204,10 @@ export function AiSettingsPanel() {
       })
       .catch((reason) => {
         if (!disposed) {
-          setError(true)
-          setMessage(`读取 AI 配置失败：${toErrorMessage(reason)}`)
+          setProfileFeedback({
+            error: true,
+            message: `读取 AI 配置失败：${toErrorMessage(reason)}`,
+          })
         }
       })
     return () => {
@@ -182,15 +215,16 @@ export function AiSettingsPanel() {
     }
   }, [applySettings])
 
-  const handleSelectProfile = (profile: AiProfile) => {
-    if (busy) {
-      return
+  const applyDraftAction = (action: PendingDraftAction) => {
+    if (action.type === "select") {
+      setDraft(profileToDraft(action.profile))
+    } else {
+      setDraft(newProfileDraft("ollama"))
     }
-    setDraft(profileToDraft(profile))
     setModels([])
-    setError(false)
-    setMessage(null)
+    setProfileFeedback(null)
     setInvalidField(null)
+    setPendingDraftAction(null)
   }
 
   const handleProviderChange = (provider: AiProviderKind) => {
@@ -203,8 +237,7 @@ export function AiSettingsPanel() {
     }))
     setModels([])
     setInvalidField(null)
-    setError(false)
-    setMessage(null)
+    setProfileFeedback(null)
   }
 
   const validateDraft = (): {
@@ -217,11 +250,31 @@ export function AiSettingsPanel() {
     if (!draft.baseUrl.trim()) {
       return {
         field: "baseUrl",
-        message: "请输入 OpenAI-compatible 服务地址。",
+        message: "请输入模型服务地址。",
+      }
+    }
+    try {
+      const url = new URL(draft.baseUrl.trim())
+      if (!["http:", "https:"].includes(url.protocol) || !url.hostname) {
+        throw new Error("invalid URL")
+      }
+    } catch {
+      return {
+        field: "baseUrl",
+        message: "请输入有效的 http:// 或 https:// 服务地址。",
       }
     }
     return null
   }
+
+  const clientDraftRequest = () => ({
+    profileId: draft.id,
+    provider: draft.provider,
+    baseUrl: draft.baseUrl.trim(),
+    model: draft.model.trim(),
+    apiKey: draft.apiKey.trim() || undefined,
+    clearApiKey: draft.clearApiKey,
+  })
 
   const persistDraft = async (makeActive = false): Promise<string> => {
     const shouldActivate = makeActive || draft.id === null
@@ -236,36 +289,41 @@ export function AiSettingsPanel() {
       makeActive: shouldActivate,
     })
     const profileId = draft.id ?? next.activeProfileId
-    applySettings(next, profileId)
+    applySettings(next, profileId, false)
     return profileId
   }
 
-  const handleSaveProfile = async (makeActive = false) => {
+  const handleSaveProfile = async (makeActive = false): Promise<boolean> => {
     if (busy) {
-      return
+      return false
     }
     const validationError = validateDraft()
     if (validationError) {
       setInvalidField(validationError.field)
-      setError(true)
-      setMessage(validationError.message)
-      return
+      setProfileFeedback({ error: true, message: validationError.message })
+      return false
     }
     setInvalidField(null)
-    setBusy(true)
-    setError(false)
-    setMessage("正在保存 AI 配置…")
+    setBusyScope("profile")
+    setProfileFeedback({ error: false, message: "正在保存 AI 配置…" })
     try {
       const shouldActivate = makeActive || draft.id === null
       await persistDraft(makeActive)
-      setMessage(
-        shouldActivate ? "配置已保存并设为当前 AI 模型。" : "AI 配置已保存。"
-      )
+      setProfileFeedback({
+        error: false,
+        message: shouldActivate
+          ? "配置已保存并设为当前 AI 模型。"
+          : "AI 配置已保存。",
+      })
+      return true
     } catch (reason) {
-      setError(true)
-      setMessage(`保存失败：${toErrorMessage(reason)}`)
+      setProfileFeedback({
+        error: true,
+        message: `保存失败：${toErrorMessage(reason)}`,
+      })
+      return false
     } finally {
-      setBusy(false)
+      setBusyScope(null)
     }
   }
 
@@ -276,28 +334,32 @@ export function AiSettingsPanel() {
     const validationError = validateDraft()
     if (validationError) {
       setInvalidField(validationError.field)
-      setError(true)
-      setMessage(validationError.message)
+      setProfileFeedback({ error: true, message: validationError.message })
       return
     }
     setInvalidField(null)
-    setBusy(true)
-    setError(false)
-    setMessage("正在保存当前配置并获取模型列表…")
+    setBusyScope("profile")
+    setProfileFeedback({
+      error: false,
+      message: "正在获取当前草稿的模型列表，不会保存更改…",
+    })
     try {
-      const profileId = await persistDraft()
-      const next = await listAiModels(profileId)
+      const next = await listAiModels(clientDraftRequest())
       setModels(next)
-      setMessage(
-        next.length > 0
-          ? `已获取 ${next.length} 个模型，可从列表选择或继续手动填写。`
-          : "连接成功，但服务没有返回模型；可手动填写模型标识。"
-      )
+      setProfileFeedback({
+        error: false,
+        message:
+          next.length > 0
+            ? `已获取 ${next.length} 个模型，可从列表选择或继续手动填写。`
+            : "连接成功，但服务没有返回模型；可手动填写模型标识。",
+      })
     } catch (reason) {
-      setError(true)
-      setMessage(`获取模型失败：${toErrorMessage(reason)}`)
+      setProfileFeedback({
+        error: true,
+        message: `获取模型失败：${toErrorMessage(reason)}`,
+      })
     } finally {
-      setBusy(false)
+      setBusyScope(null)
     }
   }
 
@@ -308,46 +370,67 @@ export function AiSettingsPanel() {
     const validationError = validateDraft()
     if (validationError) {
       setInvalidField(validationError.field)
-      setError(true)
-      setMessage(validationError.message)
+      setProfileFeedback({ error: true, message: validationError.message })
       return
     }
     setInvalidField(null)
-    setBusy(true)
-    setError(false)
-    setMessage("正在保存当前配置并测试 OpenAI-compatible 连接…")
+    setBusyScope("profile")
+    setProfileFeedback({
+      error: false,
+      message: "正在测试当前草稿，不会保存更改…",
+    })
     try {
-      const profileId = await persistDraft()
-      const result = await testAiConnection(profileId)
-      setError(!result.success)
-      setMessage(result.message)
+      const result = await testAiConnection(clientDraftRequest())
+      setProfileFeedback({ error: !result.success, message: result.message })
     } catch (reason) {
-      setError(true)
-      setMessage(`连接失败：${toErrorMessage(reason)}`)
+      setProfileFeedback({
+        error: true,
+        message: `连接失败：${toErrorMessage(reason)}`,
+      })
     } finally {
-      setBusy(false)
+      setBusyScope(null)
     }
   }
 
-  const handleSaveRenameSettings = async () => {
+  const handleSaveRenameSettings = async (): Promise<boolean> => {
     if (!settings || busy) {
-      return
+      return false
     }
-    setBusy(true)
-    setError(false)
-    setMessage("正在保存 AI 重命名设置…")
+    if (!prompt.trim()) {
+      setPromptFeedback({ error: true, message: "提示词不能为空。" })
+      return false
+    }
+    if (prompt.length > 2_000) {
+      setPromptFeedback({
+        error: true,
+        message: "提示词不能超过 2000 个字符。",
+      })
+      return false
+    }
+    setBusyScope("prompt")
+    setPromptFeedback({
+      error: false,
+      message: "正在保存 AI 重命名设置…",
+    })
     try {
       const next = await updateAiSettings({
         activeProfileId: settings.activeProfileId,
         renamePrompt: prompt,
       })
       applySettings(next, draft.id)
-      setMessage("AI 重命名提示词已保存。")
+      setPromptFeedback({
+        error: false,
+        message: "AI 重命名提示词已保存。",
+      })
+      return true
     } catch (reason) {
-      setError(true)
-      setMessage(`保存失败：${toErrorMessage(reason)}`)
+      setPromptFeedback({
+        error: true,
+        message: `保存失败：${toErrorMessage(reason)}`,
+      })
+      return false
     } finally {
-      setBusy(false)
+      setBusyScope(null)
     }
   }
 
@@ -355,23 +438,34 @@ export function AiSettingsPanel() {
     if (!draft.id || busy) {
       return
     }
-    setBusy(true)
-    setError(false)
+    setBusyScope("profile")
+    setProfileFeedback(null)
     try {
       const next = await deleteAiProfile(draft.id)
       setModels([])
-      applySettings(next)
+      applySettings(next, undefined, false)
       setDeleteOpen(false)
-      setMessage("AI 配置和对应的系统凭据已删除。")
+      setProfileFeedback({
+        error: false,
+        message: "AI 配置和对应的系统凭据已删除。",
+      })
     } catch (reason) {
-      setError(true)
-      setMessage(`删除失败：${toErrorMessage(reason)}`)
+      setProfileFeedback({
+        error: true,
+        message: `删除失败：${toErrorMessage(reason)}`,
+      })
     } finally {
-      setBusy(false)
+      setBusyScope(null)
     }
   }
 
   const isActive = draft.id !== null && settings?.activeProfileId === draft.id
+  const savedProfile = settings?.profiles.find(
+    (profile) => profile.id === draft.id
+  )
+  const profileDirty = isProfileDraftDirty(draft, savedProfile)
+  const promptDirty = settings !== null && prompt !== settings.renamePrompt
+  const hasUnsavedChanges = profileDirty || promptDirty
   const providerMeta = AI_PROVIDER_DEFAULTS[draft.provider]
   const renamePromptError =
     settings !== null && !prompt.trim()
@@ -380,14 +474,73 @@ export function AiSettingsPanel() {
         ? "提示词不能超过 2000 个字符。"
         : null
 
+  const requestDraftAction = (action: PendingDraftAction) => {
+    if (busy) {
+      return
+    }
+    if (action.type === "select" && action.profile.id === draft.id) {
+      return
+    }
+    if (profileDirty) {
+      setPendingDraftAction(action)
+      return
+    }
+    applyDraftAction(action)
+  }
+
+  const handleSavePendingDraft = async () => {
+    if (!pendingDraftAction) {
+      return
+    }
+    const action = pendingDraftAction
+    const saved = await handleSaveProfile(false)
+    if (saved) {
+      applyDraftAction(action)
+    } else {
+      setPendingDraftAction(null)
+    }
+  }
+
+  React.useImperativeHandle(ref, () => ({
+    saveUnsavedChanges: async () => {
+      if (busy) {
+        return false
+      }
+      if (profileDirty && !(await handleSaveProfile(false))) {
+        return false
+      }
+      if (promptDirty && !(await handleSaveRenameSettings())) {
+        return false
+      }
+      return true
+    },
+  }))
+
+  React.useEffect(() => {
+    onDirtyChange?.(hasUnsavedChanges)
+    return () => onDirtyChange?.(false)
+  }, [hasUnsavedChanges, onDirtyChange])
+
+  React.useEffect(() => {
+    if (!hasUnsavedChanges) {
+      return
+    }
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ""
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload)
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload)
+  }, [hasUnsavedChanges])
+
   return (
     <div className="flex flex-col gap-2">
       <Card size="sm">
         <CardHeader className="border-b border-border/80">
           <CardTitle>AI 模型配置</CardTitle>
           <CardDescription>
-            可保存多个 OpenAI-compatible 配置。API Key
-            仅保存在系统凭据存储中，不写入 settings.json。
+            可保存多个兼容 OpenAI 接口的模型服务配置。API Key
+            仅保存在系统凭据中，不写入配置文件。
           </CardDescription>
           <CardAction>
             <Button
@@ -395,13 +548,7 @@ export function AiSettingsPanel() {
               size="sm"
               variant="outline"
               disabled={busy}
-              onClick={() => {
-                setDraft(newProfileDraft("ollama"))
-                setModels([])
-                setMessage(null)
-                setError(false)
-                setInvalidField(null)
-              }}
+              onClick={() => requestDraftAction({ type: "create" })}
             >
               <Plus data-icon="inline-start" />
               新建配置
@@ -446,7 +593,9 @@ export function AiSettingsPanel() {
                   variant={draft.id === profile.id ? "secondary" : "ghost"}
                   disabled={busy}
                   aria-pressed={draft.id === profile.id}
-                  onClick={() => handleSelectProfile(profile)}
+                  onClick={() =>
+                    requestDraftAction({ type: "select", profile })
+                  }
                   className="h-auto w-full justify-start text-left"
                 >
                   <Server data-icon="inline-start" />
@@ -467,7 +616,7 @@ export function AiSettingsPanel() {
             )}
           </aside>
 
-          <FieldGroup className="min-w-0 gap-3 rounded-xl border border-border/80 p-3">
+          <FieldGroup className="min-w-0 gap-4 lg:border-l lg:border-border/80 lg:pl-4">
             <FieldGroup className="grid gap-3 sm:grid-cols-2">
               <Field className="gap-1.5" data-invalid={invalidField === "name"}>
                 <FieldLabel htmlFor="ai-profile-name">配置名称</FieldLabel>
@@ -479,9 +628,8 @@ export function AiSettingsPanel() {
                   onChange={(event) => {
                     if (invalidField === "name") {
                       setInvalidField(null)
-                      setError(false)
-                      setMessage(null)
                     }
+                    setProfileFeedback(null)
                     setDraft((current) => ({
                       ...current,
                       name: event.target.value,
@@ -525,20 +673,18 @@ export function AiSettingsPanel() {
               className="gap-1.5"
               data-invalid={invalidField === "baseUrl"}
             >
-              <FieldLabel htmlFor="ai-base-url">
-                OpenAI-compatible 地址
-              </FieldLabel>
+              <FieldLabel htmlFor="ai-base-url">模型服务地址</FieldLabel>
               <Input
                 id="ai-base-url"
                 value={draft.baseUrl}
                 disabled={busy}
                 aria-invalid={invalidField === "baseUrl"}
+                aria-describedby="ai-base-url-hint"
                 onChange={(event) => {
                   if (invalidField === "baseUrl") {
                     setInvalidField(null)
-                    setError(false)
-                    setMessage(null)
                   }
+                  setProfileFeedback(null)
                   setDraft((current) => ({
                     ...current,
                     baseUrl: event.target.value,
@@ -547,11 +693,13 @@ export function AiSettingsPanel() {
                 placeholder="http://127.0.0.1:11434/v1"
                 spellCheck={false}
               />
-              <FieldDescription>
-                将使用 GET /models 与 POST /chat/completions；本地服务无需联网。
+              <FieldDescription id="ai-base-url-hint">
+                用于读取模型列表和测试生成连接；本地服务无需联网。
               </FieldDescription>
               {invalidField === "baseUrl" ? (
-                <FieldError>请输入 OpenAI-compatible 服务地址。</FieldError>
+                <FieldError>
+                  {profileFeedback?.message ?? "请输入模型服务地址。"}
+                </FieldError>
               ) : null}
             </Field>
 
@@ -568,6 +716,7 @@ export function AiSettingsPanel() {
                   if (eventDetails.reason !== "input-change") {
                     return
                   }
+                  setProfileFeedback(null)
                   setDraft((current) => ({
                     ...current,
                     model,
@@ -577,6 +726,7 @@ export function AiSettingsPanel() {
                   if (!model) {
                     return
                   }
+                  setProfileFeedback(null)
                   setDraft((current) => ({
                     ...current,
                     model: model.id,
@@ -663,7 +813,9 @@ export function AiSettingsPanel() {
                     ? "保存后清除"
                     : draft.hasApiKey
                       ? "系统已保存"
-                      : "尚未保存"}
+                      : providerMeta.local
+                        ? "通常无需密钥"
+                        : "尚未保存"}
                 </Badge>
               </div>
               <InputGroup>
@@ -672,13 +824,14 @@ export function AiSettingsPanel() {
                   type="password"
                   value={draft.apiKey}
                   disabled={busy || draft.clearApiKey}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    setProfileFeedback(null)
                     setDraft((current) => ({
                       ...current,
                       apiKey: event.target.value,
                       clearApiKey: false,
                     }))
-                  }
+                  }}
                   placeholder={
                     draft.hasApiKey
                       ? "留空则保留系统中已有的密钥"
@@ -694,13 +847,14 @@ export function AiSettingsPanel() {
                       variant={draft.clearApiKey ? "secondary" : "ghost"}
                       disabled={busy}
                       aria-pressed={draft.clearApiKey}
-                      onClick={() =>
+                      onClick={() => {
+                        setProfileFeedback(null)
                         setDraft((current) => ({
                           ...current,
                           apiKey: "",
                           clearApiKey: !current.clearApiKey,
                         }))
-                      }
+                      }}
                     >
                       清除密钥
                     </InputGroupButton>
@@ -713,6 +867,11 @@ export function AiSettingsPanel() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 {isActive ? <Badge variant="default">当前使用</Badge> : null}
+                {draft.id === null || profileDirty ? (
+                  <Badge variant="warning">
+                    {draft.id ? "有未保存更改" : "新配置未保存"}
+                  </Badge>
+                ) : null}
                 <span className="text-xs text-muted-foreground">
                   {providerMeta.local
                     ? "本地模型仅连接此设备"
@@ -748,10 +907,10 @@ export function AiSettingsPanel() {
                 <Button
                   type="button"
                   size="sm"
-                  disabled={busy}
+                  disabled={busy || (draft.id !== null && !profileDirty)}
                   onClick={() => void handleSaveProfile(false)}
                 >
-                  {busy ? (
+                  {profileBusy ? (
                     <Spinner data-icon="inline-start" />
                   ) : (
                     <Save data-icon="inline-start" />
@@ -760,13 +919,32 @@ export function AiSettingsPanel() {
                 </Button>
               </div>
             </div>
+            {profileFeedback ? (
+              <Alert
+                aria-live="polite"
+                variant={profileFeedback.error ? "destructive" : "default"}
+                className="py-2.5"
+              >
+                {profileBusy ? (
+                  <Spinner />
+                ) : profileFeedback.error ? (
+                  <CircleAlert />
+                ) : (
+                  <Check />
+                )}
+                <AlertDescription>{profileFeedback.message}</AlertDescription>
+              </Alert>
+            ) : null}
           </FieldGroup>
         </CardContent>
       </Card>
 
       <Card size="sm">
         <CardHeader className="border-b border-border/80">
-          <CardTitle>归档重命名提示词</CardTitle>
+          <div className="flex items-center gap-2">
+            <CardTitle>归档重命名提示词</CardTitle>
+            {promptDirty ? <Badge variant="warning">有未保存更改</Badge> : null}
+          </div>
           <CardDescription>
             AI
             只会收到此提示词和你在压缩页填写的基础名称，不会读取或上传来源文件、路径和内容。
@@ -782,7 +960,10 @@ export function AiSettingsPanel() {
               value={prompt}
               disabled={busy || settings === null}
               aria-invalid={Boolean(renamePromptError)}
-              onChange={(event) => setPrompt(event.target.value)}
+              onChange={(event) => {
+                setPrompt(event.target.value)
+                setPromptFeedback(null)
+              }}
               rows={4}
             />
             {renamePromptError ? (
@@ -798,22 +979,83 @@ export function AiSettingsPanel() {
               type="button"
               size="sm"
               variant="outline"
-              disabled={busy || settings === null || Boolean(renamePromptError)}
+              disabled={
+                busy ||
+                settings === null ||
+                Boolean(renamePromptError) ||
+                !promptDirty
+              }
               onClick={handleSaveRenameSettings}
             >
-              <Save data-icon="inline-start" />
+              {promptBusy ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Save data-icon="inline-start" />
+              )}
               保存提示词
             </Button>
           </div>
+          {promptFeedback ? (
+            <Alert
+              aria-live="polite"
+              variant={promptFeedback.error ? "destructive" : "default"}
+              className="py-2.5"
+            >
+              {promptBusy ? (
+                <Spinner />
+              ) : promptFeedback.error ? (
+                <CircleAlert />
+              ) : (
+                <Check />
+              )}
+              <AlertDescription>{promptFeedback.message}</AlertDescription>
+            </Alert>
+          ) : null}
         </CardContent>
       </Card>
 
-      {message ? (
-        <Alert aria-live="polite" variant={error ? "destructive" : "default"}>
-          {error ? <CircleAlert /> : <Check />}
-          <AlertDescription>{message}</AlertDescription>
-        </Alert>
-      ) : null}
+      <AlertDialog
+        open={pendingDraftAction !== null}
+        onOpenChange={(open) => {
+          if (!open && !busy) {
+            setPendingDraftAction(null)
+          }
+        }}
+      >
+        <AlertDialogContent size="default">
+          <AlertDialogHeader>
+            <AlertDialogTitle>保存当前更改？</AlertDialogTitle>
+            <AlertDialogDescription>
+              当前 AI 配置包含未保存更改。继续切换会丢弃这些内容。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>继续编辑</AlertDialogCancel>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                if (pendingDraftAction) {
+                  applyDraftAction(pendingDraftAction)
+                }
+              }}
+            >
+              放弃更改
+            </Button>
+            <AlertDialogAction
+              disabled={busy}
+              onClick={(event) => {
+                event.preventDefault()
+                void handleSavePendingDraft()
+              }}
+            >
+              {profileBusy ? <Spinner data-icon="inline-start" /> : null}
+              保存并继续
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent size="sm">
@@ -830,7 +1072,7 @@ export function AiSettingsPanel() {
               disabled={busy}
               onClick={handleDelete}
             >
-              {busy ? (
+              {profileBusy ? (
                 <Spinner data-icon="inline-start" />
               ) : (
                 <Trash2 data-icon="inline-start" />
@@ -842,7 +1084,7 @@ export function AiSettingsPanel() {
       </AlertDialog>
     </div>
   )
-}
+})
 
 function newProfileDraft(provider: AiProviderKind): ProfileDraft {
   const defaults = AI_PROVIDER_DEFAULTS[provider]
@@ -869,6 +1111,31 @@ function profileToDraft(profile: AiProfile): ProfileDraft {
     hasApiKey: profile.hasApiKey,
     clearApiKey: false,
   }
+}
+
+function isProfileDraftDirty(
+  draft: ProfileDraft,
+  profile: AiProfile | undefined
+): boolean {
+  if (!profile) {
+    const initial = newProfileDraft("ollama")
+    return (
+      draft.name !== initial.name ||
+      draft.provider !== initial.provider ||
+      draft.baseUrl !== initial.baseUrl ||
+      draft.model !== initial.model ||
+      draft.apiKey.trim().length > 0 ||
+      draft.clearApiKey
+    )
+  }
+  return (
+    draft.name !== profile.name ||
+    draft.provider !== profile.provider ||
+    draft.baseUrl !== profile.baseUrl ||
+    draft.model !== profile.model ||
+    draft.apiKey.trim().length > 0 ||
+    draft.clearApiKey
+  )
 }
 
 function toErrorMessage(reason: unknown) {

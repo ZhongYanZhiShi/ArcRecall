@@ -48,6 +48,15 @@ export type AiConnectionTestResult = {
   modelCount: number
 }
 
+export type AiClientDraftRequest = {
+  profileId?: string | null
+  provider: AiProviderKind
+  baseUrl: string
+  model: string
+  apiKey?: string | null
+  clearApiKey?: boolean
+}
+
 export const DEFAULT_AI_RENAME_PROMPT =
   "命名规则要以windows的文件命名规则来进行"
 
@@ -105,16 +114,18 @@ export async function updateAiSettings(
   return invoke<AiSettings>("ai_settings_update", { request })
 }
 
-export async function listAiModels(profileId: string): Promise<AiModelInfo[]> {
+export async function listAiModels(
+  request: AiClientDraftRequest
+): Promise<AiModelInfo[]> {
   requireDesktopRuntime()
-  return invoke<AiModelInfo[]>("ai_models_list", { profileId })
+  return invoke<AiModelInfo[]>("ai_models_list", { request })
 }
 
 export async function testAiConnection(
-  profileId: string
+  request: AiClientDraftRequest
 ): Promise<AiConnectionTestResult> {
   requireDesktopRuntime()
-  return invoke<AiConnectionTestResult>("ai_connection_test", { profileId })
+  return invoke<AiConnectionTestResult>("ai_connection_test", { request })
 }
 
 export async function generateAiArchiveName(

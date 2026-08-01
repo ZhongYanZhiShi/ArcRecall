@@ -10,7 +10,7 @@
   "type": "module",
   "scripts": {
     "prepare": "husky",
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "build": "next build",
     "tauri": "mise exec -- tauri",
     "desktop:dev": "mise exec -- tauri dev",

@@ -90,11 +90,12 @@ import { cn } from "@/lib/utils"
 const PAGE_SIZE = 200
 const REFRESH_INTERVAL_MS = 2_500
 
-type LevelFilter = LogLevel | "all"
+type LevelFilter = LogLevel | "attention" | "all"
 type DisplayMode = "summary" | "all"
 
 const LEVELS: { value: LevelFilter; label: string }[] = [
-  { value: "all", label: "全部" },
+  { value: "attention", label: "需关注" },
+  { value: "all", label: "全部级别" },
   { value: "error", label: "错误" },
   { value: "warn", label: "警告" },
   { value: "info", label: "信息" },
@@ -177,6 +178,7 @@ const ROUTINE_DETAIL_EVENTS = new Set([
   "logs.ready",
   "recovery.requested",
   "recovery.phase_changed",
+  "settings.saved",
 ])
 
 const LOG_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
@@ -188,10 +190,17 @@ const LOG_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
   hour12: false,
 })
 
+const LOG_REFRESH_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+})
+
 const TRAILING_SENTENCE_PATTERN = /[。；;]+$/
 
 export function LogsPage() {
-  const [level, setLevel] = React.useState<LevelFilter>("all")
+  const [level, setLevel] = React.useState<LevelFilter>("attention")
   const [searchText, setSearchText] = React.useState("")
   const deferredSearch = React.useDeferredValue(searchText)
   const [take, setTake] = React.useState(PAGE_SIZE)
@@ -206,7 +215,16 @@ export function LogsPage() {
   const [notice, setNotice] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [clearDialogOpen, setClearDialogOpen] = React.useState(false)
+  const [lastRefreshedAt, setLastRefreshedAt] = React.useState<number | null>(
+    null
+  )
+  const [listFocused, setListFocused] = React.useState(false)
+  const [expandedEntryIds, setExpandedEntryIds] = React.useState<Set<string>>(
+    () => new Set()
+  )
   const requestSequence = React.useRef(0)
+  const autoRefreshPaused =
+    autoRefresh && (listFocused || expandedEntryIds.size > 0)
 
   const refresh = React.useCallback(
     async (silent = false) => {
@@ -216,14 +234,23 @@ export function LogsPage() {
       }
       try {
         const next = await listLogs({
-          level: level === "all" ? undefined : level,
+          level: level === "all" || level === "attention" ? undefined : level,
+          attentionOnly: level === "attention",
           searchText: deferredSearch,
           take,
         })
         if (requestSequence.current !== requestId) {
           return
         }
+        const loadedIds = new Set(next.entries.map((entry) => entry.id))
+        setExpandedEntryIds((current) => {
+          const retained = new Set(
+            [...current].filter((entryId) => loadedIds.has(entryId))
+          )
+          return retained.size === current.size ? current : retained
+        })
         setResult(next)
+        setLastRefreshedAt(Date.now())
         setError(null)
       } catch (reason) {
         if (requestSequence.current !== requestId) {
@@ -244,18 +271,19 @@ export function LogsPage() {
     const initialRefresh = window.setTimeout(() => {
       void refresh(true)
     }, 0)
-    const interval = autoRefresh
-      ? window.setInterval(() => {
-          void refresh(true)
-        }, REFRESH_INTERVAL_MS)
-      : null
+    const interval =
+      autoRefresh && !autoRefreshPaused
+        ? window.setInterval(() => {
+            void refresh(true)
+          }, REFRESH_INTERVAL_MS)
+        : null
     return () => {
       window.clearTimeout(initialRefresh)
       if (interval !== null) {
         window.clearInterval(interval)
       }
     }
-  }, [autoRefresh, refresh])
+  }, [autoRefresh, autoRefreshPaused, refresh])
 
   const runAction = React.useCallback(
     async (
@@ -324,13 +352,40 @@ export function LogsPage() {
   }, [compactMode, resultEntries])
   const hiddenRoutineCount =
     (resultEntries?.length ?? 0) - visibleEntries.length
+  const passiveStatus = result
+    ? [
+        `当前可见 ${visibleEntries.length} 条`,
+        `已加载 ${result.entries.length} 条`,
+        `共匹配 ${result.matchedCount} 条`,
+        hiddenRoutineCount > 0
+          ? `收起 ${hiddenRoutineCount} 条常规与过程记录`
+          : null,
+        lastRefreshedAt
+          ? `最后刷新 ${formatRefreshTime(lastRefreshedAt)}`
+          : null,
+      ]
+        .filter((part): part is string => Boolean(part))
+        .join(" · ")
+    : "正在读取本机日志…"
+
+  const handleEntryExpandedChange = (entryId: string, open: boolean) => {
+    setExpandedEntryIds((current) => {
+      const next = new Set(current)
+      if (open) {
+        next.add(entryId)
+      } else {
+        next.delete(entryId)
+      }
+      return next
+    })
+  }
 
   return (
     <WorkbenchPage>
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
           title="日志"
-          description="默认显示重要结果；过程记录可在“全部事件”中查看。"
+          description="默认优先显示错误与警告；常规和过程记录可在“全部事件”中查看。"
           className="pr-12 lg:pr-0"
           actions={
             <DropdownMenu>
@@ -383,14 +438,12 @@ export function LogsPage() {
           className="grid shrink-0 grid-cols-2 gap-px overflow-hidden bg-border py-0 shadow-sm sm:grid-cols-4"
         >
           <SummaryMetric
-            label={compactMode ? "摘要" : "事件"}
-            value={String(
-              compactMode ? visibleEntries.length : (result?.totalCount ?? 0)
-            )}
+            label="当前可见"
+            value={String(visibleEntries.length)}
             hint={
-              compactMode
-                ? `已收起 ${hiddenRoutineCount} 条过程记录`
-                : `当前显示 ${result?.entries.length ?? 0} 条`
+              compactMode && hiddenRoutineCount > 0
+                ? `已加载 ${result?.entries.length ?? 0} · 收起 ${hiddenRoutineCount}`
+                : `已加载 ${result?.entries.length ?? 0} · 共匹配 ${result?.matchedCount ?? 0}`
             }
             icon={<FileJson className="size-4" />}
           />
@@ -400,6 +453,13 @@ export function LogsPage() {
             hint={`${stats?.errorCount ?? 0} 错误 · ${stats?.warnCount ?? 0} 警告`}
             icon={<AlertTriangle className="size-4" />}
             tone={(stats?.errorCount ?? 0) > 0 ? "danger" : "default"}
+            active={level === "attention"}
+            onClick={() => {
+              setLevel("attention")
+              setSearchText("")
+              setDisplayMode("summary")
+              setTake(PAGE_SIZE)
+            }}
           />
           <SummaryMetric
             label="磁盘占用"
@@ -422,7 +482,7 @@ export function LogsPage() {
                 <Label htmlFor="log-search" className="sr-only">
                   搜索日志
                 </Label>
-                <InputGroup className="h-8">
+                <InputGroup>
                   <InputGroupAddon>
                     <Search aria-hidden />
                   </InputGroupAddon>
@@ -448,11 +508,7 @@ export function LogsPage() {
                   }
                 }}
               >
-                <SelectTrigger
-                  size="sm"
-                  aria-label="按日志级别筛选"
-                  className="w-24"
-                >
+                <SelectTrigger aria-label="按日志级别筛选" className="w-28">
                   <SelectValue>
                     {LEVELS.find((item) => item.value === level)?.label}
                   </SelectValue>
@@ -477,11 +533,10 @@ export function LogsPage() {
                     setDisplayMode(next)
                   }
                 }}
-                size="sm"
                 aria-label="日志显示方式"
               >
                 <ToggleGroupItem value="summary">摘要</ToggleGroupItem>
-                <ToggleGroupItem value="all">全部</ToggleGroupItem>
+                <ToggleGroupItem value="all">全部事件</ToggleGroupItem>
               </ToggleGroup>
 
               <div className="flex items-center gap-2">
@@ -494,11 +549,10 @@ export function LogsPage() {
                   htmlFor="logs-auto-refresh"
                   className="text-xs text-muted-foreground"
                 >
-                  自动刷新
+                  {autoRefreshPaused ? "自动刷新已暂停" : "自动刷新"}
                 </Label>
                 <Button
                   variant="ghost"
-                  size="sm"
                   aria-label="立即刷新日志"
                   title="立即刷新"
                   disabled={refreshing}
@@ -515,24 +569,32 @@ export function LogsPage() {
               </div>
             </div>
 
-            <Alert
-              aria-live="polite"
-              aria-atomic="true"
-              variant={error ? "destructive" : notice ? "success" : "default"}
-              className="shrink-0 rounded-none border-x-0 border-t-0 px-3 py-1.5"
-            >
-              <AlertDescription className="text-xs">
-                {error ??
-                  notice ??
-                  (result
-                    ? compactMode && hiddenRoutineCount > 0
-                      ? `摘要显示 ${visibleEntries.length} 条 · 已收起 ${hiddenRoutineCount} 条过程记录`
-                      : `匹配 ${result.matchedCount} / ${result.totalCount} 条`
-                    : "正在读取本机日志…")}
-              </AlertDescription>
-            </Alert>
+            {error || notice ? (
+              <Alert
+                aria-live="polite"
+                aria-atomic="true"
+                variant={error ? "destructive" : "success"}
+                className="shrink-0 rounded-none border-x-0 border-t-0 px-3 py-1.5"
+              >
+                <AlertDescription className="text-xs">
+                  {error ?? notice}
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <div className="shrink-0 border-b border-border/80 px-3 py-1.5 text-xs text-muted-foreground">
+                {passiveStatus}
+              </div>
+            )}
 
-            <div className="min-h-0 flex-1 scroll-fade overflow-y-auto">
+            <div
+              className="min-h-0 flex-1 scroll-fade overflow-y-auto"
+              onFocusCapture={() => setListFocused(true)}
+              onBlurCapture={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) {
+                  setListFocused(false)
+                }
+              }}
+            >
               {loading ? (
                 <LogState
                   icon={<Spinner />}
@@ -543,7 +605,9 @@ export function LogsPage() {
                 <>
                   {hiddenRoutineCount > 0 ? (
                     <div className="flex items-center justify-between gap-3 border-b border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                      <p>已收起 {hiddenRoutineCount} 条技术与过程记录。</p>
+                      <p>
+                        已收起 {hiddenRoutineCount} 条常规、技术与过程记录。
+                      </p>
                       <Button
                         type="button"
                         variant="ghost"
@@ -561,25 +625,38 @@ export function LogsPage() {
                       className="divide-y divide-border/70"
                     >
                       {visibleEntries.map((entry) => (
-                        <LogRow key={entry.id} entry={entry} />
+                        <LogRow
+                          key={entry.id}
+                          entry={entry}
+                          expanded={expandedEntryIds.has(entry.id)}
+                          onExpandedChange={(open) =>
+                            handleEntryExpandedChange(entry.id, open)
+                          }
+                        />
                       ))}
                     </ol>
                   ) : (
                     <LogState
                       icon={<CheckCircle2 className="size-5" />}
                       title="没有需要关注的摘要"
-                      description="阶段切换等技术记录已被收起，可切换到“全部事件”查看。"
+                      description="常规设置与阶段切换等记录已被收起，可切换到“全部事件”查看。"
                     />
                   )}
                 </>
               ) : (
                 <LogState
                   icon={<CheckCircle2 className="size-5" />}
-                  title="没有匹配的日志"
+                  title={
+                    level === "attention"
+                      ? "当前没有需关注的日志"
+                      : "没有匹配的日志"
+                  }
                   description={
-                    result?.totalCount
-                      ? "尝试调整级别或搜索条件。"
-                      : "新的运行事件会自动出现在这里。"
+                    level === "attention"
+                      ? "错误与警告会优先显示在这里。"
+                      : result?.totalCount
+                        ? "尝试调整级别或搜索条件。"
+                        : "新的运行事件会自动出现在这里。"
                   }
                 />
               )}
@@ -634,20 +711,19 @@ function SummaryMetric({
   hint,
   icon,
   tone = "default",
+  active = false,
+  onClick,
 }: {
   label: string
   value: string
   hint: string
   icon: React.ReactNode
   tone?: "default" | "danger"
+  active?: boolean
+  onClick?: () => void
 }) {
-  return (
-    <div
-      className={cn(
-        "flex min-w-0 items-center gap-2.5 bg-card px-3 py-2.5",
-        tone === "danger" && "bg-destructive/[0.035]"
-      )}
-    >
+  const content = (
+    <>
       <span
         className={cn(
           "flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted/80 text-muted-foreground",
@@ -667,11 +743,40 @@ function SummaryMetric({
         </div>
         <p className="mt-0.5 truncate text-xs text-muted-foreground">{hint}</p>
       </div>
-    </div>
+    </>
+  )
+  const className = cn(
+    "flex min-w-0 items-center gap-2.5 bg-card px-3 py-2.5 text-left",
+    tone === "danger" && "bg-destructive/[0.035]",
+    active && "ring-1 ring-foreground/15 ring-inset"
+  )
+
+  return onClick ? (
+    <button
+      type="button"
+      aria-pressed={active}
+      className={cn(
+        className,
+        "transition-colors outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      )}
+      onClick={onClick}
+    >
+      {content}
+    </button>
+  ) : (
+    <div className={className}>{content}</div>
   )
 }
 
-function LogRow({ entry }: { entry: LogEntry }) {
+function LogRow({
+  entry,
+  expanded,
+  onExpandedChange,
+}: {
+  entry: LogEntry
+  expanded: boolean
+  onExpandedChange: (open: boolean) => void
+}) {
   const meta = LEVEL_META[entry.level]
   const presentation = presentLogEntry(entry)
   const context = Object.entries(entry.context)
@@ -704,7 +809,11 @@ function LogRow({ entry }: { entry: LogEntry }) {
             {presentation.description}
           </p>
         ) : null}
-        <Collapsible className="group mt-1.5">
+        <Collapsible
+          open={expanded}
+          onOpenChange={onExpandedChange}
+          className="group mt-1.5"
+        >
           <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-md text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30">
             技术详情
             <ChevronDown className="size-3 transition-transform group-data-[open]/collapsible:rotate-180" />
@@ -760,6 +869,10 @@ function LogState({
 
 function formatTimestamp(timestamp: number) {
   return LOG_TIMESTAMP_FORMATTER.format(timestamp)
+}
+
+function formatRefreshTime(timestamp: number) {
+  return LOG_REFRESH_TIME_FORMATTER.format(timestamp)
 }
 
 function formatBytes(bytes: number) {

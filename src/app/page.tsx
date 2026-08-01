@@ -15,7 +15,19 @@ import { LogsPage } from "@/components/home/logs-page"
 import {
   SettingsPage,
   type SettingsCategory,
+  type SettingsPageHandle,
 } from "@/components/home/settings-page"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 type SlideDirection = "forward" | "backward" | null
@@ -33,6 +45,7 @@ function prefersReducedMotion() {
  * 避免旧页/新页叠层造成的重影。
  */
 export default function Page() {
+  const settingsPageRef = React.useRef<SettingsPageHandle>(null)
   const [activeNav, setActiveNav] = React.useState<NavId>("extract")
   const [direction, setDirection] = React.useState<SlideDirection>(null)
   const [transitionId, setTransitionId] = React.useState(0)
@@ -43,6 +56,9 @@ export default function Page() {
     React.useState<SettingsCategory>("engine")
   const [settingsReturnTarget, setSettingsReturnTarget] =
     React.useState<SettingsReturnTarget | null>(null)
+  const [settingsAiDirty, setSettingsAiDirty] = React.useState(false)
+  const [pendingNav, setPendingNav] = React.useState<NavId | null>(null)
+  const [navSaveBusy, setNavSaveBusy] = React.useState(false)
 
   const handleNavChange = React.useCallback(
     (next: NavId) => {
@@ -66,7 +82,7 @@ export default function Page() {
     [activeNav]
   )
 
-  const handleDockNavChange = React.useCallback(
+  const completeDockNavChange = React.useCallback(
     (next: NavId) => {
       if (next === "settings") {
         setSettingsCategory("engine")
@@ -76,6 +92,35 @@ export default function Page() {
     },
     [handleNavChange]
   )
+
+  const handleDockNavChange = React.useCallback(
+    (next: NavId) => {
+      if (next === activeNav) {
+        return
+      }
+      if (activeNav === "settings" && settingsAiDirty) {
+        setPendingNav(next)
+        return
+      }
+      completeDockNavChange(next)
+    },
+    [activeNav, completeDockNavChange, settingsAiDirty]
+  )
+
+  const handleSaveAndNavigate = React.useCallback(async () => {
+    if (!pendingNav || navSaveBusy) {
+      return
+    }
+    const target = pendingNav
+    setNavSaveBusy(true)
+    const saved = await settingsPageRef.current?.saveAiChanges()
+    setNavSaveBusy(false)
+    if (saved !== false) {
+      setPendingNav(null)
+      setSettingsAiDirty(false)
+      completeDockNavChange(target)
+    }
+  }, [completeDockNavChange, navSaveBusy, pendingNav])
 
   const handleOpenAiSettings = React.useCallback(() => {
     setSettingsCategory("ai")
@@ -117,7 +162,9 @@ export default function Page() {
     if (activeNav === "settings") {
       return (
         <SettingsPage
+          ref={settingsPageRef}
           initialCategory={settingsCategory}
+          onAiDirtyChange={setSettingsAiDirty}
           returnAction={
             settingsReturnTarget
               ? {
@@ -160,6 +207,53 @@ export default function Page() {
           </div>
         </div>
       </AppShell>
+      <AlertDialog
+        open={pendingNav !== null}
+        onOpenChange={(open) => {
+          if (!open && !navSaveBusy) {
+            setPendingNav(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>保存 AI 设置更改？</AlertDialogTitle>
+            <AlertDialogDescription>
+              当前配置或重命名提示词有未保存更改。离开后，这些更改将丢失。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={navSaveBusy}>
+              继续编辑
+            </AlertDialogCancel>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={navSaveBusy}
+              onClick={() => {
+                if (!pendingNav) {
+                  return
+                }
+                const target = pendingNav
+                setPendingNav(null)
+                setSettingsAiDirty(false)
+                completeDockNavChange(target)
+              }}
+            >
+              放弃更改
+            </Button>
+            <AlertDialogAction
+              disabled={navSaveBusy}
+              onClick={(event) => {
+                event.preventDefault()
+                void handleSaveAndNavigate()
+              }}
+            >
+              {navSaveBusy ? "正在保存…" : "保存并离开"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

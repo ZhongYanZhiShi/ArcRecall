@@ -16,6 +16,7 @@ export type LogEntry = {
 
 export type LogQuery = {
   level?: LogLevel
+  attentionOnly?: boolean
   searchText?: string
   skip?: number
   take?: number
@@ -130,6 +131,7 @@ export async function listLogs(query: LogQuery = {}): Promise<LogListResult> {
   return invoke<LogListResult>("log_list", {
     query: {
       level: query.level ?? null,
+      attentionOnly: query.attentionOnly ?? false,
       searchText: query.searchText ?? "",
       skip: query.skip ?? 0,
       take: query.take ?? 200,
@@ -200,6 +202,13 @@ export async function backupDatabase(): Promise<DatabaseBackupResult> {
 function listPreviewLogs(query: LogQuery): LogListResult {
   const search = (query.searchText ?? "").trim().toLowerCase()
   const filtered = previewEntries.filter((entry) => {
+    if (
+      query.attentionOnly &&
+      entry.level !== "error" &&
+      entry.level !== "warn"
+    ) {
+      return false
+    }
     if (query.level && entry.level !== query.level) {
       return false
     }

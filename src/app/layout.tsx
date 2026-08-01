@@ -1,21 +1,9 @@
 import type { Metadata } from "next"
-import { Geist_Mono, Oxanium } from "next/font/google"
 
 import { ThemeProvider } from "@/components/theme-provider"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { cn } from "@/lib/utils"
 
 import "./globals.css"
-
-const oxanium = Oxanium({
-  subsets: ["latin"],
-  variable: "--font-sans",
-})
-
-const fontMono = Geist_Mono({
-  subsets: ["latin"],
-  variable: "--font-mono",
-})
 
 export const metadata: Metadata = {
   title: "ArcRecall",
@@ -29,16 +17,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html
-      lang="zh-CN"
-      suppressHydrationWarning
-      className={cn(
-        "antialiased",
-        fontMono.variable,
-        "font-sans",
-        oxanium.variable
-      )}
-    >
+    <html lang="zh-CN" suppressHydrationWarning className="antialiased">
       <body>
         <ThemeProvider>
           <TooltipProvider>{children}</TooltipProvider>

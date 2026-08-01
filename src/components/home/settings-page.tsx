@@ -14,13 +14,26 @@ import {
 } from "lucide-react"
 import * as React from "react"
 
-import { AiSettingsPanel } from "@/components/home/ai-settings-panel"
+import {
+  AiSettingsPanel,
+  type AiSettingsPanelHandle,
+} from "@/components/home/ai-settings-panel"
 import {
   WorkbenchPage,
   WorkbenchPageContent,
   WorkbenchPageHeader,
 } from "@/components/layout/workbench-page"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -82,6 +95,10 @@ import {
 
 export type SettingsCategory = "ai" | "engine" | "app" | "data"
 
+export type SettingsPageHandle = {
+  saveAiChanges: () => Promise<boolean>
+}
+
 const CATEGORIES: {
   id: SettingsCategory
   label: string
@@ -127,35 +144,73 @@ const LOG_LEVELS: {
 
 const LOG_CAPACITY_PRESETS = [25, 100, 250, 500] as const
 
-export function SettingsPage({
-  initialCategory = "engine",
-  returnAction,
-}: {
+type EngineStatusSnapshot = {
+  fullBundle: FullEngineBundleStatus
+  hashcat: HashcatStatus
+  johnPerl: JohnPerlStatus
+  recoveryCapabilities: RecoveryCapabilities
+}
+
+let cachedEngineStatus: EngineStatusSnapshot | null = null
+
+type SettingsPageProps = {
   initialCategory?: SettingsCategory
   returnAction?: {
     label: string
     onClick: () => void
   }
-}) {
+  onAiDirtyChange?: (dirty: boolean) => void
+}
+
+type PendingSettingsLeave =
+  | { type: "category"; category: SettingsCategory }
+  | { type: "return" }
+
+export const SettingsPage = React.forwardRef<
+  SettingsPageHandle,
+  SettingsPageProps
+>(function SettingsPage(
+  { initialCategory = "engine", returnAction, onAiDirtyChange },
+  ref
+) {
+  const aiSettingsPanelRef = React.useRef<AiSettingsPanelHandle>(null)
   const [category, setCategory] =
     React.useState<SettingsCategory>(initialCategory)
+  const [aiDirty, setAiDirty] = React.useState(false)
+  const [pendingSettingsLeave, setPendingSettingsLeave] =
+    React.useState<PendingSettingsLeave | null>(null)
+  const [leaveSaveBusy, setLeaveSaveBusy] = React.useState(false)
   const [dbInfo, setDbInfo] = React.useState<DatabaseInfo | null>(null)
   const [fullBundle, setFullBundle] =
-    React.useState<FullEngineBundleStatus | null>(null)
-  const [hashcat, setHashcat] = React.useState<HashcatStatus | null>(null)
-  const [johnPerl, setJohnPerl] = React.useState<JohnPerlStatus | null>(null)
+    React.useState<FullEngineBundleStatus | null>(
+      () => cachedEngineStatus?.fullBundle ?? null
+    )
+  const [hashcat, setHashcat] = React.useState<HashcatStatus | null>(
+    () => cachedEngineStatus?.hashcat ?? null
+  )
+  const [johnPerl, setJohnPerl] = React.useState<JohnPerlStatus | null>(
+    () => cachedEngineStatus?.johnPerl ?? null
+  )
   const [appSettings, setAppSettings] = React.useState<AppSettings | null>(null)
   const [recoveryCapabilities, setRecoveryCapabilities] =
-    React.useState<RecoveryCapabilities | null>(null)
+    React.useState<RecoveryCapabilities | null>(
+      () => cachedEngineStatus?.recoveryCapabilities ?? null
+    )
   const [recoverySettingsBusy, setRecoverySettingsBusy] = React.useState(false)
   const [recoverySettingsMessage, setRecoverySettingsMessage] = React.useState<
     string | null
   >(null)
   const [recoverySettingsError, setRecoverySettingsError] =
     React.useState(false)
-  const [toolsDirInput, setToolsDirInput] = React.useState("")
-  const [johnDirInput, setJohnDirInput] = React.useState("")
-  const [perlPathInput, setPerlPathInput] = React.useState("")
+  const [toolsDirInput, setToolsDirInput] = React.useState(
+    () => cachedEngineStatus?.hashcat.configuredToolsDirectory ?? ""
+  )
+  const [johnDirInput, setJohnDirInput] = React.useState(
+    () => cachedEngineStatus?.johnPerl.johnToolsDirectory ?? ""
+  )
+  const [perlPathInput, setPerlPathInput] = React.useState(
+    () => cachedEngineStatus?.johnPerl.perlPath ?? ""
+  )
   const [engineBusy, setEngineBusy] = React.useState(false)
   const [engineMessage, setEngineMessage] = React.useState<string | null>(null)
   const [engineError, setEngineError] = React.useState(false)
@@ -168,6 +223,29 @@ export function SettingsPage({
     String(DEFAULT_LOG_MAX_DISK_MIB)
   )
 
+  const applyEngineStatus = React.useCallback(
+    (snapshot: EngineStatusSnapshot) => {
+      cachedEngineStatus = snapshot
+      setFullBundle(snapshot.fullBundle)
+      setHashcat(snapshot.hashcat)
+      setJohnPerl(snapshot.johnPerl)
+      setRecoveryCapabilities(snapshot.recoveryCapabilities)
+      setToolsDirInput(snapshot.hashcat.configuredToolsDirectory || "")
+      setJohnDirInput(snapshot.johnPerl.johnToolsDirectory || "")
+      setPerlPathInput(snapshot.johnPerl.perlPath || "")
+    },
+    []
+  )
+
+  const applyJohnPerlStatus = React.useCallback((status: JohnPerlStatus) => {
+    if (cachedEngineStatus) {
+      cachedEngineStatus = { ...cachedEngineStatus, johnPerl: status }
+    }
+    setJohnPerl(status)
+    setJohnDirInput(status.johnToolsDirectory || "")
+    setPerlPathInput(status.perlPath || "")
+  }, [])
+
   const refreshEngine = React.useCallback(async () => {
     try {
       const [bundle, status, john, recovery] = await Promise.all([
@@ -176,20 +254,19 @@ export function SettingsPage({
         getJohnPerlStatus(),
         refreshRecoveryCapabilities(),
       ])
-      setFullBundle(bundle)
-      setHashcat(status)
-      setJohnPerl(john)
-      setRecoveryCapabilities(recovery)
-      setToolsDirInput(status.configuredToolsDirectory || "")
-      setJohnDirInput(john.johnToolsDirectory || "")
-      setPerlPathInput(john.perlPath || "")
+      applyEngineStatus({
+        fullBundle: bundle,
+        hashcat: status,
+        johnPerl: john,
+        recoveryCapabilities: recovery,
+      })
     } catch (error) {
       const message =
         error instanceof Error ? error.message : String(error ?? "未知错误")
       setEngineMessage(`读取引擎状态失败：${message}`)
       setEngineError(true)
     }
-  }, [])
+  }, [applyEngineStatus])
 
   React.useEffect(() => {
     let cancelled = false
@@ -208,23 +285,19 @@ export function SettingsPage({
           return
         }
         setDbInfo(info)
-        setFullBundle(bundle)
-        setHashcat(status)
-        setJohnPerl(john)
+        applyEngineStatus({
+          fullBundle: bundle,
+          hashcat: status,
+          johnPerl: john,
+          recoveryCapabilities: recovery,
+        })
         setAppSettings(settings)
-        setRecoveryCapabilities(recovery)
         setLogMaxDiskInput(
           String(settings.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB)
         )
-        setToolsDirInput(status.configuredToolsDirectory || "")
-        setJohnDirInput(john.johnToolsDirectory || "")
-        setPerlPathInput(john.perlPath || "")
       } catch {
         if (!cancelled) {
           setDbInfo(null)
-          setFullBundle(null)
-          setHashcat(null)
-          setJohnPerl(null)
           setAppSettings(null)
         }
       }
@@ -232,7 +305,7 @@ export function SettingsPage({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [applyEngineStatus])
 
   const handleSaveToolsDir = () => {
     if (engineBusy) {
@@ -347,7 +420,7 @@ export function SettingsPage({
           johnDirInput.trim(),
           perlPathInput.trim()
         )
-        setJohnPerl(status)
+        applyJohnPerlStatus(status)
         setEngineError(!status.ready)
         setEngineMessage(status.message)
       } catch (error) {
@@ -370,9 +443,7 @@ export function SettingsPage({
     void (async () => {
       try {
         const status = await getJohnPerlStatus()
-        setJohnPerl(status)
-        setJohnDirInput(status.johnToolsDirectory || "")
-        setPerlPathInput(status.perlPath || "")
+        applyJohnPerlStatus(status)
         setEngineError(!status.ready && Boolean(status.johnToolsDirectory))
         setEngineMessage(status.message)
       } catch (error) {
@@ -545,6 +616,65 @@ export function SettingsPage({
     (!Number.isInteger(parsedLogMaxDisk) ||
       parsedLogMaxDisk < MIN_LOG_MAX_DISK_MIB ||
       parsedLogMaxDisk > MAX_LOG_MAX_DISK_MIB)
+  const logCapacityDirty =
+    appSettings !== null &&
+    String(appSettings.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB) !==
+      logMaxDiskInput
+
+  const handleAiDirtyChange = React.useCallback(
+    (dirty: boolean) => {
+      setAiDirty(dirty)
+      onAiDirtyChange?.(dirty)
+    },
+    [onAiDirtyChange]
+  )
+
+  const completeSettingsLeave = (pending: PendingSettingsLeave) => {
+    setPendingSettingsLeave(null)
+    handleAiDirtyChange(false)
+    if (pending.type === "category") {
+      setCategory(pending.category)
+    } else {
+      returnAction?.onClick()
+    }
+  }
+
+  const requestCategoryChange = (next: SettingsCategory) => {
+    if (next === category) {
+      return
+    }
+    if (category === "ai" && aiDirty) {
+      setPendingSettingsLeave({ type: "category", category: next })
+      return
+    }
+    setCategory(next)
+  }
+
+  const requestReturn = () => {
+    if (category === "ai" && aiDirty) {
+      setPendingSettingsLeave({ type: "return" })
+      return
+    }
+    returnAction?.onClick()
+  }
+
+  const handleSaveAndLeaveSettings = async () => {
+    if (!pendingSettingsLeave || leaveSaveBusy) {
+      return
+    }
+    const pending = pendingSettingsLeave
+    setLeaveSaveBusy(true)
+    const saved = await aiSettingsPanelRef.current?.saveUnsavedChanges()
+    setLeaveSaveBusy(false)
+    if (saved !== false) {
+      completeSettingsLeave(pending)
+    }
+  }
+
+  React.useImperativeHandle(ref, () => ({
+    saveAiChanges: async () =>
+      (await aiSettingsPanelRef.current?.saveUnsavedChanges()) ?? true,
+  }))
 
   return (
     <WorkbenchPage>
@@ -558,7 +688,7 @@ export function SettingsPage({
                 type="button"
                 size="sm"
                 variant="outline"
-                onClick={returnAction.onClick}
+                onClick={requestReturn}
               >
                 <ArrowLeft data-icon="inline-start" />
                 {returnAction.label}
@@ -573,7 +703,7 @@ export function SettingsPage({
             if (value == null) {
               return
             }
-            setCategory(value as SettingsCategory)
+            requestCategoryChange(value as SettingsCategory)
           }}
           className="flex min-h-0 flex-1 flex-col gap-2"
         >
@@ -595,7 +725,10 @@ export function SettingsPage({
 
           <div className="min-h-0 flex-1 scroll-fade overflow-y-auto pb-1">
             <TabsContent value="ai" className="mt-0 outline-none">
-              <AiSettingsPanel />
+              <AiSettingsPanel
+                ref={aiSettingsPanelRef}
+                onDirtyChange={handleAiDirtyChange}
+              />
             </TabsContent>
 
             <TabsContent
@@ -723,19 +856,22 @@ export function SettingsPage({
                     <div className="flex min-w-0 flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <CardTitle>Windows x64 完整离线包</CardTitle>
-                        <Badge variant="secondary">
-                          清单 v{fullBundle?.manifestVersion ?? 1}
-                        </Badge>
-                        <Badge variant="secondary">
-                          {fullBundle?.bundled ? "资源已内置" : "精简构建"}
-                        </Badge>
-                        <Badge
-                          variant={
-                            fullBundle?.installed ? "success" : "warning"
-                          }
-                        >
-                          {fullBundle?.installed ? "全部就绪" : "待部署"}
-                        </Badge>
+                        {fullBundle === null ? (
+                          <Badge variant="secondary">正在检测</Badge>
+                        ) : (
+                          <>
+                            <Badge variant="secondary">
+                              {fullBundle.bundled ? "资源已内置" : "精简构建"}
+                            </Badge>
+                            <Badge
+                              variant={
+                                fullBundle.installed ? "success" : "warning"
+                              }
+                            >
+                              {fullBundle.installed ? "全部就绪" : "待部署"}
+                            </Badge>
+                          </>
+                        )}
                       </div>
                       <CardDescription>
                         安装器内包含 7-Zip、Hashcat、John CPU 引擎、Strawberry
@@ -753,56 +889,80 @@ export function SettingsPage({
                       onClick={handleInstallFullBundle}
                     >
                       <Package data-icon="inline-start" />
-                      {fullBundle?.installed ? "重新检测 / 补全" : "离线部署"}
+                      {fullBundle === null
+                        ? "正在检测…"
+                        : fullBundle.installed
+                          ? "重新检测 / 补全"
+                          : "离线部署"}
                     </Button>
                   </div>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-3">
-                  <div className="flex flex-wrap gap-1.5">
-                    {[
-                      { id: "7zip", component: fullBundle?.sevenZip },
-                      { id: "hashcat", component: fullBundle?.hashcat },
-                      { id: "john", component: fullBundle?.john },
-                      { id: "perl", component: fullBundle?.perl },
-                    ].map(({ id, component }) => (
-                      <Badge
-                        key={id}
-                        variant={component?.runnable ? "outline" : "warning"}
-                      >
-                        {component?.name ?? "检测中"}{" "}
-                        {component?.version ?? "—"} ·{" "}
-                        {component?.runnable ? "可运行" : "未就绪"}
-                      </Badge>
-                    ))}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    <Badge
-                      variant={fullBundle?.has7z2john ? "outline" : "warning"}
+                  {fullBundle === null ? (
+                    <div
+                      className="flex min-h-24 items-center justify-center text-xs text-muted-foreground"
+                      aria-live="polite"
+                      aria-busy="true"
                     >
-                      7z2john {fullBundle?.has7z2john ? "可用" : "缺失"}
-                    </Badge>
-                    <Badge
-                      variant={fullBundle?.hasRar2john ? "outline" : "warning"}
-                    >
-                      rar2john {fullBundle?.hasRar2john ? "可用" : "缺失"}
-                    </Badge>
-                    <Badge
-                      variant={fullBundle?.hasZip2john ? "outline" : "warning"}
-                    >
-                      zip2john {fullBundle?.hasZip2john ? "可用" : "缺失"}
-                    </Badge>
-                    <Badge
-                      variant={fullBundle?.johnCpuReady ? "outline" : "warning"}
-                    >
-                      CPU 回退 {fullBundle?.johnCpuReady ? "可用" : "缺失"}
-                    </Badge>
-                  </div>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    {fullBundle?.message ?? "正在读取完整包状态…"}
-                    GPU 驱动、CUDA、HIP 与 OpenCL
-                    由系统提供，不进入发行包；无可用加速后端时使用 John CPU
-                    回退。
-                  </p>
+                      <span className="motion-safe:animate-pulse">
+                        正在检测完整包状态…
+                      </span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap gap-1.5">
+                        {[
+                          { id: "7zip", component: fullBundle.sevenZip },
+                          { id: "hashcat", component: fullBundle.hashcat },
+                          { id: "john", component: fullBundle.john },
+                          { id: "perl", component: fullBundle.perl },
+                        ].map(({ id, component }) => (
+                          <Badge
+                            key={id}
+                            variant={component.runnable ? "outline" : "warning"}
+                          >
+                            {component.name} {component.version} ·{" "}
+                            {component.runnable ? "可运行" : "未就绪"}
+                          </Badge>
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        <Badge
+                          variant={
+                            fullBundle.has7z2john ? "outline" : "warning"
+                          }
+                        >
+                          7z2john {fullBundle.has7z2john ? "可用" : "缺失"}
+                        </Badge>
+                        <Badge
+                          variant={
+                            fullBundle.hasRar2john ? "outline" : "warning"
+                          }
+                        >
+                          rar2john {fullBundle.hasRar2john ? "可用" : "缺失"}
+                        </Badge>
+                        <Badge
+                          variant={
+                            fullBundle.hasZip2john ? "outline" : "warning"
+                          }
+                        >
+                          zip2john {fullBundle.hasZip2john ? "可用" : "缺失"}
+                        </Badge>
+                        <Badge
+                          variant={
+                            fullBundle.johnCpuReady ? "outline" : "warning"
+                          }
+                        >
+                          CPU 回退 {fullBundle.johnCpuReady ? "可用" : "缺失"}
+                        </Badge>
+                      </div>
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        {fullBundle.message} GPU 驱动、CUDA、HIP 与 OpenCL
+                        由系统提供，不进入发行包；无可用加速后端时使用 John CPU
+                        回退。
+                      </p>
+                    </>
+                  )}
                   {engineMessage ? (
                     <Alert
                       variant={
@@ -902,12 +1062,20 @@ export function SettingsPage({
                     <div className="flex min-w-0 flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <CardTitle>hashcat</CardTitle>
-                        <Badge variant="secondary">
-                          v{hashcat?.version ?? "—"}
-                        </Badge>
-                        <Badge variant={hashcatReady ? "success" : "warning"}>
-                          {hashcatReady ? "已就绪" : "未安装"}
-                        </Badge>
+                        {hashcat === null ? (
+                          <Badge variant="secondary">正在检测</Badge>
+                        ) : (
+                          <>
+                            <Badge variant="secondary">
+                              v{hashcat.version}
+                            </Badge>
+                            <Badge
+                              variant={hashcatReady ? "success" : "warning"}
+                            >
+                              {hashcatReady ? "已就绪" : "未安装"}
+                            </Badge>
+                          </>
+                        )}
                       </div>
                       <CardDescription>
                         完整发行包已内置固定版本；这里保留 GitHub
@@ -917,11 +1085,15 @@ export function SettingsPage({
                     </div>
                     <Button
                       size="sm"
-                      disabled={engineBusy}
+                      disabled={engineBusy || hashcat === null}
                       onClick={handleDownloadHashcat}
                     >
                       <Download data-icon="inline-start" />
-                      {hashcat?.installed ? "重新检测 / 补全" : "下载并安装"}
+                      {hashcat === null
+                        ? "正在检测…"
+                        : hashcat.installed
+                          ? "重新检测 / 补全"
+                          : "下载并安装"}
                     </Button>
                   </div>
                 </CardHeader>
@@ -971,11 +1143,15 @@ export function SettingsPage({
                     <div className="flex min-w-0 flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <CardTitle>John / Perl</CardTitle>
-                        <Badge
-                          variant={johnPerl?.ready ? "success" : "warning"}
-                        >
-                          {johnPerl?.ready ? "已就绪" : "未就绪"}
-                        </Badge>
+                        {johnPerl === null ? (
+                          <Badge variant="secondary">正在检测</Badge>
+                        ) : (
+                          <Badge
+                            variant={johnPerl.ready ? "success" : "warning"}
+                          >
+                            {johnPerl.ready ? "已就绪" : "未就绪"}
+                          </Badge>
+                        )}
                       </div>
                       <CardDescription>
                         完整包会自动写入 John 工具目录与
@@ -987,14 +1163,14 @@ export function SettingsPage({
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={engineBusy}
+                        disabled={engineBusy || johnPerl === null}
                         onClick={handleProbeJohnPerl}
                       >
                         重新检测
                       </Button>
                       <Button
                         size="sm"
-                        disabled={engineBusy}
+                        disabled={engineBusy || johnPerl === null}
                         onClick={handleSaveJohnPerl}
                       >
                         保存
@@ -1053,40 +1229,48 @@ export function SettingsPage({
                       </InputGroupAddon>
                     </InputGroup>
                   </Field>
-                  <div className="flex flex-wrap gap-1.5">
-                    <Badge
-                      variant={
-                        johnPerl?.sevenZipConverterReady ? "outline" : "warning"
-                      }
-                    >
-                      7z2john{" "}
-                      {johnPerl?.sevenZipConverterReady ? "可用" : "缺失"}
-                    </Badge>
-                    <Badge
-                      variant={
-                        johnPerl?.rarConverterReady ? "outline" : "warning"
-                      }
-                    >
-                      rar2john {johnPerl?.rarConverterReady ? "可用" : "缺失"}
-                    </Badge>
-                    <Badge
-                      variant={
-                        johnPerl?.zipConverterReady ? "outline" : "warning"
-                      }
-                    >
-                      zip2john {johnPerl?.zipConverterReady ? "可用" : "缺失"}
-                    </Badge>
-                    <Badge
-                      variant={johnPerl?.johnCpuReady ? "outline" : "warning"}
-                    >
-                      John CPU {johnPerl?.johnCpuReady ? "可用" : "缺失"}
-                    </Badge>
-                    <Badge
-                      variant={johnPerl?.perlExists ? "outline" : "warning"}
-                    >
-                      perl {johnPerl?.perlExists ? "可用" : "未配置"}
-                    </Badge>
-                  </div>
+                  {johnPerl === null ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      <Badge variant="secondary">正在检测组件…</Badge>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      <Badge
+                        variant={
+                          johnPerl.sevenZipConverterReady
+                            ? "outline"
+                            : "warning"
+                        }
+                      >
+                        7z2john{" "}
+                        {johnPerl.sevenZipConverterReady ? "可用" : "缺失"}
+                      </Badge>
+                      <Badge
+                        variant={
+                          johnPerl.rarConverterReady ? "outline" : "warning"
+                        }
+                      >
+                        rar2john {johnPerl.rarConverterReady ? "可用" : "缺失"}
+                      </Badge>
+                      <Badge
+                        variant={
+                          johnPerl.zipConverterReady ? "outline" : "warning"
+                        }
+                      >
+                        zip2john {johnPerl.zipConverterReady ? "可用" : "缺失"}
+                      </Badge>
+                      <Badge
+                        variant={johnPerl.johnCpuReady ? "outline" : "warning"}
+                      >
+                        John CPU {johnPerl.johnCpuReady ? "可用" : "缺失"}
+                      </Badge>
+                      <Badge
+                        variant={johnPerl.perlExists ? "outline" : "warning"}
+                      >
+                        perl {johnPerl.perlExists ? "可用" : "未配置"}
+                      </Badge>
+                    </div>
+                  )}
                   {johnPerl?.message ? (
                     <p className="text-xs text-muted-foreground">
                       {johnPerl.message}
@@ -1109,8 +1293,7 @@ export function SettingsPage({
                       </Badge>
                     </div>
                     <CardDescription>
-                      控制本机 JSONL
-                      日志的详细程度和最大磁盘占用。密码、候选内容和用户路径会在写入前隐藏。
+                      控制本机日志的详细程度和最大磁盘占用。密码、候选内容和用户路径会在写入前隐藏。
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="flex flex-col gap-3">
@@ -1151,15 +1334,16 @@ export function SettingsPage({
                       disabled={logSettingsBusy || appSettings === null}
                     >
                       <FieldLegend className="sr-only">日志容量</FieldLegend>
-                      <Field
-                        orientation="responsive"
-                        data-invalid={logCapacityInvalid}
-                        data-disabled={logSettingsBusy || appSettings === null}
-                      >
-                        <FieldContent className="max-w-64">
-                          <FieldLabel htmlFor="log-max-disk-mib">
-                            最大磁盘占用
-                          </FieldLabel>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                        <FieldContent className="w-full sm:max-w-64">
+                          <div className="flex items-center gap-2">
+                            <FieldLabel htmlFor="log-max-disk-mib">
+                              最大磁盘占用
+                            </FieldLabel>
+                            {logCapacityDirty ? (
+                              <Badge variant="warning">未保存</Badge>
+                            ) : null}
+                          </div>
                           <InputGroup>
                             <InputGroupInput
                               id="log-max-disk-mib"
@@ -1169,9 +1353,10 @@ export function SettingsPage({
                               max={MAX_LOG_MAX_DISK_MIB}
                               step={5}
                               value={logMaxDiskInput}
-                              onChange={(event) =>
+                              onChange={(event) => {
                                 setLogMaxDiskInput(event.target.value)
-                              }
+                                setLogSettingsMessage(null)
+                              }}
                               aria-describedby="log-max-disk-hint"
                               aria-invalid={logCapacityInvalid}
                             />
@@ -1188,13 +1373,18 @@ export function SettingsPage({
                         </FieldContent>
                         <Button
                           type="button"
-                          size="sm"
-                          disabled={logCapacityInvalid}
+                          variant="outline"
+                          disabled={
+                            logSettingsBusy ||
+                            appSettings === null ||
+                            logCapacityInvalid ||
+                            !logCapacityDirty
+                          }
                           onClick={handleSaveLogCapacity}
                         >
-                          保存容量
+                          保存
                         </Button>
-                      </Field>
+                      </div>
                       <ToggleGroup
                         value={
                           LOG_CAPACITY_PRESETS.some(
@@ -1206,6 +1396,7 @@ export function SettingsPage({
                         onValueChange={(value) => {
                           if (value[0]) {
                             setLogMaxDiskInput(value[0])
+                            setLogSettingsMessage(null)
                           }
                         }}
                         variant="outline"
@@ -1247,13 +1438,17 @@ export function SettingsPage({
                   <CardHeader>
                     <div className="flex items-center gap-2">
                       <CardTitle>内置 7-Zip</CardTitle>
-                      <Badge
-                        variant={
-                          fullBundle?.sevenZip.runnable ? "success" : "warning"
-                        }
-                      >
-                        {fullBundle?.sevenZip.runnable ? "可运行" : "未就绪"}
-                      </Badge>
+                      {fullBundle === null ? (
+                        <Badge variant="secondary">正在检测</Badge>
+                      ) : (
+                        <Badge
+                          variant={
+                            fullBundle.sevenZip.runnable ? "success" : "warning"
+                          }
+                        >
+                          {fullBundle.sevenZip.runnable ? "可运行" : "未就绪"}
+                        </Badge>
+                      )}
                     </div>
                     <CardDescription>
                       {fullBundle?.sevenZip.message ??
@@ -1265,6 +1460,22 @@ export function SettingsPage({
                       icon={<HardDrive className="size-3.5" />}
                       label="7z.exe"
                       value={fullBundle?.sevenZip.executablePath ?? "—"}
+                      action={
+                        fullBundle?.sevenZip.executablePath ? (
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            disabled={engineBusy}
+                            onClick={() =>
+                              handleOpenPath(fullBundle.sevenZip.executablePath)
+                            }
+                          >
+                            <ExternalLink data-icon="inline-start" />
+                            打开位置
+                          </Button>
+                        ) : undefined
+                      }
                     />
                   </CardContent>
                 </Card>
@@ -1322,27 +1533,76 @@ export function SettingsPage({
           </div>
         </Tabs>
       </WorkbenchPageContent>
+
+      <AlertDialog
+        open={pendingSettingsLeave !== null}
+        onOpenChange={(open) => {
+          if (!open && !leaveSaveBusy) {
+            setPendingSettingsLeave(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>保存 AI 设置更改？</AlertDialogTitle>
+            <AlertDialogDescription>
+              当前配置或重命名提示词有未保存更改。离开后，这些更改将丢失。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={leaveSaveBusy}>
+              继续编辑
+            </AlertDialogCancel>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={leaveSaveBusy}
+              onClick={() => {
+                if (pendingSettingsLeave) {
+                  completeSettingsLeave(pendingSettingsLeave)
+                }
+              }}
+            >
+              放弃更改
+            </Button>
+            <AlertDialogAction
+              disabled={leaveSaveBusy}
+              onClick={(event) => {
+                event.preventDefault()
+                void handleSaveAndLeaveSettings()
+              }}
+            >
+              {leaveSaveBusy ? "正在保存…" : "保存并离开"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </WorkbenchPage>
   )
-}
+})
 
 function InfoRow({
   icon,
   label,
   value,
   badge,
+  action,
 }: {
   icon: React.ReactNode
   label: string
   value: string
   badge?: string
+  action?: React.ReactNode
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        {icon}
-        <span>{label}</span>
-        {badge ? <Badge variant="outline">{badge}</Badge> : null}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          {icon}
+          <span>{label}</span>
+          {badge ? <Badge variant="outline">{badge}</Badge> : null}
+        </div>
+        {action}
       </div>
       <p className="rounded-xl bg-muted/40 px-2.5 py-2 font-mono text-xs break-all text-foreground">
         {value}

@@ -56,6 +56,8 @@ pub struct LogQuery {
     #[serde(default)]
     pub level: Option<LogLevel>,
     #[serde(default)]
+    pub attention_only: bool,
+    #[serde(default)]
     pub search_text: String,
     #[serde(default)]
     pub skip: usize,
@@ -67,6 +69,7 @@ impl Default for LogQuery {
     fn default() -> Self {
         Self {
             level: None,
+            attention_only: false,
             search_text: String::new(),
             skip: 0,
             take: DEFAULT_LOG_PAGE_SIZE,
@@ -214,7 +217,8 @@ impl LogStore {
         let total_count = entries.len();
         let search = query.search_text.trim().to_lowercase();
         entries.retain(|entry| {
-            query.level.is_none_or(|level| level == entry.level)
+            (!query.attention_only || matches!(entry.level, LogLevel::Error | LogLevel::Warn))
+                && query.level.is_none_or(|level| level == entry.level)
                 && (search.is_empty() || entry_matches(entry, &search))
         });
 
@@ -609,6 +613,38 @@ mod tests {
         assert_eq!(result.matched_count, 1);
         assert_eq!(result.entries[0].event, "recovery.failed");
         assert_eq!(result.stats.error_count, 1);
+    }
+
+    #[test]
+    fn filters_attention_levels_together() {
+        let (_directory, store) = store(1024 * 1024, 3);
+        for (level, event) in [
+            (LogLevel::Info, "info"),
+            (LogLevel::Warn, "warn"),
+            (LogLevel::Error, "error"),
+        ] {
+            store
+                .write(level, "test", event, event, BTreeMap::new())
+                .unwrap();
+        }
+
+        let result = store
+            .list(&LogQuery {
+                attention_only: true,
+                ..LogQuery::default()
+            })
+            .unwrap();
+
+        assert_eq!(result.total_count, 3);
+        assert_eq!(result.matched_count, 2);
+        assert_eq!(
+            result
+                .entries
+                .iter()
+                .map(|entry| entry.level)
+                .collect::<Vec<_>>(),
+            vec![LogLevel::Error, LogLevel::Warn]
+        );
     }
 
     #[test]

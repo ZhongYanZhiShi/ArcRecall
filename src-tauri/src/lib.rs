@@ -150,6 +150,18 @@ struct AiProfileUpsertRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct AiClientDraftRequest {
+    profile_id: Option<String>,
+    provider: AiProviderKind,
+    base_url: String,
+    model: String,
+    api_key: Option<String>,
+    #[serde(default)]
+    clear_api_key: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AiSettingsUpdateRequest {
     active_profile_id: String,
     rename_prompt: String,
@@ -998,11 +1010,8 @@ fn ai_settings_update(
 }
 
 #[tauri::command]
-async fn ai_models_list(
-    state: State<'_, AppState>,
-    profile_id: String,
-) -> Result<Vec<AiModelInfo>, String> {
-    let config = resolve_ai_client_config(&state, Some(&profile_id))?;
+async fn ai_models_list(request: AiClientDraftRequest) -> Result<Vec<AiModelInfo>, String> {
+    let config = resolve_ai_client_draft_config(request)?;
     tauri::async_runtime::spawn_blocking(move || {
         list_ai_models(&config).map_err(|error| error.to_string())
     })
@@ -1012,10 +1021,9 @@ async fn ai_models_list(
 
 #[tauri::command]
 async fn ai_connection_test(
-    state: State<'_, AppState>,
-    profile_id: String,
+    request: AiClientDraftRequest,
 ) -> Result<AiConnectionTestResult, String> {
-    let config = resolve_ai_client_config(&state, Some(&profile_id))?;
+    let config = resolve_ai_client_draft_config(request)?;
     tauri::async_runtime::spawn_blocking(move || {
         test_ai_connection(&config).map_err(|error| error.to_string())
     })
@@ -1175,29 +1183,27 @@ fn ai_settings_view(ai: AiSettings) -> Result<AiSettingsView, String> {
     })
 }
 
-fn resolve_ai_client_config(
-    state: &AppState,
-    profile_id: Option<&str>,
-) -> Result<AiClientConfig, String> {
-    let profile = {
-        let store = state.settings.lock().map_err(|error| error.to_string())?;
-        let settings = store.load().map_err(|error| error.to_string())?;
-        let selected_id = profile_id
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-            .unwrap_or(&settings.ai.active_profile_id);
-        settings
-            .ai
-            .profiles
-            .into_iter()
-            .find(|profile| profile.id == selected_id)
-            .ok_or_else(|| "未找到可用的 AI 配置。".to_string())?
+fn resolve_ai_client_draft_config(request: AiClientDraftRequest) -> Result<AiClientConfig, String> {
+    let supplied_api_key = request
+        .api_key
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let api_key = if supplied_api_key.is_some() || request.clear_api_key {
+        supplied_api_key
+    } else if let Some(profile_id) = request
+        .profile_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|profile_id| !profile_id.is_empty())
+    {
+        get_ai_api_key(profile_id)?
+    } else {
+        None
     };
-    let api_key = get_ai_api_key(&profile.id)?;
     Ok(AiClientConfig {
-        provider: profile.provider,
-        base_url: profile.base_url,
-        model: profile.model,
+        provider: request.provider,
+        base_url: request.base_url,
+        model: request.model,
         api_key,
     })
 }
