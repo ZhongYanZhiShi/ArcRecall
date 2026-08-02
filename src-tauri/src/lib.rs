@@ -2069,7 +2069,7 @@ async fn recovery_start(
                     }
                     write_log(
                         &logger_for_worker,
-                        if result.root.success {
+                        if result.root.success || result.root.cancelled {
                             LogLevel::Info
                         } else {
                             LogLevel::Warn
@@ -2114,7 +2114,7 @@ async fn recovery_start(
                     append_current_recovery_event(&mut task_status);
                     write_log(
                         &logger_for_worker,
-                        LogLevel::Warn,
+                        LogLevel::Info,
                         "recovery",
                         "recovery.cancelled",
                         "恢复任务已取消。",
@@ -2189,7 +2189,7 @@ fn recovery_cancel(state: State<'_, AppState>, task_id: String) -> Result<bool, 
     }
     write_log(
         &state.logger,
-        LogLevel::Warn,
+        LogLevel::Info,
         "recovery",
         "recovery.cancel_requested",
         "已请求停止恢复任务。",

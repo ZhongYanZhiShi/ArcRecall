@@ -450,9 +450,19 @@ export function LogsPage() {
           <SummaryMetric
             label="需关注"
             value={String((stats?.errorCount ?? 0) + (stats?.warnCount ?? 0))}
-            hint={`${stats?.errorCount ?? 0} 错误 · ${stats?.warnCount ?? 0} 警告`}
+            hint={
+              <>
+                <span className="font-medium text-destructive">
+                  {stats?.errorCount ?? 0} 错误
+                </span>
+                <span aria-hidden>·</span>
+                <span className="font-medium text-warning-foreground">
+                  {stats?.warnCount ?? 0} 警告
+                </span>
+              </>
+            }
             icon={<AlertTriangle className="size-4" />}
-            tone={(stats?.errorCount ?? 0) > 0 ? "danger" : "default"}
+            tone="attention"
             active={level === "attention"}
             onClick={() => {
               setLevel("attention")
@@ -716,9 +726,9 @@ function SummaryMetric({
 }: {
   label: string
   value: string
-  hint: string
+  hint: React.ReactNode
   icon: React.ReactNode
-  tone?: "default" | "danger"
+  tone?: "default" | "attention" | "danger"
   active?: boolean
   onClick?: () => void
 }) {
@@ -727,6 +737,7 @@ function SummaryMetric({
       <span
         className={cn(
           "flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted/80 text-muted-foreground",
+          tone === "attention" && "bg-warning/10 text-warning-foreground",
           tone === "danger" && "bg-destructive/10 text-destructive"
         )}
       >
@@ -741,14 +752,17 @@ function SummaryMetric({
             {label}
           </p>
         </div>
-        <p className="mt-0.5 truncate text-xs text-muted-foreground">{hint}</p>
+        <p className="mt-0.5 flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground">
+          {hint}
+        </p>
       </div>
     </>
   )
   const className = cn(
-    "flex min-w-0 items-center gap-2.5 bg-card px-3 py-2.5 text-left",
+    "relative flex min-w-0 items-center gap-2.5 bg-card px-3 py-2.5 text-left",
     tone === "danger" && "bg-destructive/[0.035]",
-    active && "ring-1 ring-foreground/15 ring-inset"
+    active &&
+      "after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-t-full after:bg-primary"
   )
 
   return onClick ? (
@@ -757,7 +771,7 @@ function SummaryMetric({
       aria-pressed={active}
       className={cn(
         className,
-        "transition-colors outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        "transition-colors outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       )}
       onClick={onClick}
     >

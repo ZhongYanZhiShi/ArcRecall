@@ -298,7 +298,8 @@ impl LogStore {
                     continue;
                 };
                 match serde_json::from_str::<LogEntry>(&line) {
-                    Ok(entry) => {
+                    Ok(mut entry) => {
+                        normalize_legacy_level(&mut entry);
                         match entry.level {
                             LogLevel::Error => stats.error_count += 1,
                             LogLevel::Warn => stats.warn_count += 1,
@@ -563,6 +564,17 @@ fn contains_absolute_path(value: &str) -> bool {
     false
 }
 
+fn normalize_legacy_level(entry: &mut LogEntry) {
+    if entry.level == LogLevel::Warn
+        && matches!(
+            entry.event.as_str(),
+            "recovery.cancel_requested" | "recovery.cancelled"
+        )
+    {
+        entry.level = LogLevel::Info;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -645,6 +657,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![LogLevel::Error, LogLevel::Warn]
         );
+    }
+
+    #[test]
+    fn treats_legacy_recovery_cancellation_as_information() {
+        let (_directory, store) = store(1024 * 1024, 3);
+        store
+            .write(
+                LogLevel::Warn,
+                "recovery",
+                "recovery.cancelled",
+                "恢复任务已取消",
+                BTreeMap::new(),
+            )
+            .unwrap();
+
+        let result = store
+            .list(&LogQuery {
+                attention_only: true,
+                ..LogQuery::default()
+            })
+            .unwrap();
+
+        assert_eq!(result.total_count, 1);
+        assert_eq!(result.matched_count, 0);
+        assert_eq!(result.stats.warn_count, 0);
+        assert_eq!(result.stats.info_count, 1);
     }
 
     #[test]
