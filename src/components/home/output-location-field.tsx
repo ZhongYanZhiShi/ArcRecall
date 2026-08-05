@@ -1,6 +1,7 @@
 "use client"
 
 import { FolderOpen, RotateCcw, X } from "lucide-react"
+import type { ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -21,6 +22,8 @@ type OutputLocationFieldProps = {
   onPick?: () => void
   /** Clear a previously selected custom directory so user can re-set. */
   onClear?: () => void
+  /** Optional compact control rendered beside the output-location heading. */
+  headerAction?: ReactNode
   disabled?: boolean
   className?: string
 }
@@ -35,6 +38,7 @@ export function OutputLocationField({
   emptyLabel = "尚未选择输出目录",
   onPick,
   onClear,
+  headerAction,
   disabled = false,
   className,
 }: OutputLocationFieldProps) {
@@ -51,7 +55,7 @@ export function OutputLocationField({
         className
       )}
     >
-      <div className="flex min-w-0 items-center justify-between gap-2">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="text-xs leading-none font-medium">输出位置</p>
           <p className="mt-1 text-xs leading-snug text-muted-foreground">
@@ -62,19 +66,24 @@ export function OutputLocationField({
               : "保存到源文件同级目录"}
           </p>
         </div>
-        {isCustom && hasPath && onClear ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            disabled={disabled}
-            onClick={onClear}
-            className="shrink-0 text-muted-foreground"
-            title="清除已选目录"
-          >
-            <X data-icon="inline-start" />
-            清除
-          </Button>
+        {headerAction || (isCustom && hasPath && onClear) ? (
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            {headerAction}
+            {isCustom && hasPath && onClear ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                disabled={disabled}
+                onClick={onClear}
+                className="shrink-0 text-muted-foreground"
+                title="清除已选目录"
+              >
+                <X data-icon="inline-start" />
+                清除
+              </Button>
+            ) : null}
+          </div>
         ) : null}
       </div>
 

@@ -13,6 +13,7 @@ import {
   FilePlus2,
   FolderOpen,
   FolderPlus,
+  KeyRound,
   PackagePlus,
   Square,
   Trash2,
@@ -27,6 +28,16 @@ import {
   WorkbenchPageHeader,
 } from "@/components/layout/workbench-page"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -82,14 +93,21 @@ import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   cancelCompression,
+  deletePermanentCompressionPassword,
   getCompressionStatus,
+  getPermanentCompressionPasswordStatus,
   pickCompressionFiles,
   pickCompressionFolder,
   pickCompressionOutputDirectory,
+  savePermanentCompressionPassword,
   startCompression,
   type CompressionFormat,
   type CompressionTaskStatus,
 } from "@/lib/compression"
+import {
+  forgetCompletedArchiveBaseName,
+  shouldForgetArchiveBaseName,
+} from "@/lib/compression-draft"
 import { isDesktopRuntime } from "@/lib/dictionary"
 import { openPath } from "@/lib/settings"
 import { cn } from "@/lib/utils"
@@ -167,6 +185,13 @@ export function CompressPage({
     useAiRename,
   } = draft
   const [showPassword, setShowPassword] = React.useState(false)
+  const [hasPermanentPassword, setHasPermanentPassword] = React.useState(false)
+  const [usePermanentPassword, setUsePermanentPassword] = React.useState(false)
+  const [permanentPasswordReady, setPermanentPasswordReady] =
+    React.useState(false)
+  const [passwordCredentialBusy, setPasswordCredentialBusy] =
+    React.useState(false)
+  const [deletePasswordOpen, setDeletePasswordOpen] = React.useState(false)
   const [dragOver, setDragOver] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -174,6 +199,7 @@ export function CompressPage({
   const [aiSettings, setAiSettings] = React.useState<AiSettings | null>(null)
   const [task, setTask] = React.useState<CompressionTaskStatus | null>(null)
   const openedTasks = React.useRef(new Set<string>())
+  const archiveNamesAwaitingCompletion = React.useRef(new Set<string>())
   const running = Boolean(task?.running)
   const runningRef = React.useRef(running)
 
@@ -201,6 +227,66 @@ export function CompressPage({
     },
     [onDraftChange]
   )
+
+  React.useEffect(() => {
+    let disposed = false
+    void getPermanentCompressionPasswordStatus()
+      .then((status) => {
+        if (disposed) {
+          return
+        }
+        setHasPermanentPassword(status.hasPassword)
+        setUsePermanentPassword(status.hasPassword)
+      })
+      .catch((reason) => {
+        if (!disposed) {
+          setError(toErrorMessage(reason))
+        }
+      })
+      .finally(() => {
+        if (!disposed) {
+          setPermanentPasswordReady(true)
+        }
+      })
+    return () => {
+      disposed = true
+    }
+  }, [])
+
+  const handleSavePermanentPassword = React.useCallback(async () => {
+    if (!password) {
+      setError("请先输入要永久保存的密码。")
+      return
+    }
+    setPasswordCredentialBusy(true)
+    setError(null)
+    try {
+      const status = await savePermanentCompressionPassword(password)
+      setHasPermanentPassword(status.hasPassword)
+      setUsePermanentPassword(status.hasPassword)
+      updateDraft("password", "")
+      setShowPassword(false)
+    } catch (reason) {
+      setError(toErrorMessage(reason))
+    } finally {
+      setPasswordCredentialBusy(false)
+    }
+  }, [password, updateDraft])
+
+  const handleDeletePermanentPassword = React.useCallback(async () => {
+    setPasswordCredentialBusy(true)
+    setError(null)
+    try {
+      const status = await deletePermanentCompressionPassword()
+      setHasPermanentPassword(status.hasPassword)
+      setUsePermanentPassword(false)
+      setDeletePasswordOpen(false)
+    } catch (reason) {
+      setError(toErrorMessage(reason))
+    } finally {
+      setPasswordCredentialBusy(false)
+    }
+  }, [])
 
   const refreshAiSettings = React.useCallback(() => {
     void listAiProfiles()
@@ -338,6 +424,15 @@ export function CompressPage({
     )
   }, [openWhenDone, task])
 
+  React.useEffect(() => {
+    if (
+      task &&
+      shouldForgetArchiveBaseName(task, archiveNamesAwaitingCompletion.current)
+    ) {
+      onDraftChange(forgetCompletedArchiveBaseName)
+    }
+  }, [onDraftChange, task])
+
   const handlePickFiles = React.useCallback(async () => {
     setError(null)
     try {
@@ -402,7 +497,11 @@ export function CompressPage({
         setError("请输入归档基础名称。")
         return
       }
-      if (encryptFileNames && !password) {
+      if (
+        encryptFileNames &&
+        !password &&
+        !(hasPermanentPassword && usePermanentPassword)
+      ) {
         setError("开启文件名加密前需要设置密码。")
         return
       }
@@ -435,6 +534,7 @@ export function CompressPage({
           format,
           level,
           password: password || undefined,
+          usePermanentPassword: hasPermanentPassword && usePermanentPassword,
           encryptFileNames,
         })
         setTask(next)
@@ -454,6 +554,7 @@ export function CompressPage({
       baseName,
       encryptFileNames,
       format,
+      hasPermanentPassword,
       level,
       outputDirectory,
       outputMode,
@@ -461,6 +562,7 @@ export function CompressPage({
       sources,
       updateDraft,
       useAiRename,
+      usePermanentPassword,
     ]
   )
 
@@ -493,16 +595,6 @@ export function CompressPage({
           title="创建归档"
           description="先整理来源，再设置归档参数；主操作始终保持可见。"
           size="large"
-          className="items-end gap-4"
-          actionsClassName="hidden gap-2 sm:flex"
-          actions={
-            <>
-              <Badge variant="outline">
-                {format === "sevenZip" ? "7z" : "ZIP"}
-              </Badge>
-              <Badge variant="secondary">{activeLevel?.label ?? "标准"}</Badge>
-            </>
-          }
         />
 
         <div className="mt-4 grid min-h-0 flex-1 grid-rows-[minmax(11rem,0.85fr)_minmax(0,1.15fr)] gap-3 lg:grid-cols-[minmax(18rem,0.85fr)_minmax(0,1.4fr)] lg:grid-rows-1">
@@ -678,61 +770,44 @@ export function CompressPage({
                     />
                   ) : null}
 
-                  <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-                    <OutputLocationField
-                      className="sm:col-span-2"
-                      mode={outputMode}
-                      onModeChange={(mode) => updateDraft("outputMode", mode)}
-                      siblingLabel="来源同级"
-                      path={
-                        outputMode === "custom"
-                          ? outputDirectory
-                          : sources[0]
-                            ? defaultOutput
-                            : null
-                      }
-                      pathTitle={
-                        outputMode === "custom"
-                          ? outputDirectory
-                          : sources[0]
-                            ? defaultOutput
-                            : null
-                      }
-                      emptyLabel={
-                        outputMode === "custom"
-                          ? "尚未选择目录"
-                          : "首个来源的上级目录"
-                      }
-                      onPick={handlePickOutput}
-                      onClear={() => updateDraft("outputDirectory", null)}
-                      disabled={running}
-                    />
-
-                    <Field
-                      orientation="horizontal"
-                      className="min-w-0 rounded-xl border border-border/70 bg-muted/20 p-3 sm:col-span-2"
-                    >
-                      <FieldContent className="min-w-0">
-                        <FieldLabel
-                          htmlFor="compress-open-when-done"
-                          className="text-xs"
-                        >
-                          完成后打开
-                        </FieldLabel>
-                        <FieldDescription className="text-xs">
-                          自动打开输出文件夹
-                        </FieldDescription>
-                      </FieldContent>
-                      <Switch
-                        id="compress-open-when-done"
-                        size="sm"
+                  <OutputLocationField
+                    mode={outputMode}
+                    onModeChange={(mode) => updateDraft("outputMode", mode)}
+                    siblingLabel="来源同级"
+                    path={
+                      outputMode === "custom"
+                        ? outputDirectory
+                        : sources[0]
+                          ? defaultOutput
+                          : null
+                    }
+                    pathTitle={
+                      outputMode === "custom"
+                        ? outputDirectory
+                        : sources[0]
+                          ? defaultOutput
+                          : null
+                    }
+                    emptyLabel={
+                      outputMode === "custom"
+                        ? "尚未选择目录"
+                        : "首个来源的上级目录"
+                    }
+                    onPick={handlePickOutput}
+                    onClear={() => updateDraft("outputDirectory", null)}
+                    headerAction={
+                      <SwitchControl
                         checked={openWhenDone}
                         onCheckedChange={(checked) =>
                           updateDraft("openWhenDone", checked)
                         }
+                        label="完成后打开"
+                        disabled={running}
+                        title="归档完成后自动打开输出文件夹"
                       />
-                    </Field>
-                  </div>
+                    }
+                    disabled={running}
+                  />
 
                   <Separator />
 
@@ -749,6 +824,7 @@ export function CompressPage({
                             updateDraft("baseName", event.target.value)
                           }
                           placeholder="例如：项目交付资料"
+                          autoComplete="off"
                           disabled={running}
                           aria-describedby="archive-name-hint"
                         />
@@ -968,10 +1044,10 @@ export function CompressPage({
                           密码（可选）
                         </FieldLabel>
                         <span className="text-xs text-muted-foreground">
-                          不保存、不写入日志
+                          系统凭据保存 · 不写入日志
                         </span>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
                         <InputGroup className="min-w-0 flex-1">
                           <InputGroupInput
                             id="compression-password"
@@ -980,14 +1056,19 @@ export function CompressPage({
                             onChange={(event) =>
                               updateDraft("password", event.target.value)
                             }
-                            placeholder="留空则创建无密码归档"
-                            disabled={running}
+                            placeholder={
+                              hasPermanentPassword && usePermanentPassword
+                                ? "留空则使用已保存的永久密码"
+                                : "留空则创建无密码归档"
+                            }
+                            disabled={running || passwordCredentialBusy}
                             autoComplete="off"
                           />
                           <InputGroupAddon align="inline-end">
                             <InputGroupButton
                               size="icon-xs"
                               onClick={() => setShowPassword((value) => !value)}
+                              disabled={passwordCredentialBusy}
                               aria-label={
                                 showPassword ? "隐藏密码" : "显示密码"
                               }
@@ -996,6 +1077,55 @@ export function CompressPage({
                             </InputGroupButton>
                           </InputGroupAddon>
                         </InputGroup>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon-sm"
+                          onClick={() => void handleSavePermanentPassword()}
+                          disabled={
+                            running ||
+                            passwordCredentialBusy ||
+                            !permanentPasswordReady ||
+                            !password
+                          }
+                          aria-label={
+                            hasPermanentPassword
+                              ? "更新永久密码"
+                              : "永久保存密码"
+                          }
+                          title={
+                            hasPermanentPassword
+                              ? "更新永久密码"
+                              : "永久保存密码"
+                          }
+                        >
+                          {passwordCredentialBusy ? <Spinner /> : <KeyRound />}
+                        </Button>
+                        {hasPermanentPassword ? (
+                          <>
+                            <SwitchControl
+                              checked={usePermanentPassword}
+                              onCheckedChange={setUsePermanentPassword}
+                              label="本次使用"
+                              disabled={
+                                running ||
+                                passwordCredentialBusy ||
+                                !permanentPasswordReady
+                              }
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => setDeletePasswordOpen(true)}
+                              disabled={running || passwordCredentialBusy}
+                              aria-label="删除永久密码"
+                              title="删除永久密码"
+                            >
+                              <Trash2 />
+                            </Button>
+                          </>
+                        ) : null}
                         <SwitchControl
                           checked={encryptFileNames}
                           onCheckedChange={(checked) =>
@@ -1037,7 +1167,9 @@ export function CompressPage({
                 <Button
                   type="button"
                   onClick={() => void handleStart(false)}
-                  disabled={busy || sources.length === 0}
+                  disabled={
+                    busy || passwordCredentialBusy || sources.length === 0
+                  }
                 >
                   {busy ? (
                     <Spinner data-icon="inline-start" />
@@ -1051,6 +1183,38 @@ export function CompressPage({
           </Card>
         </div>
       </WorkbenchPageContent>
+      <AlertDialog
+        open={deletePasswordOpen}
+        onOpenChange={(open) => {
+          if (!passwordCredentialBusy) {
+            setDeletePasswordOpen(open)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除永久密码？</AlertDialogTitle>
+            <AlertDialogDescription>
+              系统凭据库中的归档密码将被删除，之后创建归档不会再自动使用。此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={passwordCredentialBusy}>
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={passwordCredentialBusy}
+              onClick={(event) => {
+                event.preventDefault()
+                void handleDeletePermanentPassword()
+              }}
+            >
+              {passwordCredentialBusy ? "正在删除…" : "删除永久密码"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </WorkbenchPage>
   )
 }

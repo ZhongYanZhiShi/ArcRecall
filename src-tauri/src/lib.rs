@@ -37,6 +37,8 @@ static DATABASE_BACKUP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const MIB_BYTES: u64 = 1024 * 1024;
 const RECOVERY_EVENT_LIMIT: usize = 80;
 const AI_KEYRING_SERVICE: &str = "ArcRecall AI";
+const COMPRESSION_PASSWORD_KEYRING_SERVICE: &str = "ArcRecall Archive Password";
+const COMPRESSION_PASSWORD_KEYRING_ACCOUNT: &str = "permanent";
 const MAX_AI_PROFILES: usize = 20;
 
 struct AppState {
@@ -97,6 +99,8 @@ struct CompressionStartRequest {
     level: u8,
     password: Option<String>,
     #[serde(default)]
+    use_permanent_password: bool,
+    #[serde(default)]
     encrypt_file_names: bool,
 }
 
@@ -115,6 +119,12 @@ struct CompressionTaskStatus {
     started_at_ms: u64,
     elapsed_ms: u64,
     output_path: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompressionPasswordStatus {
+    has_password: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1235,6 +1245,98 @@ fn delete_ai_api_key(profile_id: &str) -> Result<(), String> {
     }
 }
 
+fn compression_password_keyring_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(
+        COMPRESSION_PASSWORD_KEYRING_SERVICE,
+        COMPRESSION_PASSWORD_KEYRING_ACCOUNT,
+    )
+    .map_err(|error| format!("无法访问系统凭据存储：{error}"))
+}
+
+fn get_permanent_compression_password() -> Result<Option<String>, String> {
+    match compression_password_keyring_entry()?.get_password() {
+        Ok(value) if value.is_empty() => Ok(None),
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!("无法读取系统凭据存储：{error}")),
+    }
+}
+
+fn set_permanent_compression_password(password: &str) -> Result<(), String> {
+    let password = validate_permanent_compression_password(password)?;
+    compression_password_keyring_entry()?
+        .set_password(password)
+        .map_err(|error| format!("无法写入系统凭据存储：{error}"))
+}
+
+fn delete_permanent_compression_password() -> Result<(), String> {
+    match compression_password_keyring_entry()?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(format!("无法删除系统凭据：{error}")),
+    }
+}
+
+fn resolve_compression_password(
+    supplied_password: Option<String>,
+    use_permanent_password: bool,
+    load_permanent_password: impl FnOnce() -> Result<Option<String>, String>,
+) -> Result<Option<String>, String> {
+    let supplied_password = supplied_password.filter(|password| !password.is_empty());
+    if supplied_password.is_some() || !use_permanent_password {
+        return Ok(supplied_password);
+    }
+    load_permanent_password()
+}
+
+fn validate_permanent_compression_password(password: &str) -> Result<&str, String> {
+    if password.is_empty() {
+        return Err("永久密码不能为空。".into());
+    }
+    Ok(password)
+}
+
+#[tauri::command]
+fn compression_password_status() -> Result<CompressionPasswordStatus, String> {
+    Ok(CompressionPasswordStatus {
+        has_password: get_permanent_compression_password()?.is_some(),
+    })
+}
+
+#[tauri::command]
+fn compression_password_save(
+    state: State<'_, AppState>,
+    password: String,
+) -> Result<CompressionPasswordStatus, String> {
+    set_permanent_compression_password(&password)?;
+    write_log(
+        &state.logger,
+        LogLevel::Info,
+        "compression",
+        "compression.password_saved",
+        "归档永久密码已保存到系统凭据库。",
+        std::iter::empty(),
+    );
+    Ok(CompressionPasswordStatus { has_password: true })
+}
+
+#[tauri::command]
+fn compression_password_delete(
+    state: State<'_, AppState>,
+) -> Result<CompressionPasswordStatus, String> {
+    delete_permanent_compression_password()?;
+    write_log(
+        &state.logger,
+        LogLevel::Info,
+        "compression",
+        "compression.password_deleted",
+        "归档永久密码已从系统凭据库删除。",
+        std::iter::empty(),
+    );
+    Ok(CompressionPasswordStatus {
+        has_password: false,
+    })
+}
+
 fn is_safe_ai_profile_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 96
@@ -1523,6 +1625,11 @@ async fn compression_start(
     }
 
     let task_id = next_compression_task_id();
+    let password = resolve_compression_password(
+        request.password,
+        request.use_permanent_password,
+        get_permanent_compression_password,
+    )?;
     let prepared = prepare_compression(CompressionJob {
         sources: request.sources.into_iter().map(PathBuf::from).collect(),
         output_directory: request
@@ -1533,7 +1640,7 @@ async fn compression_start(
         base_name: request.base_name,
         format: request.format,
         level: request.level,
-        password: request.password.filter(|password| !password.is_empty()),
+        password,
         encrypt_file_names: request.encrypt_file_names,
         work_id: task_id.clone(),
     })
@@ -2413,6 +2520,9 @@ pub fn run() {
             tool_john_perl_status,
             tool_set_john_perl,
             archive_analyze,
+            compression_password_status,
+            compression_password_save,
+            compression_password_delete,
             compression_start,
             compression_status,
             compression_cancel,
@@ -2429,6 +2539,31 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn supplied_compression_password_overrides_the_permanent_password() {
+        let resolved = resolve_compression_password(Some("本次密码".into()), true, || {
+            Ok(Some("永久密码".into()))
+        })
+        .expect("resolve password");
+
+        assert_eq!(resolved.as_deref(), Some("本次密码"));
+    }
+
+    #[test]
+    fn permanent_compression_password_is_reused_when_no_password_is_supplied() {
+        let resolved = resolve_compression_password(None, true, || Ok(Some("永久密码".into())))
+            .expect("resolve password");
+
+        assert_eq!(resolved.as_deref(), Some("永久密码"));
+    }
+
+    #[test]
+    fn empty_permanent_compression_password_is_rejected() {
+        let error = validate_permanent_compression_password("").expect_err("empty password");
+
+        assert_eq!(error, "永久密码不能为空。");
+    }
 
     #[test]
     fn output_collision_uses_next_available_sibling_directory() {

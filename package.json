@@ -19,6 +19,7 @@
     "desktop:build:thin": "mise exec -- tauri build",
     "engine-bundle:prepare": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/prepare-engine-bundle.ps1",
     "lint": "eslint",
+    "test": "node --experimental-strip-types --test",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "typecheck": "tsc --noEmit"

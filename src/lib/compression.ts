@@ -19,7 +19,12 @@ export type CompressionStartRequest = {
   format: CompressionFormat
   level: 0 | 1 | 3 | 5 | 7 | 9
   password?: string | null
+  usePermanentPassword?: boolean
   encryptFileNames?: boolean
+}
+
+export type CompressionPasswordStatus = {
+  hasPassword: boolean
 }
 
 export type CompressionTaskStatus = {
@@ -81,6 +86,27 @@ export async function startCompression(
 ): Promise<CompressionTaskStatus> {
   requireDesktopRuntime()
   return invoke<CompressionTaskStatus>("compression_start", { request })
+}
+
+export async function getPermanentCompressionPasswordStatus(): Promise<CompressionPasswordStatus> {
+  if (!isDesktopRuntime()) {
+    return { hasPassword: false }
+  }
+  return invoke<CompressionPasswordStatus>("compression_password_status")
+}
+
+export async function savePermanentCompressionPassword(
+  password: string
+): Promise<CompressionPasswordStatus> {
+  requireDesktopRuntime()
+  return invoke<CompressionPasswordStatus>("compression_password_save", {
+    password,
+  })
+}
+
+export async function deletePermanentCompressionPassword(): Promise<CompressionPasswordStatus> {
+  requireDesktopRuntime()
+  return invoke<CompressionPasswordStatus>("compression_password_delete")
 }
 
 export async function getCompressionStatus(
