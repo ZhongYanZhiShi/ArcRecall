@@ -127,15 +127,22 @@ impl DictionaryCandidateStore {
         }
 
         let file = File::open(path)?;
-        let reader = BufReader::with_capacity(64 * 1024, file);
+        let mut reader = BufReader::with_capacity(64 * 1024, file);
         let mut batch = Vec::with_capacity(IMPORT_BATCH_SIZE);
         let mut summary = DictionaryCandidateAddSummary::EMPTY;
 
-        for line in reader.lines() {
-            let line = line?;
-            batch.push(line);
-            if batch.len() >= IMPORT_BATCH_SIZE {
-                summary = summary.merge(self.add_candidates(batch.drain(..))?);
+        while let Some(line) = read_bounded_candidate_line(&mut reader)? {
+            match line {
+                BoundedCandidateLine::Valid(line) => {
+                    batch.push(line);
+                    if batch.len() >= IMPORT_BATCH_SIZE {
+                        summary = summary.merge(self.add_candidates(batch.drain(..))?);
+                    }
+                }
+                BoundedCandidateLine::Oversized => {
+                    summary.submitted_count += 1;
+                    summary.invalid_count += 1;
+                }
             }
         }
 
@@ -151,7 +158,7 @@ impl DictionaryCandidateStore {
         query: &DictionaryCandidateQuery,
     ) -> Result<Vec<DictionaryCandidateEntry>, DictionaryError> {
         self.with_connection(|conn| {
-            let take = query.take.max(0);
+            let take = query.take.clamp(1, DEFAULT_PAGE_SIZE);
             let skip = query.skip.max(0);
             let mut stmt = conn.prepare_cached(
                 "SELECT id, candidate_text, byte_count, success_count \
@@ -226,6 +233,9 @@ impl DictionaryCandidateStore {
             }
             drop(stmt);
             tx.commit()?;
+            if deleted > 0 {
+                purge_deleted_content(conn)?;
+            }
             Ok(deleted)
         })
     }
@@ -317,9 +327,80 @@ impl DictionaryCandidateStore {
     ) -> Result<T, DictionaryError> {
         let conn = Connection::open(&self.path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON; PRAGMA journal_mode = WAL;",
+        )?;
         f(&conn)
     }
+}
+
+enum BoundedCandidateLine {
+    Valid(String),
+    Oversized,
+}
+
+fn read_bounded_candidate_line(
+    reader: &mut impl BufRead,
+) -> Result<Option<BoundedCandidateLine>, std::io::Error> {
+    let mut bytes = Vec::with_capacity(MAX_CANDIDATE_BYTES.min(64 * 1024));
+    let mut saw_data = false;
+    let mut oversized = false;
+    let mut ended_with_newline = false;
+
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if !saw_data {
+                return Ok(None);
+            }
+            break;
+        }
+
+        saw_data = true;
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(available.len(), |index| index + 1);
+        let content = newline.map_or(&available[..consumed], |index| &available[..index]);
+
+        if !oversized {
+            // Keep one extra byte only so a max-sized CRLF line remains valid.
+            let capacity = MAX_CANDIDATE_BYTES + 1;
+            let remaining = capacity.saturating_sub(bytes.len());
+            if content.len() > remaining {
+                oversized = true;
+                bytes.clear();
+            } else {
+                bytes.extend_from_slice(content);
+            }
+        }
+
+        reader.consume(consumed);
+        if newline.is_some() {
+            ended_with_newline = true;
+            break;
+        }
+    }
+
+    if oversized {
+        return Ok(Some(BoundedCandidateLine::Oversized));
+    }
+    if ended_with_newline && bytes.last() == Some(&b'\r') {
+        bytes.pop();
+    }
+    if bytes.len() > MAX_CANDIDATE_BYTES {
+        return Ok(Some(BoundedCandidateLine::Oversized));
+    }
+
+    String::from_utf8(bytes)
+        .map(BoundedCandidateLine::Valid)
+        .map(Some)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+fn purge_deleted_content(conn: &Connection) -> Result<(), DictionaryError> {
+    conn.execute_batch(
+        "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -481,5 +562,48 @@ mod tests {
             std::fs::read_to_string(destination).expect("read"),
             "winner\nfirst\n"
         );
+    }
+
+    #[test]
+    fn import_file_discards_oversized_line_and_continues() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dict_path = dir.path().join("oversized.txt");
+        {
+            let mut file = File::create(&dict_path).expect("create");
+            file.write_all(&vec![b'x'; MAX_CANDIDATE_BYTES + 1])
+                .unwrap();
+            writeln!(file).unwrap();
+            writeln!(file, "valid-after-oversized").unwrap();
+        }
+        let store = DictionaryCandidateStore::open(dir.path().join("dictionary.db")).unwrap();
+
+        let summary = store.import_file(&dict_path).unwrap();
+
+        assert_eq!(summary.submitted_count, 2);
+        assert_eq!(summary.added_count, 1);
+        assert_eq!(summary.invalid_count, 1);
+        assert_eq!(
+            store
+                .list_entries(&DictionaryCandidateQuery::default())
+                .unwrap()[0]
+                .value,
+            "valid-after-oversized"
+        );
+    }
+
+    #[test]
+    fn list_entries_clamps_requested_page_size() {
+        let (_dir, store) = temp_db();
+        let candidates = (0..DEFAULT_PAGE_SIZE + 10).map(|index| format!("candidate-{index}"));
+        store.add_candidates(candidates).unwrap();
+
+        let entries = store
+            .list_entries(&DictionaryCandidateQuery {
+                take: i64::MAX,
+                ..DictionaryCandidateQuery::default()
+            })
+            .unwrap();
+
+        assert_eq!(entries.len(), DEFAULT_PAGE_SIZE as usize);
     }
 }

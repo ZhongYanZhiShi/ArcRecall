@@ -416,6 +416,7 @@ export function DictionaryPage() {
               </InputGroupAddon>
               <InputGroupInput
                 type="search"
+                aria-label="搜索字典候选"
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
                 onKeyDown={(event) => {

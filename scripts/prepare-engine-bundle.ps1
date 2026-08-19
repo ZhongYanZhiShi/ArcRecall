@@ -24,6 +24,28 @@ function Get-Sha256 {
     }
 }
 
+function Test-PathWithinDirectory {
+    param(
+        [Parameter(Mandatory = $true)][string]$Directory,
+        [Parameter(Mandatory = $true)][string]$Candidate
+    )
+
+    $resolvedDirectory = [System.IO.Path]::GetFullPath($Directory).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $resolvedCandidate = [System.IO.Path]::GetFullPath($Candidate)
+    $directoryPrefix = $resolvedDirectory + [System.IO.Path]::DirectorySeparatorChar
+
+    return $resolvedCandidate.Equals(
+        $resolvedDirectory,
+        [System.StringComparison]::OrdinalIgnoreCase
+    ) -or $resolvedCandidate.StartsWith(
+        $directoryPrefix,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $metadataRoot = Join-Path $repoRoot 'third-party\engine-bundle\windows-x86_64'
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
@@ -32,7 +54,7 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
 
 $resolvedRepo = [System.IO.Path]::GetFullPath($repoRoot)
 $resolvedOutput = [System.IO.Path]::GetFullPath($OutputRoot)
-if (-not $resolvedOutput.StartsWith($resolvedRepo, [System.StringComparison]::OrdinalIgnoreCase)) {
+if (-not (Test-PathWithinDirectory -Directory $resolvedRepo -Candidate $resolvedOutput)) {
     throw "Output directory must stay inside the repository: $resolvedOutput"
 }
 
@@ -46,7 +68,7 @@ foreach ($resource in $manifest.resources) {
     $destination = [System.IO.Path]::GetFullPath(
         (Join-Path $resolvedOutput ([string]$resource.relativePath))
     )
-    if (-not $destination.StartsWith($resolvedOutput, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (-not (Test-PathWithinDirectory -Directory $resolvedOutput -Candidate $destination)) {
         throw "Resource target escapes the output directory: $destination"
     }
 

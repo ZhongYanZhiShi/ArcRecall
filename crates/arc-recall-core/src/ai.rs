@@ -1,3 +1,5 @@
+use std::io::Read;
+use std::net::IpAddr;
 use std::time::Duration;
 
 use reqwest::blocking::{Client, RequestBuilder};
@@ -9,6 +11,7 @@ use crate::settings::AiProviderKind;
 use crate::tools::{CompressionError, sanitize_archive_base_name};
 
 const AI_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_AI_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_GENERATED_NAME_CHARACTERS: usize = 120;
 
 #[derive(Clone)]
@@ -50,6 +53,12 @@ pub enum AiError {
     Http { status: u16, message: String },
     #[error("无法解析 AI 服务响应：{0}")]
     Response(#[source] serde_json::Error),
+    #[error("无法读取 AI 服务响应：{0}")]
+    ResponseRead(#[source] std::io::Error),
+    #[error("AI 服务响应超过 4 MiB 安全上限。")]
+    ResponseTooLarge,
+    #[error("AI 服务响应不是有效的 UTF-8 文本。")]
+    ResponseEncoding,
     #[error("{0}")]
     InvalidGeneratedName(String),
 }
@@ -110,7 +119,7 @@ fn fetch_json_body(
     let request = with_auth(client.get(url).header(ACCEPT, "application/json"), api_key);
     let response = request.send().map_err(AiError::Request)?;
     let status = response.status();
-    let body = response.text().map_err(AiError::Request)?;
+    let body = read_bounded_response(response)?;
     if !status.is_success() {
         return Err(AiError::Http {
             status: status.as_u16(),
@@ -170,7 +179,7 @@ pub fn generate_archive_name(
     );
     let response = request.send().map_err(AiError::Request)?;
     let status = response.status();
-    let response_body = response.text().map_err(AiError::Request)?;
+    let response_body = read_bounded_response(response)?;
     if !status.is_success() {
         return Err(AiError::Http {
             status: status.as_u16(),
@@ -195,7 +204,41 @@ pub fn validate_ai_base_url(value: &str) -> Result<String, AiError> {
             "AI 服务地址必须使用有效的 http:// 或 https:// URL。".into(),
         ));
     }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(AiError::InvalidConfiguration(
+            "AI 服务地址不能包含用户名或密码。".into(),
+        ));
+    }
+    if url.scheme() == "http" && !url.host_str().is_some_and(is_loopback_host) {
+        return Err(AiError::InvalidConfiguration(
+            "远程 AI 服务必须使用 https://；http:// 仅允许 localhost 或回环地址。".into(),
+        ));
+    }
     Ok(trimmed.into())
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let normalized = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(host);
+    normalized.eq_ignore_ascii_case("localhost")
+        || normalized.to_ascii_lowercase().ends_with(".localhost")
+        || normalized
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
+fn read_bounded_response(response: reqwest::blocking::Response) -> Result<String, AiError> {
+    let mut bytes = Vec::with_capacity(MAX_AI_RESPONSE_BYTES.min(64 * 1024));
+    response
+        .take((MAX_AI_RESPONSE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(AiError::ResponseRead)?;
+    if bytes.len() > MAX_AI_RESPONSE_BYTES {
+        return Err(AiError::ResponseTooLarge);
+    }
+    String::from_utf8(bytes).map_err(|_| AiError::ResponseEncoding)
 }
 
 fn build_client() -> Result<Client, AiError> {
@@ -471,6 +514,24 @@ mod tests {
                 .as_str(),
             "http://127.0.0.1:11434/api/tags"
         );
+    }
+
+    #[test]
+    fn rejects_plain_http_for_non_loopback_ai_services() {
+        assert!(validate_ai_base_url("http://api.example.com/v1").is_err());
+        assert!(validate_ai_base_url("http://192.168.1.20:8080/v1").is_err());
+        assert_eq!(
+            validate_ai_base_url("http://127.0.0.1:11434/v1").unwrap(),
+            "http://127.0.0.1:11434/v1"
+        );
+        assert!(validate_ai_base_url("http://[::1]:11434/v1").is_ok());
+        assert!(validate_ai_base_url("http://models.localhost:1234/v1").is_ok());
+        assert!(validate_ai_base_url("https://api.example.com/v1").is_ok());
+    }
+
+    #[test]
+    fn rejects_credentials_embedded_in_ai_service_url() {
+        assert!(validate_ai_base_url("https://user:secret@api.example.com/v1").is_err());
     }
 
     #[test]

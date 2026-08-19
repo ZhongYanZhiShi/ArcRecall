@@ -1,21 +1,13 @@
 "use client"
 
+import dynamic from "next/dynamic"
 import * as React from "react"
 
 import { AppShell, NAV_ORDER, type NavId } from "@/components/app-shell"
 import { ClientLoggingBridge } from "@/components/client-logging-bridge"
-import {
-  CompressPage,
-  createCompressionDraft,
-} from "@/components/home/compress-page"
-import { DictionaryPage } from "@/components/home/dictionary-page"
-import { ExtractPage } from "@/components/home/extract-page"
-import { HistoryPage } from "@/components/home/history-page"
-import { LogsPage } from "@/components/home/logs-page"
-import {
-  SettingsPage,
-  type SettingsCategory,
-  type SettingsPageHandle,
+import type {
+  SettingsCategory,
+  SettingsPageHandle,
 } from "@/components/home/settings-page"
 import {
   AlertDialog,
@@ -28,7 +20,70 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import {
+  createCompressionDraft,
+  type CompressionDraft,
+} from "@/lib/compression-draft"
 import { cn } from "@/lib/utils"
+
+function WorkbenchLoading() {
+  return (
+    <div
+      className="flex h-full items-center justify-center text-sm text-muted-foreground"
+      role="status"
+    >
+      正在载入工作区…
+    </div>
+  )
+}
+
+const ExtractPage = dynamic(
+  () =>
+    import("@/components/home/extract-page").then(
+      (module) => module.ExtractPage
+    ),
+  { loading: WorkbenchLoading }
+)
+const CompressPage = dynamic<{
+  draft: CompressionDraft
+  onDraftChange: React.Dispatch<React.SetStateAction<CompressionDraft>>
+  onOpenAiSettings: () => void
+}>(
+  () =>
+    import("@/components/home/compress-page").then(
+      (module) => module.CompressPage
+    ),
+  { loading: WorkbenchLoading }
+)
+const DictionaryPage = dynamic(
+  () =>
+    import("@/components/home/dictionary-page").then(
+      (module) => module.DictionaryPage
+    ),
+  { loading: WorkbenchLoading }
+)
+const HistoryPage = dynamic(
+  () =>
+    import("@/components/home/history-page").then(
+      (module) => module.HistoryPage
+    ),
+  { loading: WorkbenchLoading }
+)
+const LogsPage = dynamic(
+  () => import("@/components/home/logs-page").then((module) => module.LogsPage),
+  { loading: WorkbenchLoading }
+)
+const SettingsPage = dynamic<
+  React.ComponentPropsWithRef<
+    typeof import("@/components/home/settings-page").SettingsPage
+  >
+>(
+  () =>
+    import("@/components/home/settings-page").then(
+      (module) => module.SettingsPage
+    ),
+  { loading: WorkbenchLoading }
+)
 
 type SlideDirection = "forward" | "backward" | null
 type SettingsReturnTarget = "extract" | "compress"

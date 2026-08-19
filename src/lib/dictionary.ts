@@ -6,6 +6,9 @@ export const DICTIONARY_BATCH_SIZE = 4096
 /** UI list page size (matches Rust DEFAULT_PAGE_SIZE). */
 export const DICTIONARY_PAGE_SIZE = 500
 
+/** Matches the Rust store limit and bounds streaming importer memory per line. */
+export const MAX_DICTIONARY_CANDIDATE_BYTES = 64 * 1024
+
 export type DictionaryCandidateEntry = {
   id: number
   value: string
@@ -134,6 +137,7 @@ export async function importDictionaryFile(
 ): Promise<DictionaryCandidateAddSummary> {
   let summary = EMPTY_SUMMARY
   let batch: string[] = []
+  const encoder = new TextEncoder()
 
   const flush = async () => {
     if (batch.length === 0) {
@@ -150,27 +154,89 @@ export async function importDictionaryFile(
       .stream()
       .pipeThrough(new TextDecoderStream())
       .getReader()
-    let pending = ""
+    let pendingParts: string[] = []
+    let pendingBytes = 0
+    let discardingOversizedLine = false
+
+    const recordInvalidLine = () => {
+      summary = mergeSummary(summary, {
+        submittedCount: 1,
+        addedCount: 0,
+        duplicateCount: 0,
+        invalidCount: 1,
+      })
+    }
+
+    const pushCompletedLine = async (segment: string) => {
+      pendingParts.push(segment)
+      let line = pendingParts.join("")
+      if (line.endsWith("\r")) {
+        line = line.slice(0, -1)
+      }
+      pendingParts = []
+      pendingBytes = 0
+
+      if (encoder.encode(line).byteLength > MAX_DICTIONARY_CANDIDATE_BYTES) {
+        recordInvalidLine()
+        return
+      }
+      batch.push(line)
+      if (batch.length >= DICTIONARY_BATCH_SIZE) {
+        await flush()
+      }
+    }
+
     while (true) {
-      const { done, value } = await reader.read()
+      const { done, value: decodedChunk } = await reader.read()
       if (done) {
         break
       }
-      pending += value
-      const lines = pending.split(/\r?\n/)
-      pending = lines.pop() ?? ""
-      for (const line of lines) {
-        batch.push(line)
-        if (batch.length >= DICTIONARY_BATCH_SIZE) {
-          await flush()
+
+      let value = decodedChunk
+      if (discardingOversizedLine) {
+        const newline = value.indexOf("\n")
+        if (newline === -1) {
+          continue
         }
+        discardingOversizedLine = false
+        value = value.slice(newline + 1)
+      }
+
+      let cursor = 0
+      while (cursor < value.length) {
+        const newline = value.indexOf("\n", cursor)
+        const segment = value.slice(
+          cursor,
+          newline === -1 ? value.length : newline
+        )
+
+        if (newline !== -1) {
+          await pushCompletedLine(segment)
+          cursor = newline + 1
+          continue
+        }
+
+        pendingParts.push(segment)
+        pendingBytes += encoder.encode(segment).byteLength
+        const mayBeTrailingCarriageReturn = segment.endsWith("\r") ? 1 : 0
+        if (
+          pendingBytes >
+          MAX_DICTIONARY_CANDIDATE_BYTES + mayBeTrailingCarriageReturn
+        ) {
+          recordInvalidLine()
+          pendingParts = []
+          pendingBytes = 0
+          discardingOversizedLine = true
+        }
+        break
       }
     }
-    // Final incomplete line (no trailing newline) is still a candidate.
-    if (pending.length > 0 || file.size === 0) {
-      // Only push residual when file ended mid-line; empty residual after
-      // trailing newline is not a candidate.
-      if (pending.length > 0) {
+
+    if (!discardingOversizedLine && pendingParts.length > 0) {
+      const pending = pendingParts.join("")
+      if (pendingBytes > MAX_DICTIONARY_CANDIDATE_BYTES) {
+        recordInvalidLine()
+      } else {
         batch.push(pending)
       }
     }

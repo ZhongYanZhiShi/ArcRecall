@@ -489,11 +489,28 @@ fn is_sensitive_key(key: &str) -> bool {
         return false;
     }
     [
+        "api_key",
+        "api-key",
+        "apikey",
+        "access_key",
+        "access-key",
+        "accesskey",
+        "private_key",
+        "private-key",
+        "privatekey",
+        "authorization",
         "password",
         "passwd",
         "secret",
         "token",
         "credential",
+        "email",
+        "e-mail",
+        "phone",
+        "mobile",
+        "telephone",
+        "user_name",
+        "username",
         "candidate",
         "archive_path",
         "output_path",
@@ -539,6 +556,9 @@ fn sanitize_text(value: &str, max_chars: usize) -> String {
 
 fn contains_absolute_path(value: &str) -> bool {
     let bytes = value.as_bytes();
+    if value.to_ascii_lowercase().contains("file:///") {
+        return true;
+    }
     for index in 0..bytes.len() {
         if index + 2 < bytes.len()
             && bytes[index].is_ascii_alphabetic()
@@ -552,11 +572,18 @@ fn contains_absolute_path(value: &str) -> bool {
             return true;
         }
         if index + 1 < bytes.len()
+            && bytes[index] == b'~'
+            && matches!(bytes[index + 1], b'/' | b'\\')
+            && (index == 0 || !bytes[index - 1].is_ascii_alphanumeric())
+        {
+            return true;
+        }
+        if index + 1 < bytes.len()
             && bytes[index] == b'/'
             && bytes[index + 1].is_ascii_alphabetic()
             && (index == 0
-                || bytes[index - 1].is_ascii_whitespace()
-                || matches!(bytes[index - 1], b':' | b'=' | b'(' | b'[' | b'{'))
+                || (!bytes[index - 1].is_ascii_alphanumeric()
+                    && !matches!(bytes[index - 1], b'/' | b'.')))
         {
             return true;
         }
@@ -690,6 +717,8 @@ mod tests {
         let (_directory, store) = store(1024 * 1024, 3);
         let context = BTreeMap::from([
             ("known_password".into(), "hunter2".into()),
+            ("apiKey".into(), "sk-private".into()),
+            ("contact_email".into(), "private@example.com".into()),
             ("candidate_count".into(), "42".into()),
         ]);
         let entry = store
@@ -705,6 +734,8 @@ mod tests {
 
         assert_eq!(entry.message, "[敏感信息已隐藏]");
         assert_eq!(entry.context["known_password"], "[已隐藏]");
+        assert_eq!(entry.context["apiKey"], "[已隐藏]");
+        assert_eq!(entry.context["contact_email"], "[已隐藏]");
         assert_eq!(entry.context["candidate_count"], "42");
     }
 
@@ -716,6 +747,18 @@ mod tests {
         );
         assert_eq!(
             sanitize_text(concat!("failed at /", "home", "/alice/archive.7z"), 512),
+            "[路径信息已隐藏]"
+        );
+        assert_eq!(
+            sanitize_text(concat!(r#"{"path":"/"#, "home", r#"/alice/archive.7z"}"#), 512),
+            "[路径信息已隐藏]"
+        );
+        assert_eq!(
+            sanitize_text(concat!("file:///", "home", "/alice/archive.7z"), 512),
+            "[路径信息已隐藏]"
+        );
+        assert_eq!(
+            sanitize_text("failed at ~/private/archive.7z", 512),
             "[路径信息已隐藏]"
         );
         assert_eq!(

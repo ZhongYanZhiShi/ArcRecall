@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -51,6 +51,34 @@ struct AppState {
     engine_install: Arc<Mutex<()>>,
     recovery_task: Mutex<Option<RecoveryTaskHandle>>,
     compression_task: Mutex<Option<CompressionTaskHandle>>,
+    recovery_starting: AtomicBool,
+    compression_starting: AtomicBool,
+}
+
+struct TaskStartReservation<'a> {
+    flag: &'a AtomicBool,
+    active: bool,
+}
+
+impl<'a> TaskStartReservation<'a> {
+    fn acquire(flag: &'a AtomicBool, conflict_message: &str) -> Result<Self, String> {
+        flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| conflict_message.to_string())?;
+        Ok(Self { flag, active: true })
+    }
+
+    fn release(mut self) {
+        self.flag.store(false, Ordering::Release);
+        self.active = false;
+    }
+}
+
+impl Drop for TaskStartReservation<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            self.flag.store(false, Ordering::Release);
+        }
+    }
 }
 
 struct RecoveryTaskHandle {
@@ -863,6 +891,13 @@ fn ai_profile_upsert(
     state: State<'_, AppState>,
     request: AiProfileUpsertRequest,
 ) -> Result<AiSettingsView, String> {
+    let requested_api_key = request
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let clear_api_key = request.clear_api_key;
     let id = request
         .id
         .as_deref()
@@ -896,9 +931,10 @@ fn ai_profile_upsert(
         profile.model = profile.provider.default_model().into();
     }
 
-    {
+    let previous_settings = {
         let store = state.settings.lock().map_err(|error| error.to_string())?;
         let mut settings = store.load().map_err(|error| error.to_string())?;
+        let previous_settings = settings.clone();
         if let Some(existing) = settings
             .ai
             .profiles
@@ -916,15 +952,27 @@ fn ai_profile_upsert(
             settings.ai.active_profile_id = id.clone();
         }
         store.save(&settings).map_err(|error| error.to_string())?;
-    }
+        previous_settings
+    };
 
-    if request.clear_api_key {
-        delete_ai_api_key(&id)?;
-    } else if let Some(api_key) = request.api_key {
-        let api_key = api_key.trim();
-        if !api_key.is_empty() {
-            set_ai_api_key(&id, api_key)?;
-        }
+    let credential_result = if clear_api_key {
+        delete_ai_api_key(&id)
+    } else if let Some(api_key) = requested_api_key.as_deref() {
+        set_ai_api_key(&id, api_key)
+    } else {
+        Ok(())
+    };
+    if let Err(credential_error) = credential_result {
+        let rollback_result = state
+            .settings
+            .lock()
+            .map_err(|error| error.to_string())?
+            .save(&previous_settings)
+            .map_err(|error| error.to_string());
+        return Err(match rollback_result {
+            Ok(()) => format!("{credential_error} 配置更改已回滚，可修复凭据存储后重试。"),
+            Err(rollback_error) => format!("{credential_error} 同时无法回滚配置：{rollback_error}"),
+        });
     }
     write_log(
         &state.logger,
@@ -946,9 +994,10 @@ fn ai_profile_delete(
     if profile_id.is_empty() {
         return Err("AI 配置标识不能为空。".into());
     }
-    {
+    let previous_settings = {
         let store = state.settings.lock().map_err(|error| error.to_string())?;
         let mut settings = store.load().map_err(|error| error.to_string())?;
+        let previous_settings = settings.clone();
         let original_count = settings.ai.profiles.len();
         settings
             .ai
@@ -966,8 +1015,20 @@ fn ai_profile_delete(
                 .unwrap_or_default();
         }
         store.save(&settings).map_err(|error| error.to_string())?;
+        previous_settings
+    };
+    if let Err(credential_error) = delete_ai_api_key(profile_id) {
+        let rollback_result = state
+            .settings
+            .lock()
+            .map_err(|error| error.to_string())?
+            .save(&previous_settings)
+            .map_err(|error| error.to_string());
+        return Err(match rollback_result {
+            Ok(()) => format!("{credential_error} 配置删除已回滚，可稍后重试。"),
+            Err(rollback_error) => format!("{credential_error} 同时无法回滚配置：{rollback_error}"),
+        });
     }
-    delete_ai_api_key(profile_id)?;
     write_log(
         &state.logger,
         LogLevel::Info,
@@ -1431,7 +1492,7 @@ fn tool_hashcat_status(state: State<'_, AppState>) -> Result<HashcatStatus, Stri
 }
 
 #[tauri::command]
-fn tool_hashcat_download(state: State<'_, AppState>) -> Result<HashcatInstallResult, String> {
+async fn tool_hashcat_download(state: State<'_, AppState>) -> Result<HashcatInstallResult, String> {
     write_log(
         &state.logger,
         LogLevel::Info,
@@ -1441,7 +1502,15 @@ fn tool_hashcat_download(state: State<'_, AppState>) -> Result<HashcatInstallRes
         std::iter::empty(),
     );
     let downloader = hashcat_downloader(&state)?;
-    let result = downloader.install().map_err(|e| e.to_string())?;
+    let install_lock = Arc::clone(&state.engine_install);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = install_lock
+            .lock()
+            .map_err(|error| format!("引擎安装锁异常：{error}"))?;
+        downloader.install().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("Hashcat 安装任务失败：{error}"))??;
     if result.success && !result.executable_path.is_empty() {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         settings
@@ -1495,17 +1564,19 @@ fn tool_set_tools_directory(
 }
 
 #[tauri::command]
-fn tool_john_perl_status(state: State<'_, AppState>) -> Result<JohnPerlStatus, String> {
-    let settings = state.settings.lock().map_err(|e| e.to_string())?;
-    let loaded = settings.load().map_err(|e| e.to_string())?;
-    Ok(probe_john_perl(
-        &loaded.engine.john_tools_directory,
-        &loaded.engine.perl_path,
-    ))
+async fn tool_john_perl_status(state: State<'_, AppState>) -> Result<JohnPerlStatus, String> {
+    let (john, perl) = {
+        let settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let loaded = settings.load().map_err(|e| e.to_string())?;
+        (loaded.engine.john_tools_directory, loaded.engine.perl_path)
+    };
+    tauri::async_runtime::spawn_blocking(move || probe_john_perl(&john, &perl))
+        .await
+        .map_err(|error| format!("John / Perl 探测任务失败：{error}"))
 }
 
 #[tauri::command]
-fn tool_set_john_perl(
+async fn tool_set_john_perl(
     state: State<'_, AppState>,
     john_tools_directory: String,
     perl_path: String,
@@ -1530,11 +1601,17 @@ fn tool_set_john_perl(
             return Err("perl 路径请使用绝对路径".into());
         }
     }
-    let settings = state.settings.lock().map_err(|e| e.to_string())?;
-    settings
-        .save_john_perl(john, perl)
-        .map_err(|e| e.to_string())?;
-    Ok(probe_john_perl(john, perl))
+    {
+        let settings = state.settings.lock().map_err(|e| e.to_string())?;
+        settings
+            .save_john_perl(john, perl)
+            .map_err(|e| e.to_string())?;
+    }
+    let john = john.to_string();
+    let perl = perl.to_string();
+    tauri::async_runtime::spawn_blocking(move || probe_john_perl(&john, &perl))
+        .await
+        .map_err(|error| format!("John / Perl 探测任务失败：{error}"))
 }
 
 #[tauri::command]
@@ -1602,6 +1679,10 @@ async fn compression_start(
     state: State<'_, AppState>,
     request: CompressionStartRequest,
 ) -> Result<CompressionTaskStatus, String> {
+    let start_reservation = TaskStartReservation::acquire(
+        &state.compression_starting,
+        "压缩任务正在启动，请勿重复提交。",
+    )?;
     {
         let current = state
             .compression_task
@@ -1701,25 +1782,27 @@ async fn compression_start(
     let status_for_result = Arc::clone(&status);
     let logger = Arc::clone(&state.logger);
     std::thread::spawn(move || {
-        let result = compress_archive(
-            prepared,
-            &seven_zip,
-            &cancellation,
-            |update: CompressionUpdate| {
-                if let Ok(mut task_status) = status_for_updates.lock() {
-                    task_status.phase = update.phase;
-                    task_status.message = update.message;
-                    task_status.processed_source_count = update.processed_source_count;
-                    task_status.total_source_count = update.total_source_count;
-                }
-            },
-        );
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            compress_archive(
+                prepared,
+                &seven_zip,
+                &cancellation,
+                |update: CompressionUpdate| {
+                    if let Ok(mut task_status) = status_for_updates.lock() {
+                        task_status.phase = update.phase;
+                        task_status.message = update.message;
+                        task_status.processed_source_count = update.processed_source_count;
+                        task_status.total_source_count = update.total_source_count;
+                    }
+                },
+            )
+        }));
         if let Ok(mut task_status) = status_for_result.lock() {
             task_status.running = false;
             task_status.completed = true;
             task_status.elapsed_ms = current_time_ms().saturating_sub(task_status.started_at_ms);
             match result {
-                Ok(result) => {
+                Ok(Ok(result)) => {
                     task_status.phase = CompressionPhase::Completed;
                     task_status.success = true;
                     task_status.message = "压缩完成。".into();
@@ -1737,7 +1820,7 @@ async fn compression_start(
                         ],
                     );
                 }
-                Err(CompressionError::Cancelled) => {
+                Ok(Err(CompressionError::Cancelled)) => {
                     task_status.phase = CompressionPhase::Cancelled;
                     task_status.cancelled = true;
                     task_status.message = "压缩任务已取消，临时归档已清理。".into();
@@ -1750,7 +1833,7 @@ async fn compression_start(
                         [("task_id".into(), task_id.clone())],
                     );
                 }
-                Err(error) => {
+                Ok(Err(error)) => {
                     task_status.phase = CompressionPhase::Failed;
                     task_status.message = error.to_string();
                     write_log(
@@ -1762,9 +1845,26 @@ async fn compression_start(
                         [("task_id".into(), task_id.clone())],
                     );
                 }
+                Err(payload) => {
+                    task_status.phase = CompressionPhase::Failed;
+                    task_status.message = format!(
+                        "压缩后台任务异常终止：{}",
+                        panic_payload_message(payload.as_ref())
+                    );
+                    write_log(
+                        &logger,
+                        LogLevel::Error,
+                        "compression",
+                        "compression.panicked",
+                        "压缩后台任务异常终止。",
+                        [("task_id".into(), task_id.clone())],
+                    );
+                }
             }
         }
     });
+
+    start_reservation.release();
 
     Ok(initial)
 }
@@ -1829,6 +1929,10 @@ async fn recovery_start(
     state: State<'_, AppState>,
     request: RecoveryStartRequest,
 ) -> Result<RecoveryTaskStatus, String> {
+    let start_reservation = TaskStartReservation::acquire(
+        &state.recovery_starting,
+        "密码恢复任务正在启动，请勿重复提交。",
+    )?;
     write_log(
         &state.logger,
         LogLevel::Debug,
@@ -1860,15 +1964,16 @@ async fn recovery_start(
     let archive_path = std::fs::canonicalize(PathBuf::from(&request.archive_path))
         .map_err(|error| format!("无法解析归档路径：{error}"))?;
     let analysis = analyze_archive(&archive_path).map_err(|error| error.to_string())?;
-    let fingerprint_sha256 = request
+    let fingerprint_sha256 =
+        fingerprint_file_sha256(&archive_path).map_err(|error| error.to_string())?;
+    if let Some(supplied_fingerprint) = request
         .fingerprint_sha256
         .as_deref()
         .filter(|value| is_sha256_fingerprint(value))
-        .map(|value| value.to_ascii_lowercase())
-        .map(Ok)
-        .unwrap_or_else(|| {
-            fingerprint_file_sha256(&archive_path).map_err(|error| error.to_string())
-        })?;
+        && !supplied_fingerprint.eq_ignore_ascii_case(&fingerprint_sha256)
+    {
+        return Err("归档内容自分析后已发生变化，请重新选择并分析该文件。".into());
+    }
     let manual_password = request
         .known_password
         .as_deref()
@@ -2247,6 +2352,8 @@ async fn recovery_start(
         completion_guard.mark_finalized();
     });
 
+    start_reservation.release();
+
     Ok(initial)
 }
 
@@ -2481,6 +2588,8 @@ pub fn run() {
                 engine_install: Arc::new(Mutex::new(())),
                 recovery_task: Mutex::new(None),
                 compression_task: Mutex::new(None),
+                recovery_starting: AtomicBool::new(false),
+                compression_starting: AtomicBool::new(false),
             });
             Ok(())
         })

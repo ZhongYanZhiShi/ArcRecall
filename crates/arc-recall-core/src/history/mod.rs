@@ -284,13 +284,23 @@ impl RecoveryHistoryStore {
     pub fn delete(&self, id: i64) -> Result<bool, RecoveryHistoryError> {
         let _guard = self.write_lock.lock().expect("history write lock");
         self.with_connection(|conn| {
-            Ok(conn.execute("DELETE FROM recovery_history WHERE id = ?1;", [id])? > 0)
+            let deleted = conn.execute("DELETE FROM recovery_history WHERE id = ?1;", [id])? > 0;
+            if deleted {
+                purge_deleted_content(conn)?;
+            }
+            Ok(deleted)
         })
     }
 
     pub fn clear(&self) -> Result<u64, RecoveryHistoryError> {
         let _guard = self.write_lock.lock().expect("history write lock");
-        self.with_connection(|conn| Ok(conn.execute("DELETE FROM recovery_history;", [])? as u64))
+        self.with_connection(|conn| {
+            let deleted = conn.execute("DELETE FROM recovery_history;", [])? as u64;
+            if deleted > 0 {
+                purge_deleted_content(conn)?;
+            }
+            Ok(deleted)
+        })
     }
 
     fn with_connection<T>(
@@ -299,9 +309,18 @@ impl RecoveryHistoryStore {
     ) -> Result<T, RecoveryHistoryError> {
         let conn = Connection::open(&self.path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON; PRAGMA journal_mode = WAL;",
+        )?;
         f(&conn)
     }
+}
+
+fn purge_deleted_content(conn: &Connection) -> Result<(), RecoveryHistoryError> {
+    conn.execute_batch(
+        "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
+    )?;
+    Ok(())
 }
 
 fn normalize_fingerprint(value: &str) -> Result<String, RecoveryHistoryError> {
@@ -412,5 +431,34 @@ mod tests {
                 .total_count,
             0
         );
+    }
+
+    #[test]
+    fn deleting_history_removes_password_bytes_from_sqlite_files() {
+        let (directory, store) = store();
+        let secret = "arcrecall-unique-deleted-password-9f0ac8b7";
+        store.upsert(&record('e', 100, Some(secret))).unwrap();
+        let id = store
+            .list(&RecoveryHistoryQuery::default())
+            .unwrap()
+            .entries[0]
+            .id;
+
+        assert!(store.delete(id).unwrap());
+
+        for path in [
+            store.database_path().to_path_buf(),
+            directory.path().join("history.db-wal"),
+            directory.path().join("history.db-shm"),
+        ] {
+            if path.is_file() {
+                let bytes = std::fs::read(path).unwrap();
+                assert!(
+                    !bytes
+                        .windows(secret.len())
+                        .any(|window| window == secret.as_bytes())
+                );
+            }
+        }
     }
 }

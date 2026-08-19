@@ -2,12 +2,14 @@
 
 import {
   ArrowLeft,
+  CircleAlert,
   Cpu,
   Database,
   Download,
   ExternalLink,
   HardDrive,
   Package,
+  RefreshCw,
   Sparkles,
   Settings2,
   Zap,
@@ -222,6 +224,11 @@ export const SettingsPage = React.forwardRef<
   const [logMaxDiskInput, setLogMaxDiskInput] = React.useState(
     String(DEFAULT_LOG_MAX_DISK_MIB)
   )
+  const [initialLoadBusy, setInitialLoadBusy] = React.useState(false)
+  const [initialLoadError, setInitialLoadError] = React.useState<string | null>(
+    null
+  )
+  const initialLoadRequest = React.useRef(0)
 
   const applyEngineStatus = React.useCallback(
     (snapshot: EngineStatusSnapshot) => {
@@ -268,44 +275,84 @@ export const SettingsPage = React.forwardRef<
     }
   }, [applyEngineStatus])
 
-  React.useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        const [info, bundle, status, john, settings, recovery] =
-          await Promise.all([
-            getDatabaseInfo(),
-            getFullEngineBundleStatus(),
-            getHashcatStatus(),
-            getJohnPerlStatus(),
-            getSettings(),
-            getRecoveryCapabilities(),
-          ])
-        if (cancelled) {
-          return
-        }
-        setDbInfo(info)
-        applyEngineStatus({
-          fullBundle: bundle,
-          hashcat: status,
-          johnPerl: john,
-          recoveryCapabilities: recovery,
-        })
-        setAppSettings(settings)
-        setLogMaxDiskInput(
-          String(settings.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB)
-        )
-      } catch {
-        if (!cancelled) {
-          setDbInfo(null)
-          setAppSettings(null)
-        }
-      }
-    })()
-    return () => {
-      cancelled = true
+  const loadInitialData = React.useCallback(async () => {
+    const requestId = ++initialLoadRequest.current
+    setInitialLoadBusy(true)
+    setInitialLoadError(null)
+
+    const results = await Promise.allSettled([
+      getDatabaseInfo(),
+      getFullEngineBundleStatus(),
+      getHashcatStatus(),
+      getJohnPerlStatus(),
+      getSettings(),
+      getRecoveryCapabilities(),
+    ] as const)
+    if (requestId !== initialLoadRequest.current) {
+      return
     }
-  }, [applyEngineStatus])
+
+    const [info, bundle, status, john, settings, recovery] = results
+    if (info.status === "fulfilled") {
+      setDbInfo(info.value)
+    }
+    if (bundle.status === "fulfilled") {
+      setFullBundle(bundle.value)
+    }
+    if (status.status === "fulfilled") {
+      setHashcat(status.value)
+      setToolsDirInput(status.value.configuredToolsDirectory || "")
+    }
+    if (john.status === "fulfilled") {
+      applyJohnPerlStatus(john.value)
+    }
+    if (settings.status === "fulfilled") {
+      setAppSettings(settings.value)
+      setLogMaxDiskInput(
+        String(settings.value.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB)
+      )
+    }
+    if (recovery.status === "fulfilled") {
+      setRecoveryCapabilities(recovery.value)
+    }
+    if (
+      bundle.status === "fulfilled" &&
+      status.status === "fulfilled" &&
+      john.status === "fulfilled" &&
+      recovery.status === "fulfilled"
+    ) {
+      applyEngineStatus({
+        fullBundle: bundle.value,
+        hashcat: status.value,
+        johnPerl: john.value,
+        recoveryCapabilities: recovery.value,
+      })
+    }
+
+    const labels = [
+      "数据库信息",
+      "完整引擎包",
+      "Hashcat",
+      "John / Perl",
+      "应用设置",
+      "恢复能力",
+    ]
+    const failedLabels = results.flatMap((result, index) =>
+      result.status === "rejected" ? [labels[index]] : []
+    )
+    if (failedLabels.length > 0) {
+      setInitialLoadError(`读取失败：${failedLabels.join("、")}。`)
+    }
+    setInitialLoadBusy(false)
+  }, [applyEngineStatus, applyJohnPerlStatus])
+
+  React.useEffect(() => {
+    const timeout = setTimeout(() => void loadInitialData(), 0)
+    return () => {
+      clearTimeout(timeout)
+      initialLoadRequest.current += 1
+    }
+  }, [loadInitialData])
 
   const handleSaveToolsDir = () => {
     if (engineBusy) {
@@ -696,6 +743,25 @@ export const SettingsPage = React.forwardRef<
             ) : null
           }
         />
+
+        {initialLoadError ? (
+          <Alert variant="warning" className="shrink-0">
+            <CircleAlert />
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+              <span>{initialLoadError} 已成功读取的区域仍可使用。</span>
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={initialLoadBusy}
+                onClick={() => void loadInitialData()}
+              >
+                <RefreshCw data-icon="inline-start" />
+                {initialLoadBusy ? "正在重试" : "重试读取"}
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : null}
 
         <Tabs
           value={category}

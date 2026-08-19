@@ -882,14 +882,21 @@ function LogState({
 }
 
 function formatTimestamp(timestamp: number) {
-  return LOG_TIMESTAMP_FORMATTER.format(timestamp)
+  return LOG_TIMESTAMP_FORMATTER.format(
+    Number.isFinite(timestamp) ? timestamp : 0
+  )
 }
 
 function formatRefreshTime(timestamp: number) {
-  return LOG_REFRESH_TIME_FORMATTER.format(timestamp)
+  return LOG_REFRESH_TIME_FORMATTER.format(
+    Number.isFinite(timestamp) ? timestamp : 0
+  )
 }
 
 function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return "0 B"
+  }
   if (bytes < 1024) {
     return `${bytes} B`
   }

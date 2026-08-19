@@ -143,6 +143,9 @@ export function ExtractPage({
     React.useState(false)
   const [passwordCopied, setPasswordCopied] = React.useState(false)
   const [task, setTask] = React.useState<RecoveryTaskStatus | null>(null)
+  const [reattachedTaskId, setReattachedTaskId] = React.useState<string | null>(
+    null
+  )
   const [dictionaryCount, setDictionaryCount] = React.useState<number | null>(
     null
   )
@@ -203,6 +206,9 @@ export function ExtractPage({
         if (!disposed && latest) {
           setTask((current) => current ?? latest)
           setComputeMode(latest.computeMode ?? "gpuPreferred")
+          if (latest.running) {
+            setReattachedTaskId(latest.taskId)
+          }
         }
       })
       .catch((reason) => {
@@ -229,6 +235,7 @@ export function ExtractPage({
     setBusy(true)
     setError(null)
     setTask(null)
+    setReattachedTaskId(null)
     setAnalysis(null)
     setKnownPassword("")
     setShowKnownPassword(false)
@@ -414,6 +421,7 @@ export function ExtractPage({
       autoOpenTasks.current.add(started.taskId)
       setShowRecoveredPassword(false)
       setPasswordCopied(false)
+      setReattachedTaskId(null)
       setTask(started)
     } catch (reason) {
       setError(toErrorMessage(reason))
@@ -968,6 +976,47 @@ export function ExtractPage({
                 onOpenEngineSettings={onOpenEngineSettings}
               />
             ) : null}
+          </section>
+        ) : null}
+
+        {task && task.taskId === reattachedTaskId && !analysis ? (
+          <section className="mt-3 flex min-h-0 flex-1 scroll-fade flex-col gap-2 overflow-y-auto pr-1 pb-1">
+            <Alert variant="warning" className="shrink-0">
+              <CircleAlert />
+              <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  已重新连接到“{archiveNameFromPath(task.archivePath)}
+                  ”的恢复任务。
+                </span>
+                {task.running ? (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={handleCancel}
+                  >
+                    <Square data-icon="inline-start" />
+                    取消任务
+                  </Button>
+                ) : null}
+              </AlertDescription>
+            </Alert>
+            <TaskResult
+              task={task}
+              showPassword={showRecoveredPassword}
+              passwordCopied={passwordCopied}
+              onTogglePassword={() =>
+                setShowRecoveredPassword((value) => !value)
+              }
+              onCopyPassword={handleCopyPassword}
+              onOpenOutput={() =>
+                void openOutputDirectory(task.outputDirectory).catch((reason) =>
+                  setError(toErrorMessage(reason))
+                )
+              }
+              onOpenOptions={() => setOptionsOpen(true)}
+              onOpenEngineSettings={onOpenEngineSettings}
+            />
           </section>
         ) : null}
 

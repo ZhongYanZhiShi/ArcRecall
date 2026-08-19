@@ -106,42 +106,15 @@ import {
 } from "@/lib/compression"
 import {
   forgetCompletedArchiveBaseName,
+  shouldAutoOpenCompletedTask,
   shouldForgetArchiveBaseName,
+  type CompressionDraft,
 } from "@/lib/compression-draft"
 import { isDesktopRuntime } from "@/lib/dictionary"
 import { openPath } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 
-type OutputMode = "sibling" | "custom"
 type CompressionLevel = 0 | 1 | 3 | 5 | 7 | 9
-
-export type CompressionDraft = {
-  sources: string[]
-  outputMode: OutputMode
-  outputDirectory: string | null
-  baseName: string
-  format: CompressionFormat
-  level: CompressionLevel
-  password: string
-  encryptFileNames: boolean
-  openWhenDone: boolean
-  useAiRename: boolean
-}
-
-export function createCompressionDraft(): CompressionDraft {
-  return {
-    sources: [],
-    outputMode: "sibling",
-    outputDirectory: null,
-    baseName: "",
-    format: "sevenZip",
-    level: 5,
-    password: "",
-    encryptFileNames: false,
-    openWhenDone: true,
-    useAiRename: false,
-  }
-}
 
 const LEVELS: {
   value: CompressionLevel
@@ -410,15 +383,10 @@ export function CompressPage({
   }, [task?.running, task?.taskId])
 
   React.useEffect(() => {
-    if (
-      !openWhenDone ||
-      !task?.completed ||
-      !task.success ||
-      openedTasks.current.has(task.taskId)
-    ) {
+    if (!shouldAutoOpenCompletedTask(task, openWhenDone, openedTasks.current)) {
       return
     }
-    openedTasks.current.add(task.taskId)
+    if (!task) return
     void openPath(task.outputPath).catch((reason) =>
       setError(toErrorMessage(reason))
     )

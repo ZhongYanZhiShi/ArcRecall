@@ -353,6 +353,7 @@ export function HistoryPage() {
               </InputGroupAddon>
               <InputGroupInput
                 type="search"
+                aria-label="搜索归档历史"
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
                 onKeyDown={(event) => {

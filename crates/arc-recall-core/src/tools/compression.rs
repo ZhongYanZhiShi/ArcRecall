@@ -439,6 +439,9 @@ fn compression_arguments(
             CompressionFormat::SevenZip => {}
         }
     }
+    // Stop 7-Zip switch/list-file parsing before user-controlled basenames.
+    // Names beginning with '-' or '@' must remain literal source entries.
+    args.push(OsString::from("--"));
     args.extend(group.source_names.iter().cloned());
     args
 }
@@ -643,6 +646,10 @@ mod tests {
         let args = compression_arguments(&job, &group);
         assert!(args.contains(&OsString::from("-psecret")));
         assert!(args.contains(&OsString::from("-mhe=on")));
+        assert_eq!(
+            args.iter().position(|arg| arg == "--"),
+            Some(args.len() - group.source_names.len() - 1)
+        );
         assert!(
             !format!(
                 "{:?}",
@@ -654,6 +661,32 @@ mod tests {
                 }
             )
             .contains("secret")
+        );
+    }
+
+    #[test]
+    fn terminates_switch_parsing_before_untrusted_source_names() {
+        let group = CompressionSourceGroup {
+            current_directory: PathBuf::from("C:\\data"),
+            source_names: vec![OsString::from("@list.txt"), OsString::from("-mhe=off")],
+        };
+        let job = PreparedCompressionJob {
+            source_groups: Vec::new(),
+            output_path: PathBuf::from("C:\\out\\archive.7z"),
+            temporary_path: PathBuf::from("C:\\out\\.archive.part"),
+            format: CompressionFormat::SevenZip,
+            level: 5,
+            password: None,
+            encrypt_file_names: false,
+            source_count: 2,
+        };
+
+        let args = compression_arguments(&job, &group);
+        let delimiter = args.iter().position(|arg| arg == "--").unwrap();
+
+        assert_eq!(
+            &args[delimiter + 1..],
+            [OsString::from("@list.txt"), OsString::from("-mhe=off")]
         );
     }
 }

@@ -3,6 +3,7 @@ import test from "node:test"
 
 import {
   forgetCompletedArchiveBaseName,
+  shouldAutoOpenCompletedTask,
   shouldForgetArchiveBaseName,
 } from "../src/lib/compression-draft.ts"
 
@@ -41,5 +42,19 @@ test("only an observed running task forgets its name after success", () => {
       awaitingCompletion
     ),
     true
+  )
+})
+
+test("enabling auto-open after completion does not reopen an old archive", () => {
+  const observedCompletions = new Set()
+  const task = { taskId: "done", completed: true, success: true }
+
+  assert.equal(
+    shouldAutoOpenCompletedTask(task, false, observedCompletions),
+    false
+  )
+  assert.equal(
+    shouldAutoOpenCompletedTask(task, true, observedCompletions),
+    false
   )
 })

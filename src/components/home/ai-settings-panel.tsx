@@ -90,6 +90,7 @@ import {
   type AiProviderKind,
   type AiSettings,
 } from "@/lib/ai"
+import { validateAiServiceUrl } from "@/lib/ai-url"
 
 type ProfileDraft = {
   id: string | null
@@ -253,15 +254,11 @@ export const AiSettingsPanel = React.forwardRef<
         message: "请输入模型服务地址。",
       }
     }
-    try {
-      const url = new URL(draft.baseUrl.trim())
-      if (!["http:", "https:"].includes(url.protocol) || !url.hostname) {
-        throw new Error("invalid URL")
-      }
-    } catch {
+    const baseUrlError = validateAiServiceUrl(draft.baseUrl)
+    if (baseUrlError) {
       return {
         field: "baseUrl",
-        message: "请输入有效的 http:// 或 https:// 服务地址。",
+        message: baseUrlError,
       }
     }
     return null
@@ -276,7 +273,7 @@ export const AiSettingsPanel = React.forwardRef<
     clearApiKey: draft.clearApiKey,
   })
 
-  const persistDraft = async (makeActive = false): Promise<string> => {
+  const persistDraft = async (makeActive = false): Promise<AiSettings> => {
     const shouldActivate = makeActive || draft.id === null
     const next = await upsertAiProfile({
       id: draft.id,
@@ -290,38 +287,40 @@ export const AiSettingsPanel = React.forwardRef<
     })
     const profileId = draft.id ?? next.activeProfileId
     applySettings(next, profileId, false)
-    return profileId
+    return next
   }
 
-  const handleSaveProfile = async (makeActive = false): Promise<boolean> => {
+  const handleSaveProfile = async (
+    makeActive = false
+  ): Promise<AiSettings | null> => {
     if (busy) {
-      return false
+      return null
     }
     const validationError = validateDraft()
     if (validationError) {
       setInvalidField(validationError.field)
       setProfileFeedback({ error: true, message: validationError.message })
-      return false
+      return null
     }
     setInvalidField(null)
     setBusyScope("profile")
     setProfileFeedback({ error: false, message: "正在保存 AI 配置…" })
     try {
       const shouldActivate = makeActive || draft.id === null
-      await persistDraft(makeActive)
+      const next = await persistDraft(makeActive)
       setProfileFeedback({
         error: false,
         message: shouldActivate
           ? "配置已保存并设为当前 AI 模型。"
           : "AI 配置已保存。",
       })
-      return true
+      return next
     } catch (reason) {
       setProfileFeedback({
         error: true,
         message: `保存失败：${toErrorMessage(reason)}`,
       })
-      return false
+      return null
     } finally {
       setBusyScope(null)
     }
@@ -392,7 +391,9 @@ export const AiSettingsPanel = React.forwardRef<
     }
   }
 
-  const handleSaveRenameSettings = async (): Promise<boolean> => {
+  const handleSaveRenameSettings = async (
+    activeProfileId = settings?.activeProfileId ?? ""
+  ): Promise<boolean> => {
     if (!settings || busy) {
       return false
     }
@@ -414,7 +415,7 @@ export const AiSettingsPanel = React.forwardRef<
     })
     try {
       const next = await updateAiSettings({
-        activeProfileId: settings.activeProfileId,
+        activeProfileId,
         renamePrompt: prompt,
       })
       applySettings(next, draft.id)
@@ -493,8 +494,8 @@ export const AiSettingsPanel = React.forwardRef<
       return
     }
     const action = pendingDraftAction
-    const saved = await handleSaveProfile(false)
-    if (saved) {
+    const savedSettings = await handleSaveProfile(false)
+    if (savedSettings) {
       applyDraftAction(action)
     } else {
       setPendingDraftAction(null)
@@ -506,10 +507,15 @@ export const AiSettingsPanel = React.forwardRef<
       if (busy) {
         return false
       }
-      if (profileDirty && !(await handleSaveProfile(false))) {
-        return false
+      let activeProfileId = settings?.activeProfileId
+      if (profileDirty) {
+        const savedSettings = await handleSaveProfile(false)
+        if (!savedSettings) {
+          return false
+        }
+        activeProfileId = savedSettings.activeProfileId
       }
-      if (promptDirty && !(await handleSaveRenameSettings())) {
+      if (promptDirty && !(await handleSaveRenameSettings(activeProfileId))) {
         return false
       }
       return true
@@ -985,7 +991,7 @@ export const AiSettingsPanel = React.forwardRef<
                 Boolean(renamePromptError) ||
                 !promptDirty
               }
-              onClick={handleSaveRenameSettings}
+              onClick={() => void handleSaveRenameSettings()}
             >
               {promptBusy ? (
                 <Spinner data-icon="inline-start" />
