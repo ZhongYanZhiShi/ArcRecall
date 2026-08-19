@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 Git 标签（例如 v0.1.0）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release-windows:
+    name: Build and release Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Validate release version
+        id: version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tagPattern = '^v(?<version>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$'
+          if ($env:RELEASE_TAG -notmatch $tagPattern) {
+            throw "Release tag must use semantic versioning, for example v0.1.0: $env:RELEASE_TAG"
+          }
+
+          $releaseVersion = $Matches.version
+          $packageVersion = (Get-Content -Raw -LiteralPath 'package.json' | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content -Raw -LiteralPath 'src-tauri/tauri.conf.json' | ConvertFrom-Json).version
+          $cargoMatch = Select-String -LiteralPath 'src-tauri/Cargo.toml' -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $cargoMatch) {
+            throw 'Could not read the desktop package version from src-tauri/Cargo.toml.'
+          }
+          $cargoVersion = $cargoMatch.Matches[0].Groups[1].Value
+
+          $versions = [ordered]@{
+            'package.json' = $packageVersion
+            'src-tauri/tauri.conf.json' = $tauriVersion
+            'src-tauri/Cargo.toml' = $cargoVersion
+          }
+          foreach ($entry in $versions.GetEnumerator()) {
+            if ($entry.Value -ne $releaseVersion) {
+              throw "$($entry.Key) has version $($entry.Value), but tag $env:RELEASE_TAG requires $releaseVersion."
+            }
+          }
+
+          $isPrerelease = $releaseVersion.Contains('-').ToString().ToLowerInvariant()
+          "version=$releaseVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "is_prerelease=$isPrerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6.0.8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare bundled recovery engines
+        run: pnpm engine-bundle:prepare
+
+      - name: Build installer and create GitHub Release
+        uses: tauri-apps/tauri-action@action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: ArcRecall ${{ env.RELEASE_TAG }}
+          generateReleaseNotes: true
+          releaseDraft: false
+          prerelease: ${{ steps.version.outputs.is_prerelease }}
+          retryAttempts: 2
+          tauriScript: pnpm exec tauri
+          args: --config src-tauri/tauri.windows.full.conf.json
+          releaseAssetNamePattern: ArcRecall_[version]_[arch][setup][ext]
+          uploadUpdaterJson: false

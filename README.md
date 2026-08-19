@@ -108,6 +108,20 @@ pnpm build
 pnpm desktop:build
 ```
 
+## 发布版本
+
+仓库中的 GitHub Actions 会在推送语义化版本标签后自动构建 Windows x64 完整安装包、
+生成发布说明并创建 GitHub Release。发布前请确保 `package.json`、
+`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 中的版本号一致，然后执行：
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+也可以在 GitHub 的 Actions 页面手动运行 `Release` 工作流并填写已经存在的版本标签。
+预发布标签（例如 `v0.2.0-beta.1`）会自动创建为 Pre-release。
+
 添加 shadcn/ui 组件：
 
 ```powershell

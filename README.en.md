@@ -118,6 +118,22 @@ pnpm build
 pnpm desktop:build
 ```
 
+## Releasing
+
+The repository's GitHub Actions workflow builds the full Windows x64 installer,
+generates release notes, and creates a GitHub Release whenever a semantic version
+tag is pushed. Before releasing, make sure the versions in `package.json`,
+`src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` match, then run:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+You can also run the `Release` workflow manually from GitHub Actions with an
+existing version tag. Pre-release tags such as `v0.2.0-beta.1` are published as
+GitHub pre-releases automatically.
+
 Add a shadcn/ui component:
 
 ```powershell
