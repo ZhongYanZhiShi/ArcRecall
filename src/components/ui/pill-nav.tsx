@@ -16,6 +16,7 @@ type PillNavProps<T extends string> = {
   items: PillNavItem<T>[]
   activeId: T
   onSelect: (id: T) => void
+  onPreload?: (id: T) => void
   className?: string
   initialLoadAnimation?: boolean
 }
@@ -28,6 +29,7 @@ export function PillNav<T extends string>({
   items,
   activeId,
   onSelect,
+  onPreload,
   className,
   initialLoadAnimation = true,
 }: PillNavProps<T>) {
@@ -65,6 +67,8 @@ export function PillNav<T extends string>({
                   aria-current={active ? "page" : undefined}
                   data-active={active ? "true" : undefined}
                   onClick={() => onSelect(item.id)}
+                  onFocus={() => onPreload?.(item.id)}
+                  onMouseEnter={() => onPreload?.(item.id)}
                   className={cn(
                     "group/pill relative inline-flex h-full min-w-12 items-center justify-center rounded-full px-2",
                     "bg-background/70 text-xs leading-none font-semibold text-foreground hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground data-[active=true]:bg-accent data-[active=true]:text-accent-foreground data-[active=true]:hover:bg-primary data-[active=true]:hover:text-primary-foreground data-[active=true]:focus-visible:bg-primary data-[active=true]:focus-visible:text-primary-foreground",

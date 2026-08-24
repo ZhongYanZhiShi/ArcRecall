@@ -108,6 +108,7 @@ export function DictionaryPage() {
   const [pastedCandidates, setPastedCandidates] = React.useState("")
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
+  const initialLoadStarted = React.useRef(false)
 
   const loadEntries = React.useCallback(
     async (searchText: string, requestedPageIndex = 0) => {
@@ -177,6 +178,10 @@ export function DictionaryPage() {
   )
 
   React.useEffect(() => {
+    if (initialLoadStarted.current) {
+      return
+    }
+    initialLoadStarted.current = true
     void (async () => {
       setIsBusy(true)
       setStatusTone("busy")
@@ -186,6 +191,7 @@ export function DictionaryPage() {
         setStatusTone("ok")
         setStatus(`共 ${result.totalCount} 条`)
       } catch (error) {
+        initialLoadStarted.current = false
         const message =
           error instanceof Error ? error.message : String(error ?? "未知错误")
         if (!isDesktopRuntime()) {

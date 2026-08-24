@@ -157,6 +157,7 @@ let cachedEngineStatus: EngineStatusSnapshot | null = null
 
 type SettingsPageProps = {
   initialCategory?: SettingsCategory
+  categoryRequestId?: number
   returnAction?: {
     label: string
     onClick: () => void
@@ -172,12 +173,19 @@ export const SettingsPage = React.forwardRef<
   SettingsPageHandle,
   SettingsPageProps
 >(function SettingsPage(
-  { initialCategory = "engine", returnAction, onAiDirtyChange },
+  {
+    initialCategory = "engine",
+    categoryRequestId = 0,
+    returnAction,
+    onAiDirtyChange,
+  },
   ref
 ) {
   const aiSettingsPanelRef = React.useRef<AiSettingsPanelHandle>(null)
   const [category, setCategory] =
     React.useState<SettingsCategory>(initialCategory)
+  const [handledCategoryRequestId, setHandledCategoryRequestId] =
+    React.useState(categoryRequestId)
   const [aiDirty, setAiDirty] = React.useState(false)
   const [pendingSettingsLeave, setPendingSettingsLeave] =
     React.useState<PendingSettingsLeave | null>(null)
@@ -229,6 +237,12 @@ export const SettingsPage = React.forwardRef<
     null
   )
   const initialLoadRequest = React.useRef(0)
+  const initialLoadStarted = React.useRef(false)
+
+  if (handledCategoryRequestId !== categoryRequestId) {
+    setHandledCategoryRequestId(categoryRequestId)
+    setCategory(initialCategory)
+  }
 
   const applyEngineStatus = React.useCallback(
     (snapshot: EngineStatusSnapshot) => {
@@ -347,10 +361,15 @@ export const SettingsPage = React.forwardRef<
   }, [applyEngineStatus, applyJohnPerlStatus])
 
   React.useEffect(() => {
-    const timeout = setTimeout(() => void loadInitialData(), 0)
+    if (initialLoadStarted.current) {
+      return
+    }
+    const timeout = setTimeout(() => {
+      initialLoadStarted.current = true
+      void loadInitialData()
+    }, 0)
     return () => {
       clearTimeout(timeout)
-      initialLoadRequest.current += 1
     }
   }, [loadInitialData])
 

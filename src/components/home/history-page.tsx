@@ -106,6 +106,7 @@ export function HistoryPage() {
   const [deleteTarget, setDeleteTarget] =
     React.useState<RecoveryHistoryEntry | null>(null)
   const [clearDialogOpen, setClearDialogOpen] = React.useState(false)
+  const initialLoadStarted = React.useRef(false)
 
   const load = React.useCallback(
     async (searchText = appliedSearch, requestedPage = pageIndex) => {
@@ -145,30 +146,25 @@ export function HistoryPage() {
   )
 
   React.useEffect(() => {
-    let disposed = false
+    if (initialLoadStarted.current) {
+      return
+    }
+    initialLoadStarted.current = true
     void listRecoveryHistory({
       searchText: "",
       skip: 0,
       take: HISTORY_PAGE_SIZE,
     })
       .then((next) => {
-        if (!disposed) {
-          setResult(next)
-        }
+        setResult(next)
       })
       .catch((reason) => {
-        if (!disposed) {
-          setError(toErrorMessage(reason))
-        }
+        initialLoadStarted.current = false
+        setError(toErrorMessage(reason))
       })
       .finally(() => {
-        if (!disposed) {
-          setLoading(false)
-        }
+        setLoading(false)
       })
-    return () => {
-      disposed = true
-    }
   }, [])
 
   React.useEffect(() => {

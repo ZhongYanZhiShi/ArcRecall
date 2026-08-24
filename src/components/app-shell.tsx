@@ -48,6 +48,7 @@ const NAV_ITEMS: PillNavItem<NavId>[] = [
 type AppShellProps = {
   activeNav: NavId
   onNavChange: (id: NavId) => void
+  onNavPreload?: (id: NavId) => void
   children: React.ReactNode
 }
 
@@ -55,7 +56,12 @@ type AppShellProps = {
  * 无侧栏、无顶栏导航。工作区全幅铺开，页面切换靠底部的
  * React Bits 风格 Pill Nav。
  */
-export function AppShell({ activeNav, onNavChange, children }: AppShellProps) {
+export function AppShell({
+  activeNav,
+  onNavChange,
+  onNavPreload,
+  children,
+}: AppShellProps) {
   return (
     <div className="app-canvas relative flex h-svh min-h-0 flex-col overflow-hidden text-foreground">
       <main className="min-h-0 min-w-0 flex-1 overflow-hidden pb-20">
@@ -67,6 +73,7 @@ export function AppShell({ activeNav, onNavChange, children }: AppShellProps) {
           items={NAV_ITEMS}
           activeId={activeNav}
           onSelect={onNavChange}
+          onPreload={onNavPreload}
         />
       </div>
     </div>
