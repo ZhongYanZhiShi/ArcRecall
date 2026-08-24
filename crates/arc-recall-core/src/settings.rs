@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -250,7 +251,13 @@ impl SettingsStore {
         }
         let store = Self { path };
         if !store.path.is_file() {
-            store.save(&AppSettings::default())?;
+            let backup_path = settings_backup_path(&store.path);
+            let initial = if backup_path.is_file() {
+                read_settings(&backup_path).unwrap_or_default()
+            } else {
+                AppSettings::default()
+            };
+            store.save_without_backup(&initial)?;
         }
         Ok(store)
     }
@@ -262,29 +269,51 @@ impl SettingsStore {
     pub fn load(&self) -> Result<AppSettings, SettingsError> {
         if !self.path.is_file() {
             let defaults = AppSettings::default();
-            self.save(&defaults)?;
+            self.save_without_backup(&defaults)?;
             return Ok(defaults);
         }
-        let raw = fs::read_to_string(&self.path)?;
-        if raw.trim().is_empty() {
-            let defaults = AppSettings::default();
-            self.save(&defaults)?;
-            return Ok(defaults);
+
+        match read_settings(&self.path) {
+            Ok(settings) => Ok(settings),
+            Err(SettingsError::Json(_)) => self.recover_settings(),
+            Err(SettingsError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidData => {
+                self.recover_settings()
+            }
+            Err(error) => Err(error),
         }
-        let mut settings = serde_json::from_str::<AppSettings>(&raw)?;
-        settings.normalize();
-        Ok(settings)
     }
 
     pub fn save(&self, settings: &AppSettings) -> Result<(), SettingsError> {
+        if self.path.is_file()
+            && read_settings(&self.path).is_ok()
+            && let Ok(existing) = fs::read(&self.path)
+        {
+            atomic_write(&settings_backup_path(&self.path), &existing)?;
+        }
+        self.save_without_backup(settings)
+    }
+
+    fn save_without_backup(&self, settings: &AppSettings) -> Result<(), SettingsError> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
         let mut normalized = settings.clone();
         normalized.normalize();
         let json = serde_json::to_string_pretty(&normalized)?;
-        fs::write(&self.path, json)?;
+        atomic_write(&self.path, json.as_bytes())?;
         Ok(())
+    }
+
+    fn recover_settings(&self) -> Result<AppSettings, SettingsError> {
+        let backup_path = settings_backup_path(&self.path);
+        let recovered = if backup_path.is_file() {
+            read_settings(&backup_path).ok()
+        } else {
+            None
+        };
+        let settings = recovered.unwrap_or_default();
+        self.save_without_backup(&settings)?;
+        Ok(settings)
     }
 
     pub fn save_hashcat_path(&self, hashcat_path: &str) -> Result<AppSettings, SettingsError> {
@@ -315,6 +344,37 @@ impl SettingsStore {
         self.save(&settings)?;
         Ok(settings)
     }
+}
+
+fn read_settings(path: &Path) -> Result<AppSettings, SettingsError> {
+    let raw = fs::read_to_string(path)?;
+    let mut settings = serde_json::from_str::<AppSettings>(&raw)?;
+    settings.normalize();
+    Ok(settings)
+}
+
+fn settings_backup_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("settings.json");
+    path.with_file_name(format!("{file_name}.bak"))
+}
+
+fn atomic_write(path: &Path, content: &[u8]) -> Result<(), SettingsError> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(content)?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(path)
+        .map_err(|error| SettingsError::Io(error.error))?;
+
+    #[cfg(unix)]
+    fs::File::open(parent)?.sync_all()?;
+
+    Ok(())
 }
 
 /// Resolve the effective tools root: custom setting if set, else app default.
@@ -353,6 +413,71 @@ mod tests {
         assert!(loaded.engine.hashcat_path.is_empty());
         assert_eq!(loaded.logging.level, AppLogLevel::Info);
         assert_eq!(loaded.logging.max_disk_mib, DEFAULT_LOG_MAX_DISK_MIB);
+    }
+
+    #[test]
+    fn recovers_a_corrupt_primary_file_from_the_last_valid_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let store = SettingsStore::open(&path).unwrap();
+        let mut previous = store.load().unwrap();
+        previous.engine.hashcat_path = "previous-hashcat".into();
+        store.save(&previous).unwrap();
+
+        let mut latest = previous.clone();
+        latest.engine.hashcat_path = "latest-hashcat".into();
+        store.save(&latest).unwrap();
+        fs::write(&path, "{truncated").unwrap();
+
+        let recovered = store.load().unwrap();
+
+        assert_eq!(recovered.engine.hashcat_path, "previous-hashcat");
+        assert_eq!(read_settings(&path).unwrap(), recovered);
+    }
+
+    #[test]
+    fn recovers_a_missing_primary_file_from_the_last_valid_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let store = SettingsStore::open(&path).unwrap();
+        let mut previous = store.load().unwrap();
+        previous.engine.hashcat_path = "previous-hashcat".into();
+        store.save(&previous).unwrap();
+        let mut latest = previous.clone();
+        latest.engine.hashcat_path = "latest-hashcat".into();
+        store.save(&latest).unwrap();
+        fs::remove_file(&path).unwrap();
+
+        let reopened = SettingsStore::open(&path).unwrap();
+
+        assert_eq!(
+            reopened.load().unwrap().engine.hashcat_path,
+            "previous-hashcat"
+        );
+    }
+
+    #[test]
+    fn replaces_an_unrecoverable_settings_file_with_safe_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, "not-json").unwrap();
+        let store = SettingsStore::open(&path).unwrap();
+
+        let recovered = store.load().unwrap();
+
+        assert_eq!(recovered, AppSettings::default());
+        assert_eq!(read_settings(&path).unwrap(), AppSettings::default());
+    }
+
+    #[test]
+    fn replaces_invalid_utf8_settings_with_safe_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+        let store = SettingsStore::open(&path).unwrap();
+
+        assert_eq!(store.load().unwrap(), AppSettings::default());
+        assert_eq!(read_settings(&path).unwrap(), AppSettings::default());
     }
 
     #[test]

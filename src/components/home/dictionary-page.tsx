@@ -410,7 +410,7 @@ export function DictionaryPage() {
           className="shrink-0 gap-0 py-0 shadow-sm ring-border/60"
         >
           <CardContent className="flex items-center gap-2 py-2.5">
-            <InputGroup className="h-8 min-w-0 flex-1">
+            <InputGroup className="h-9 min-w-0 flex-1">
               <InputGroupAddon>
                 <Search aria-hidden />
               </InputGroupAddon>
@@ -433,7 +433,7 @@ export function DictionaryPage() {
             <Button
               size="sm"
               variant="outline"
-              className="shrink-0"
+              className="h-9 shrink-0"
               disabled={isBusy}
               onClick={handleSearch}
             >
@@ -576,7 +576,7 @@ export function DictionaryPage() {
               <PaginationContent>
                 <PaginationItem>
                   <Button
-                    size="icon-xs"
+                    size="icon-sm"
                     variant="ghost"
                     disabled={isBusy || !hasPreviousPage}
                     onClick={() => handlePageChange(pageIndex - 1)}
@@ -588,7 +588,7 @@ export function DictionaryPage() {
                 </PaginationItem>
                 <PaginationItem>
                   <Button
-                    size="icon-xs"
+                    size="icon-sm"
                     variant="ghost"
                     disabled={isBusy || !hasNextPage}
                     onClick={() => handlePageChange(pageIndex + 1)}

@@ -234,7 +234,7 @@ impl DictionaryCandidateStore {
             drop(stmt);
             tx.commit()?;
             if deleted > 0 {
-                purge_deleted_content(conn)?;
+                checkpoint_deleted_content(conn)?;
             }
             Ok(deleted)
         })
@@ -396,10 +396,12 @@ fn read_bounded_candidate_line(
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
-fn purge_deleted_content(conn: &Connection) -> Result<(), DictionaryError> {
-    conn.execute_batch(
-        "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
-    )?;
+fn checkpoint_deleted_content(conn: &Connection) -> Result<(), DictionaryError> {
+    // `secure_delete=ON` clears deleted cell content. Truncating the WAL makes
+    // that deletion durable without rewriting the entire shared database for
+    // every removed candidate; full compaction is reserved for explicit
+    // maintenance/backup workflows.
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     Ok(())
 }
 

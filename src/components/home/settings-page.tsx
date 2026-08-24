@@ -773,14 +773,14 @@ export const SettingsPage = React.forwardRef<
           }}
           className="flex min-h-0 flex-1 flex-col gap-2"
         >
-          <TabsList className="h-auto w-full shrink-0 flex-wrap justify-start gap-0.5">
+          <TabsList className="h-auto min-h-9 w-full shrink-0 flex-wrap justify-start gap-0.5">
             {CATEGORIES.map((item) => {
               const Icon = item.icon
               return (
                 <TabsTrigger
                   key={item.id}
                   value={item.id}
-                  className="flex-none"
+                  className="min-h-8 flex-none"
                 >
                   <Icon data-icon="inline-start" />
                   {item.label}

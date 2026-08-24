@@ -75,6 +75,7 @@ import {
   type RecoveryHistoryListResult,
 } from "@/lib/history"
 import { cn } from "@/lib/utils"
+import { copySensitiveText } from "@/lib/sensitive-clipboard"
 
 const DATE_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
   year: "numeric",
@@ -248,9 +249,9 @@ export function HistoryPage() {
           revealed?.id === entry.id
             ? revealed.value
             : await fetchPassword(entry.id)
-        await navigator.clipboard.writeText(password)
+        await copySensitiveText(password)
         setCopiedId(entry.id)
-        setNotice("密码已复制到剪贴板。")
+        setNotice("密码已复制；若剪贴板未被替换，将在 30 秒后自动清除。")
       })
     },
     [fetchPassword, revealed, runBusy]
@@ -347,7 +348,7 @@ export function HistoryPage() {
 
         <Card size="sm" className="shrink-0 gap-0 py-0 shadow-sm">
           <CardContent className="flex items-center gap-2 py-2.5">
-            <InputGroup className="h-8 min-w-0 flex-1">
+            <InputGroup className="h-9 min-w-0 flex-1">
               <InputGroupAddon>
                 <Search aria-hidden />
               </InputGroupAddon>
@@ -370,6 +371,7 @@ export function HistoryPage() {
             <Button
               size="sm"
               variant="outline"
+              className="h-9"
               disabled={busy}
               onClick={handleSearch}
             >
@@ -481,7 +483,7 @@ export function HistoryPage() {
                           </TableCell>
                           <TableCell className="px-2 py-2">
                             <Button
-                              size="icon-xs"
+                              size="icon-sm"
                               variant="ghost"
                               disabled={busy}
                               onClick={() => setDeleteTarget(entry)}
@@ -842,7 +844,7 @@ function PasswordCell({
         {revealed ?? "••••••••"}
       </code>
       <Button
-        size="icon-xs"
+        size="icon-sm"
         variant="ghost"
         disabled={busy}
         onClick={onReveal}
@@ -852,7 +854,7 @@ function PasswordCell({
         {revealed ? <EyeOff /> : <Eye />}
       </Button>
       <Button
-        size="icon-xs"
+        size="icon-sm"
         variant="ghost"
         disabled={busy}
         onClick={onCopy}

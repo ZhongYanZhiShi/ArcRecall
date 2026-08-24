@@ -90,6 +90,7 @@ name = "arc-recall-desktop"
 version = "0.1.0"
 dependencies = [
  "arc-recall-core",
+ "hex",
  "keyring",
  "serde",
  "serde_json",
@@ -97,6 +98,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

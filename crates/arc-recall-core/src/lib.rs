@@ -13,6 +13,7 @@ pub use dictionary::{
 pub use history::{
     DEFAULT_HISTORY_PAGE_SIZE, RecoveryHistoryEntry, RecoveryHistoryError,
     RecoveryHistoryListResult, RecoveryHistoryQuery, RecoveryHistoryRecord, RecoveryHistoryStore,
+    StoredRecoveryPassword,
 };
 pub use paths::{APP_DATA_FOLDER_NAME, AppPaths};
 pub use settings::{

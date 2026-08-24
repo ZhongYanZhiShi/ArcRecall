@@ -148,11 +148,14 @@ export async function importDictionaryFile(
     batch = []
   }
 
-  // Prefer streaming for large files; fall back to full text for tiny blobs.
+  const encoding = await detectDictionaryEncoding(file)
+
+  // Prefer streaming for large files; fall back to full text for runtimes
+  // without Blob streams.
   if (typeof file.stream === "function") {
     const reader = file
       .stream()
-      .pipeThrough(new TextDecoderStream())
+      .pipeThrough(new TextDecoderStream(encoding))
       .getReader()
     let pendingParts: string[] = []
     let pendingBytes = 0
@@ -233,22 +236,58 @@ export async function importDictionaryFile(
     }
 
     if (!discardingOversizedLine && pendingParts.length > 0) {
-      const pending = pendingParts.join("")
       if (pendingBytes > MAX_DICTIONARY_CANDIDATE_BYTES) {
         recordInvalidLine()
       } else {
-        batch.push(pending)
+        await pushCompletedLine("")
       }
     }
     await flush()
     return summary
   }
 
-  const text = await file.text()
+  const text = new TextDecoder(encoding).decode(await file.arrayBuffer())
   const lines = text.split(/\r?\n/)
   // split keeps a trailing empty string when file ends with newline — treat
   // empty lines as invalid candidates (same as Rust store).
   return addDictionaryCandidates(lines)
+}
+
+export type DictionaryTextEncoding =
+  | "utf-8"
+  | "utf-16le"
+  | "utf-16be"
+  | "gb18030"
+
+export async function detectDictionaryEncoding(
+  file: Blob
+): Promise<DictionaryTextEncoding> {
+  const sample = new Uint8Array(
+    await file.slice(0, Math.min(file.size, 64 * 1024)).arrayBuffer()
+  )
+  if (sample[0] === 0xef && sample[1] === 0xbb && sample[2] === 0xbf) {
+    return "utf-8"
+  }
+  if (sample[0] === 0xff && sample[1] === 0xfe) {
+    return "utf-16le"
+  }
+  if (sample[0] === 0xfe && sample[1] === 0xff) {
+    return "utf-16be"
+  }
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(sample, {
+      // The fixed-size probe may end in the middle of a valid multibyte
+      // character. Streaming mode validates everything complete in the probe
+      // while preserving that trailing prefix for a hypothetical next chunk.
+      stream: sample.byteLength < file.size,
+    })
+    return "utf-8"
+  } catch {
+    // GB18030 is a superset of GBK and is implemented by Chromium/WebView2.
+    // Invalid UTF-8 is therefore decoded using the common Windows Chinese
+    // dictionary encoding instead of silently inserting replacement chars.
+    return "gb18030"
+  }
 }
 
 // —— In-memory fallback for browser `pnpm dev` (no Tauri) ——

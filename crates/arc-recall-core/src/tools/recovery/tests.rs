@@ -188,31 +188,25 @@ fn content_fingerprint_is_stable_after_rename() {
 }
 
 #[test]
-fn large_file_fingerprint_reads_only_bounded_samples() {
-    let file_size = 8 * 1024 * 1024 * 1024u64;
-    let ranges = fingerprint_sample_ranges(file_size);
+fn content_fingerprint_matches_standard_sha256() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("known.bin");
+    fs::write(&path, b"abc").unwrap();
 
-    assert_eq!(ranges.len(), FINGERPRINT_SAMPLE_COUNT as usize);
-    assert_eq!(ranges.first().map(|range| range.0), Some(0));
     assert_eq!(
-        ranges.last().map(|range| range.0),
-        Some(file_size - FINGERPRINT_SAMPLE_SIZE)
-    );
-    assert!(
-        ranges.iter().map(|range| range.1 as u64).sum::<u64>()
-            <= FINGERPRINT_SAMPLE_COUNT * FINGERPRINT_SAMPLE_SIZE
+        fingerprint_file_sha256(path).unwrap(),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     );
 }
 
 #[test]
-fn sampled_fingerprint_changes_when_a_sample_changes() {
+fn full_fingerprint_changes_when_any_middle_byte_changes() {
     let directory = tempfile::tempdir().unwrap();
     let first = directory.path().join("first.bin");
     let second = directory.path().join("second.bin");
     let mut contents = vec![0u8; (2 * 1024 * 1024) as usize];
     fs::write(&first, &contents).unwrap();
-    let sample_offset = fingerprint_sample_ranges(contents.len() as u64)[2].0 as usize;
-    contents[sample_offset] = 1;
+    contents[1_234_567] = 1;
     fs::write(&second, &contents).unwrap();
 
     assert_ne!(

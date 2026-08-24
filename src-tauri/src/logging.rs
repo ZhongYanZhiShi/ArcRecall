@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -120,6 +120,15 @@ pub struct LogStore {
     sequence: AtomicU64,
     max_level: AtomicU8,
     file_lock: Mutex<()>,
+    summary_cache: Mutex<HashMap<PathBuf, CachedLogFileSummary>>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedLogFileSummary {
+    byte_count: u64,
+    modified_at: Option<SystemTime>,
+    entry_count: usize,
+    stats: LogStats,
 }
 
 impl LogStore {
@@ -142,6 +151,7 @@ impl LogStore {
             sequence: AtomicU64::new(1),
             max_level: AtomicU8::new(LogLevel::Info.rank()),
             file_lock: Mutex::new(()),
+            summary_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -153,7 +163,12 @@ impl LogStore {
         let _guard = self.file_lock.lock().map_err(|error| error.to_string())?;
         self.max_total_bytes
             .store(max_total_bytes.max(self.max_file_bytes), Ordering::Relaxed);
-        self.trim_to_capacity_locked()
+        self.trim_to_capacity_locked()?;
+        self.summary_cache
+            .lock()
+            .map_err(|error| error.to_string())?
+            .clear();
+        Ok(())
     }
 
     pub fn directory(&self) -> &Path {
@@ -198,6 +213,11 @@ impl LogStore {
             && current_bytes.saturating_add(line.len() as u64) > self.max_file_bytes
         {
             self.rotate_locked()?;
+            self.summary_cache
+                .lock()
+                .map_err(|error| error.to_string())?
+                .clear();
+            self.trim_to_capacity_locked()?;
         }
 
         let mut file = OpenOptions::new()
@@ -206,37 +226,39 @@ impl LogStore {
             .open(active)
             .map_err(|error| error.to_string())?;
         file.write_all(&line).map_err(|error| error.to_string())?;
-        file.flush().map_err(|error| error.to_string())?;
-        self.trim_to_capacity_locked()?;
         Ok(Some(entry))
     }
 
     pub fn list(&self, query: &LogQuery) -> Result<LogListResult, String> {
         let _guard = self.file_lock.lock().map_err(|error| error.to_string())?;
-        let (mut entries, mut stats) = self.read_entries_locked()?;
-        let total_count = entries.len();
-        let search = query.search_text.trim().to_lowercase();
-        entries.retain(|entry| {
-            (!query.attention_only || matches!(entry.level, LogLevel::Error | LogLevel::Warn))
-                && query.level.is_none_or(|level| level == entry.level)
-                && (search.is_empty() || entry_matches(entry, &search))
-        });
-
-        let matched_count = entries.len();
-        let take = query.take.clamp(1, MAX_LOG_PAGE_SIZE);
-        let entries = entries
-            .into_iter()
-            .rev()
-            .skip(query.skip)
-            .take(take)
-            .collect();
-        stats.file_count = self.existing_paths_locked().len();
-        stats.disk_bytes = self
-            .existing_paths_locked()
+        let paths = self.existing_paths_locked();
+        let summaries = paths
             .iter()
-            .filter_map(|path| fs::metadata(path).ok())
-            .map(|metadata| metadata.len())
-            .sum();
+            .map(|path| self.file_summary_locked(path))
+            .collect::<Result<Vec<_>, _>>()?;
+        let total_count = summaries.iter().map(|summary| summary.entry_count).sum();
+        let mut stats = summaries
+            .iter()
+            .fold(LogStats::default(), |mut total, summary| {
+                total.error_count += summary.stats.error_count;
+                total.warn_count += summary.stats.warn_count;
+                total.info_count += summary.stats.info_count;
+                total.debug_count += summary.stats.debug_count;
+                total.unreadable_line_count += summary.stats.unreadable_line_count;
+                total.disk_bytes += summary.byte_count;
+                total
+            });
+        stats.file_count = paths.len();
+        let search = query.search_text.trim().to_lowercase();
+        let take = query.take.clamp(1, MAX_LOG_PAGE_SIZE);
+        let (entries, matched_count) = if search.is_empty() {
+            (
+                self.read_latest_matching_locked(&paths, query, "", take)?,
+                matched_count_from_stats(&stats, query),
+            )
+        } else {
+            self.search_entries_locked(&paths, query, &search, take)?
+        };
 
         Ok(LogListResult {
             entries,
@@ -257,19 +279,30 @@ impl LogStore {
                 .map_err(|error| format!("无法删除日志文件 {}：{error}", path.display()))?;
             removed += 1;
         }
+        self.summary_cache
+            .lock()
+            .map_err(|error| error.to_string())?
+            .clear();
         Ok(removed)
     }
 
     pub fn export(&self, exports_directory: &Path) -> Result<LogExportResult, String> {
         let _guard = self.file_lock.lock().map_err(|error| error.to_string())?;
-        let (entries, _) = self.read_entries_locked()?;
         fs::create_dir_all(exports_directory).map_err(|error| error.to_string())?;
         let created_at_ms = now_ms();
         let (path, file) = create_unique_export(exports_directory, created_at_ms)?;
         let mut writer = BufWriter::new(file);
-        for entry in &entries {
-            serde_json::to_writer(&mut writer, entry).map_err(|error| error.to_string())?;
-            writer.write_all(b"\n").map_err(|error| error.to_string())?;
+        let mut entry_count = 0usize;
+        for source_path in self.paths_oldest_first() {
+            if !source_path.is_file() {
+                continue;
+            }
+            let (entries, _) = read_log_file(&source_path)?;
+            for entry in entries {
+                serde_json::to_writer(&mut writer, &entry).map_err(|error| error.to_string())?;
+                writer.write_all(b"\n").map_err(|error| error.to_string())?;
+                entry_count += 1;
+            }
         }
         writer.flush().map_err(|error| error.to_string())?;
         let byte_count = fs::metadata(&path)
@@ -278,46 +311,109 @@ impl LogStore {
 
         Ok(LogExportResult {
             path: path.display().to_string(),
-            entry_count: entries.len(),
+            entry_count,
             byte_count,
             created_at_ms,
         })
     }
 
-    fn read_entries_locked(&self) -> Result<(Vec<LogEntry>, LogStats), String> {
-        let mut entries = Vec::new();
-        let mut stats = LogStats::default();
-        for path in self.paths_oldest_first() {
-            if !path.is_file() {
-                continue;
-            }
-            let file = File::open(&path).map_err(|error| error.to_string())?;
-            for line in BufReader::new(file).lines() {
-                let Ok(line) = line else {
-                    stats.unreadable_line_count += 1;
+    fn file_summary_locked(&self, path: &Path) -> Result<CachedLogFileSummary, String> {
+        let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+        let byte_count = metadata.len();
+        let modified_at = metadata.modified().ok();
+        if let Some(cached) = self
+            .summary_cache
+            .lock()
+            .map_err(|error| error.to_string())?
+            .get(path)
+            .filter(|cached| cached.byte_count == byte_count && cached.modified_at == modified_at)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+
+        let (entries, stats) = read_log_file(path)?;
+        let summary = CachedLogFileSummary {
+            byte_count,
+            modified_at,
+            entry_count: entries.len(),
+            stats,
+        };
+        self.summary_cache
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(path.to_path_buf(), summary.clone());
+        Ok(summary)
+    }
+
+    fn read_latest_matching_locked(
+        &self,
+        paths: &[PathBuf],
+        query: &LogQuery,
+        search: &str,
+        take: usize,
+    ) -> Result<Vec<LogEntry>, String> {
+        let needed = query.skip.saturating_add(take);
+        let mut matched_seen = 0usize;
+        let mut selected = Vec::with_capacity(take);
+        for path in paths.iter().rev() {
+            let (entries, _) = read_log_file(path)?;
+            for entry in entries.into_iter().rev() {
+                if !entry_matches_query(&entry, query, search) {
                     continue;
-                };
-                match serde_json::from_str::<LogEntry>(&line) {
-                    Ok(mut entry) => {
-                        normalize_legacy_level(&mut entry);
-                        match entry.level {
-                            LogLevel::Error => stats.error_count += 1,
-                            LogLevel::Warn => stats.warn_count += 1,
-                            LogLevel::Info => stats.info_count += 1,
-                            LogLevel::Debug => stats.debug_count += 1,
-                        }
-                        entries.push(entry);
-                    }
-                    Err(_) => stats.unreadable_line_count += 1,
+                }
+                if matched_seen >= query.skip && selected.len() < take {
+                    selected.push(entry);
+                }
+                matched_seen += 1;
+                if matched_seen >= needed {
+                    return Ok(selected);
                 }
             }
         }
-        entries.sort_by(|left, right| {
-            left.timestamp_ms
-                .cmp(&right.timestamp_ms)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        Ok((entries, stats))
+        Ok(selected)
+    }
+
+    fn search_entries_locked(
+        &self,
+        paths: &[PathBuf],
+        query: &LogQuery,
+        search: &str,
+        take: usize,
+    ) -> Result<(Vec<LogEntry>, usize), String> {
+        let mut matched_count = 0usize;
+        for path in paths {
+            let (entries, _) = read_log_file(path)?;
+            matched_count += entries
+                .iter()
+                .filter(|entry| entry_matches_query(entry, query, search))
+                .count();
+        }
+        let end = matched_count.saturating_sub(query.skip);
+        if end == 0 {
+            return Ok((Vec::new(), matched_count));
+        }
+        let start = end.saturating_sub(take);
+        let mut matched_index = 0usize;
+        let mut selected = Vec::with_capacity(take.min(end.saturating_sub(start)));
+        for path in paths {
+            let (entries, _) = read_log_file(path)?;
+            for entry in entries {
+                if !entry_matches_query(&entry, query, search) {
+                    continue;
+                }
+                if matched_index >= start && matched_index < end {
+                    selected.push(entry);
+                }
+                matched_index += 1;
+                if matched_index >= end {
+                    selected.reverse();
+                    return Ok((selected, matched_count));
+                }
+            }
+        }
+        selected.reverse();
+        Ok((selected, matched_count))
     }
 
     fn rotate_locked(&self) -> Result<(), String> {
@@ -414,6 +510,56 @@ impl LogStore {
         paths.push(self.active_path());
         paths.into_iter().filter(|path| path.is_file()).collect()
     }
+}
+
+fn read_log_file(path: &Path) -> Result<(Vec<LogEntry>, LogStats), String> {
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let mut entries = Vec::new();
+    let mut stats = LogStats::default();
+    for line in BufReader::new(file).lines() {
+        let Ok(line) = line else {
+            stats.unreadable_line_count += 1;
+            continue;
+        };
+        match serde_json::from_str::<LogEntry>(&line) {
+            Ok(mut entry) => {
+                normalize_legacy_level(&mut entry);
+                match entry.level {
+                    LogLevel::Error => stats.error_count += 1,
+                    LogLevel::Warn => stats.warn_count += 1,
+                    LogLevel::Info => stats.info_count += 1,
+                    LogLevel::Debug => stats.debug_count += 1,
+                }
+                entries.push(entry);
+            }
+            Err(_) => stats.unreadable_line_count += 1,
+        }
+    }
+    Ok((entries, stats))
+}
+
+fn matched_count_from_stats(stats: &LogStats, query: &LogQuery) -> usize {
+    let level_count = |level| match level {
+        LogLevel::Error => stats.error_count,
+        LogLevel::Warn => stats.warn_count,
+        LogLevel::Info => stats.info_count,
+        LogLevel::Debug => stats.debug_count,
+    };
+    match (query.attention_only, query.level) {
+        (true, Some(level @ (LogLevel::Error | LogLevel::Warn))) => level_count(level),
+        (true, Some(LogLevel::Info | LogLevel::Debug)) => 0,
+        (true, None) => stats.error_count + stats.warn_count,
+        (false, Some(level)) => level_count(level),
+        (false, None) => {
+            stats.error_count + stats.warn_count + stats.info_count + stats.debug_count
+        }
+    }
+}
+
+fn entry_matches_query(entry: &LogEntry, query: &LogQuery, search: &str) -> bool {
+    (!query.attention_only || matches!(entry.level, LogLevel::Error | LogLevel::Warn))
+        && query.level.is_none_or(|level| level == entry.level)
+        && (search.is_empty() || entry_matches(entry, search))
 }
 
 fn now_ms() -> u64 {

@@ -21,9 +21,7 @@ const PE_MAX_SECTION_COUNT: u16 = 96;
 const LZ4_COPY_BUFFER_SIZE: usize = 256 * 1024;
 pub(super) const MAX_LZ4_DECODED_BYTES: u64 = 100 * 1024 * 1024 * 1024;
 const MAX_LZ4_EXPANSION_RATIO: u64 = 10_000;
-const FINGERPRINT_FULL_READ_LIMIT: u64 = 1024 * 1024;
-pub(super) const FINGERPRINT_SAMPLE_SIZE: u64 = 64 * 1024;
-pub(super) const FINGERPRINT_SAMPLE_COUNT: u64 = 5;
+const FINGERPRINT_READ_BUFFER_SIZE: usize = 1024 * 1024;
 
 pub fn analyze_archive(path: impl AsRef<Path>) -> Result<ArchiveAnalysis, RecoveryError> {
     let path = path.as_ref();
@@ -59,54 +57,18 @@ pub fn analyze_archive(path: impl AsRef<Path>) -> Result<ArchiveAnalysis, Recove
 }
 
 pub fn fingerprint_file_sha256(path: impl AsRef<Path>) -> Result<String, RecoveryError> {
-    let mut file = fs::File::open(path)?;
-    let file_size = file.metadata()?.len();
+    let file = fs::File::open(path)?;
+    let mut reader = BufReader::with_capacity(FINGERPRINT_READ_BUFFER_SIZE, file);
     let mut hasher = Sha256::new();
-    hasher.update(b"arc-recall-content-fingerprint-v2\0");
-    hasher.update(file_size.to_le_bytes());
-
-    let ranges = fingerprint_sample_ranges(file_size);
-    let mut buffer = vec![0u8; FINGERPRINT_SAMPLE_SIZE as usize];
-    for (offset, length) in ranges {
-        file.seek(SeekFrom::Start(offset))?;
-        hasher.update(offset.to_le_bytes());
-        hasher.update((length as u64).to_le_bytes());
-        let mut read_total = 0;
-        while read_total < length {
-            let count = file.read(&mut buffer[..length - read_total])?;
-            if count == 0 {
-                break;
-            }
-            hasher.update(&buffer[..count]);
-            read_total += count;
+    let mut buffer = vec![0u8; FINGERPRINT_READ_BUFFER_SIZE];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
         }
+        hasher.update(&buffer[..count]);
     }
     Ok(hex::encode(hasher.finalize()))
-}
-
-pub(super) fn fingerprint_sample_ranges(file_size: u64) -> Vec<(u64, usize)> {
-    if file_size == 0 {
-        return Vec::new();
-    }
-    if file_size <= FINGERPRINT_FULL_READ_LIMIT {
-        return vec![(0, file_size as usize)];
-    }
-
-    let max_offset = file_size.saturating_sub(FINGERPRINT_SAMPLE_SIZE);
-    let mut offsets = (0..FINGERPRINT_SAMPLE_COUNT)
-        .map(|index| max_offset.saturating_mul(index) / (FINGERPRINT_SAMPLE_COUNT - 1))
-        .collect::<Vec<_>>();
-    offsets.sort_unstable();
-    offsets.dedup();
-    offsets
-        .into_iter()
-        .map(|offset| {
-            (
-                offset,
-                FINGERPRINT_SAMPLE_SIZE.min(file_size - offset) as usize,
-            )
-        })
-        .collect()
 }
 
 pub fn detect_archive_format(path: &Path) -> Result<ArchiveFormat, RecoveryError> {

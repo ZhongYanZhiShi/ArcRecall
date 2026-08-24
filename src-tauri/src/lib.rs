@@ -1,4 +1,9 @@
+mod clipboard_security;
+mod credential_protection;
+mod history_commands;
+mod history_support;
 mod logging;
+mod task_coordination;
 
 use std::any::Any;
 use std::collections::{BTreeMap, VecDeque};
@@ -19,15 +24,21 @@ use arc_recall_core::{
     FullEngineBundleStatus, HashcatInstallResult, HashcatStatus, HashcatToolDownloader,
     JohnPerlStatus, LoggingSettings, MAX_LOG_MAX_DISK_MIB, MIN_LOG_MAX_DISK_MIB,
     RecoveryCapabilities, RecoveryComputeMode, RecoveryDictionary, RecoveryError,
-    RecoveryHistoryListResult, RecoveryHistoryQuery, RecoveryHistoryRecord, RecoveryHistoryStore,
-    RecoveryJob, RecoveryPhase, RecoveryToolPaths, RecoveryUpdate, RecursiveRecoveryOptions,
-    SERVICE_NAME, SettingsStore, analyze_archive, compress_archive, fingerprint_file_sha256,
-    generate_archive_name, health_status, list_ai_models, path_for_display, prepare_compression,
-    probe_john_perl, probe_recovery_capabilities, recover_and_extract_recursive_lazy,
-    resolve_tools_directory, test_ai_connection, validate_ai_base_url,
+    RecoveryHistoryStore, RecoveryJob, RecoveryPhase, RecoveryToolPaths, RecoveryUpdate,
+    RecursiveRecoveryOptions, SERVICE_NAME, SettingsStore, analyze_archive, compress_archive,
+    fingerprint_file_sha256, generate_archive_name, health_status, list_ai_models,
+    path_for_display, prepare_compression, probe_john_perl, probe_recovery_capabilities,
+    recover_and_extract_recursive_lazy, resolve_tools_directory, test_ai_connection,
+    validate_ai_base_url,
+};
+use clipboard_security::clipboard_clear_if_matches;
+use history_commands::{history_clear, history_delete, history_list, history_reveal_password};
+use history_support::{
+    history_password_by_fingerprint, migrate_legacy_history_passwords, save_recovered_history,
 };
 use logging::{LogExportResult, LogLevel, LogListResult, LogQuery, LogStore};
 use serde::{Deserialize, Serialize};
+use task_coordination::TaskStartReservation;
 use tauri::{AppHandle, Manager, State};
 
 static RECOVERY_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -48,37 +59,37 @@ struct AppState {
     history: Mutex<RecoveryHistoryStore>,
     settings: Mutex<SettingsStore>,
     logger: Arc<LogStore>,
-    engine_install: Arc<Mutex<()>>,
     recovery_task: Mutex<Option<RecoveryTaskHandle>>,
     compression_task: Mutex<Option<CompressionTaskHandle>>,
-    recovery_starting: AtomicBool,
-    compression_starting: AtomicBool,
+    archive_task_starting: AtomicBool,
 }
 
-struct TaskStartReservation<'a> {
-    flag: &'a AtomicBool,
-    active: bool,
-}
-
-impl<'a> TaskStartReservation<'a> {
-    fn acquire(flag: &'a AtomicBool, conflict_message: &str) -> Result<Self, String> {
-        flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| conflict_message.to_string())?;
-        Ok(Self { flag, active: true })
-    }
-
-    fn release(mut self) {
-        self.flag.store(false, Ordering::Release);
-        self.active = false;
-    }
-}
-
-impl Drop for TaskStartReservation<'_> {
-    fn drop(&mut self) {
-        if self.active {
-            self.flag.store(false, Ordering::Release);
+fn ensure_no_active_archive_task(state: &AppState) -> Result<(), String> {
+    {
+        let current = state
+            .compression_task
+            .lock()
+            .map_err(|error| error.to_string())?;
+        if let Some(task) = current.as_ref() {
+            let status = task.status.lock().map_err(|error| error.to_string())?;
+            if status.running {
+                return Err("已有压缩任务正在运行，请先等待完成或取消。".into());
+            }
         }
     }
+    {
+        let current = state
+            .recovery_task
+            .lock()
+            .map_err(|error| error.to_string())?;
+        if let Some(task) = current.as_ref() {
+            let status = task.status.lock().map_err(|error| error.to_string())?;
+            if status.running {
+                return Err("已有密码恢复任务正在运行，请先等待完成或取消。".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 struct RecoveryTaskHandle {
@@ -684,43 +695,6 @@ fn dictionary_add(
 }
 
 #[tauri::command]
-fn dictionary_import_file(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<DictionaryCandidateAddSummary, String> {
-    let result = {
-        let store = state.dictionary.lock().map_err(|e| e.to_string())?;
-        store.import_file(path).map_err(|e| e.to_string())
-    };
-    match &result {
-        Ok(summary) => write_log(
-            &state.logger,
-            LogLevel::Info,
-            "dictionary",
-            "dictionary.file_imported",
-            "字典文件已导入。",
-            [
-                (
-                    "submitted_count".into(),
-                    summary.submitted_count.to_string(),
-                ),
-                ("added_count".into(), summary.added_count.to_string()),
-                ("invalid_count".into(), summary.invalid_count.to_string()),
-            ],
-        ),
-        Err(_) => write_log(
-            &state.logger,
-            LogLevel::Error,
-            "dictionary",
-            "dictionary.import_failed",
-            "字典文件导入失败。",
-            std::iter::empty(),
-        ),
-    }
-    result
-}
-
-#[tauri::command]
 fn dictionary_delete(state: State<'_, AppState>, ids: Vec<i64>) -> Result<u64, String> {
     let requested_count = ids.len();
     let result = {
@@ -747,72 +721,6 @@ fn dictionary_delete(state: State<'_, AppState>, ids: Vec<i64>) -> Result<u64, S
             "候选字典删除失败。",
             std::iter::empty(),
         ),
-    }
-    result
-}
-
-#[tauri::command]
-fn history_list(
-    state: State<'_, AppState>,
-    query: RecoveryHistoryQuery,
-) -> Result<RecoveryHistoryListResult, String> {
-    let store = state.history.lock().map_err(|error| error.to_string())?;
-    store.list(&query).map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn history_reveal_password(state: State<'_, AppState>, id: i64) -> Result<Option<String>, String> {
-    let result = {
-        let store = state.history.lock().map_err(|error| error.to_string())?;
-        store.password_by_id(id).map_err(|error| error.to_string())
-    };
-    if result.as_ref().is_ok_and(Option::is_some) {
-        write_log(
-            &state.logger,
-            LogLevel::Info,
-            "history",
-            "history.password_revealed",
-            "用户查看了一条本机历史密码。",
-            std::iter::empty(),
-        );
-    }
-    result
-}
-
-#[tauri::command]
-fn history_delete(state: State<'_, AppState>, id: i64) -> Result<bool, String> {
-    let result = {
-        let store = state.history.lock().map_err(|error| error.to_string())?;
-        store.delete(id).map_err(|error| error.to_string())
-    };
-    if result.as_ref().is_ok_and(|deleted| *deleted) {
-        write_log(
-            &state.logger,
-            LogLevel::Info,
-            "history",
-            "history.entry_deleted",
-            "一条恢复历史已删除。",
-            std::iter::empty(),
-        );
-    }
-    result
-}
-
-#[tauri::command]
-fn history_clear(state: State<'_, AppState>) -> Result<u64, String> {
-    let result = {
-        let store = state.history.lock().map_err(|error| error.to_string())?;
-        store.clear().map_err(|error| error.to_string())
-    };
-    if let Ok(removed_count) = &result {
-        write_log(
-            &state.logger,
-            LogLevel::Info,
-            "history",
-            "history.cleared",
-            "恢复历史已清空。",
-            [("removed_count".into(), removed_count.to_string())],
-        );
     }
     result
 }
@@ -1428,6 +1336,11 @@ async fn recovery_capabilities(state: State<'_, AppState>) -> Result<RecoveryCap
 async fn tool_full_bundle_install(
     state: State<'_, AppState>,
 ) -> Result<FullEngineBundleInstallResult, String> {
+    let _operation_reservation = TaskStartReservation::acquire(
+        &state.archive_task_starting,
+        "另一个归档或引擎任务正在进行，请稍后重试。",
+    )?;
+    ensure_no_active_archive_task(&state)?;
     write_log(
         &state.logger,
         LogLevel::Info,
@@ -1437,11 +1350,7 @@ async fn tool_full_bundle_install(
         std::iter::empty(),
     );
     let manager = full_bundle_manager(&state)?;
-    let install_lock = Arc::clone(&state.engine_install);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let _guard = install_lock
-            .lock()
-            .map_err(|error| format!("完整引擎安装锁异常：{error}"))?;
         manager.install().map_err(|error| error.to_string())
     })
     .await
@@ -1493,6 +1402,11 @@ fn tool_hashcat_status(state: State<'_, AppState>) -> Result<HashcatStatus, Stri
 
 #[tauri::command]
 async fn tool_hashcat_download(state: State<'_, AppState>) -> Result<HashcatInstallResult, String> {
+    let _operation_reservation = TaskStartReservation::acquire(
+        &state.archive_task_starting,
+        "另一个归档或引擎任务正在进行，请稍后重试。",
+    )?;
+    ensure_no_active_archive_task(&state)?;
     write_log(
         &state.logger,
         LogLevel::Info,
@@ -1502,11 +1416,7 @@ async fn tool_hashcat_download(state: State<'_, AppState>) -> Result<HashcatInst
         std::iter::empty(),
     );
     let downloader = hashcat_downloader(&state)?;
-    let install_lock = Arc::clone(&state.engine_install);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let _guard = install_lock
-            .lock()
-            .map_err(|error| format!("引擎安装锁异常：{error}"))?;
         downloader.install().map_err(|error| error.to_string())
     })
     .await
@@ -1635,7 +1545,7 @@ async fn archive_analyze(
                 .contains(&fingerprint_sha256)
                 .map_err(|error| error.to_string())?;
             let has_password = store
-                .password_by_fingerprint(&fingerprint_sha256)
+                .protected_password_by_fingerprint(&fingerprint_sha256)
                 .map_err(|error| error.to_string())?
                 .is_some();
             (matched, has_password)
@@ -1680,21 +1590,10 @@ async fn compression_start(
     request: CompressionStartRequest,
 ) -> Result<CompressionTaskStatus, String> {
     let start_reservation = TaskStartReservation::acquire(
-        &state.compression_starting,
-        "压缩任务正在启动，请勿重复提交。",
+        &state.archive_task_starting,
+        "另一个归档任务正在启动，请勿重复提交。",
     )?;
-    {
-        let current = state
-            .compression_task
-            .lock()
-            .map_err(|error| error.to_string())?;
-        if let Some(task) = current.as_ref() {
-            let status = task.status.lock().map_err(|error| error.to_string())?;
-            if status.running {
-                return Err("已有压缩任务正在运行，请先等待完成或取消。".into());
-            }
-        }
-    }
+    ensure_no_active_archive_task(&state)?;
 
     let manager = full_bundle_manager(&state)?;
     let bundle_status = manager.status();
@@ -1930,8 +1829,8 @@ async fn recovery_start(
     request: RecoveryStartRequest,
 ) -> Result<RecoveryTaskStatus, String> {
     let start_reservation = TaskStartReservation::acquire(
-        &state.recovery_starting,
-        "密码恢复任务正在启动，请勿重复提交。",
+        &state.archive_task_starting,
+        "另一个归档任务正在启动，请勿重复提交。",
     )?;
     write_log(
         &state.logger,
@@ -1948,18 +1847,7 @@ async fn recovery_start(
             },
         )],
     );
-    {
-        let current = state
-            .recovery_task
-            .lock()
-            .map_err(|error| error.to_string())?;
-        if let Some(task) = current.as_ref() {
-            let status = task.status.lock().map_err(|error| error.to_string())?;
-            if status.running {
-                return Err("已有密码恢复任务正在运行，请先等待完成或取消。".into());
-            }
-        }
-    }
+    ensure_no_active_archive_task(&state)?;
 
     let archive_path = std::fs::canonicalize(PathBuf::from(&request.archive_path))
         .map_err(|error| format!("无法解析归档路径：{error}"))?;
@@ -1981,9 +1869,7 @@ async fn recovery_start(
         .map(str::to_owned);
     let history_password = if manual_password.is_none() {
         let store = state.history.lock().map_err(|error| error.to_string())?;
-        store
-            .password_by_fingerprint(&fingerprint_sha256)
-            .map_err(|error| error.to_string())?
+        history_password_by_fingerprint(&store, &fingerprint_sha256)?
     } else {
         None
     };
@@ -2214,34 +2100,24 @@ async fn recovery_start(
             task_status.elapsed_ms = current_time_ms().saturating_sub(task_status.started_at_ms);
             match outcome {
                 Ok(result) => {
-                    let history_saved_count = if result.root.success {
-                        RecoveryHistoryStore::open(&success_database_path)
-                            .ok()
-                            .map(|store| {
-                                let verified_at_ms = current_time_ms();
-                                result
-                                    .recovered_archives
-                                    .iter()
-                                    .filter(|archive| {
-                                        store
-                                            .upsert(&RecoveryHistoryRecord {
-                                                fingerprint_sha256: archive
-                                                    .fingerprint_sha256
-                                                    .clone(),
-                                                archive_format: archive
-                                                    .archive_format
-                                                    .label()
-                                                    .into(),
-                                                file_size: archive.file_size,
-                                                volume_count: archive.volume_count,
-                                                verified_at_ms,
-                                                password: archive.password.clone(),
-                                            })
-                                            .is_ok()
-                                    })
-                                    .count()
-                            })
-                            .unwrap_or_default()
+                    let history_save = if result.root.success {
+                        save_recovered_history(
+                            &success_database_path,
+                            &result.recovered_archives,
+                            current_time_ms(),
+                        )
+                    } else {
+                        Default::default()
+                    };
+                    let dictionary_update_failed_count = if result.root.success {
+                        match DictionaryCandidateStore::open(&success_database_path) {
+                            Ok(store) => result
+                                .recovered_passwords
+                                .iter()
+                                .filter(|password| store.increment_success(password).is_err())
+                                .count(),
+                            Err(_) => result.recovered_passwords.len(),
+                        }
                     } else {
                         0
                     };
@@ -2256,6 +2132,17 @@ async fn recovery_start(
                     };
                     task_status.engine = result.root.engine.clone();
                     task_status.message = result.root.message;
+                    if history_save.failed_count > 0 {
+                        task_status.message.push_str(&format!(
+                            " 注意：有 {} 条恢复历史未能安全保存。",
+                            history_save.failed_count
+                        ));
+                    }
+                    if dictionary_update_failed_count > 0 {
+                        task_status.message.push_str(&format!(
+                            " 注意：有 {dictionary_update_failed_count} 条候选的成功次数未能更新。"
+                        ));
+                    }
                     task_status.recovered_password = result
                         .root
                         .password
@@ -2272,13 +2159,6 @@ async fn recovery_start(
                     task_status.current_archive_path = None;
                     task_status.recursive_depth = 0;
                     append_current_recovery_event(&mut task_status);
-                    if result.root.success
-                        && let Ok(store) = DictionaryCandidateStore::open(&success_database_path)
-                    {
-                        for password in &result.recovered_passwords {
-                            let _ = store.increment_success(password);
-                        }
-                    }
                     write_log(
                         &logger_for_worker,
                         if result.root.success || result.root.cancelled {
@@ -2315,9 +2195,46 @@ async fn recovery_start(
                                 "nested_skipped".into(),
                                 result.skipped_nested_archives.to_string(),
                             ),
-                            ("history_saved".into(), history_saved_count.to_string()),
+                            ("history_saved".into(), history_save.saved_count.to_string()),
+                            (
+                                "history_save_failed".into(),
+                                history_save.failed_count.to_string(),
+                            ),
+                            (
+                                "dictionary_update_failed".into(),
+                                dictionary_update_failed_count.to_string(),
+                            ),
                         ],
                     );
+                    if history_save.failed_count > 0 {
+                        write_log(
+                            &logger_for_worker,
+                            LogLevel::Error,
+                            "history",
+                            "history.save_failed",
+                            "恢复成功，但部分历史记录未能安全保存。",
+                            [
+                                ("task_id".into(), worker_task_id.clone()),
+                                ("failed_count".into(), history_save.failed_count.to_string()),
+                            ],
+                        );
+                    }
+                    if dictionary_update_failed_count > 0 {
+                        write_log(
+                            &logger_for_worker,
+                            LogLevel::Warn,
+                            "dictionary",
+                            "dictionary.success_count_update_failed",
+                            "恢复成功，但部分候选的成功次数未能更新。",
+                            [
+                                ("task_id".into(), worker_task_id.clone()),
+                                (
+                                    "failed_count".into(),
+                                    dictionary_update_failed_count.to_string(),
+                                ),
+                            ],
+                        );
+                    }
                 }
                 Err(arc_recall_core::RecoveryError::Cancelled) => {
                     task_status.cancelled = true;
@@ -2567,6 +2484,32 @@ pub fn run() {
             apply_logging_settings(&logger, &loaded_settings.logging)
                 .map_err(|e| format!("configure log store: {e}"))?;
             install_panic_logger(Arc::clone(&logger));
+            match migrate_legacy_history_passwords(&history) {
+                Ok(report) if report.migrated_count > 0 || report.failed_count > 0 => write_log(
+                    &logger,
+                    if report.failed_count > 0 {
+                        LogLevel::Warn
+                    } else {
+                        LogLevel::Info
+                    },
+                    "history",
+                    "history.password_migration_finished",
+                    "本机历史密码保护迁移已完成。",
+                    [
+                        ("migrated_count".into(), report.migrated_count.to_string()),
+                        ("failed_count".into(), report.failed_count.to_string()),
+                    ],
+                ),
+                Ok(_) => {}
+                Err(error) => write_log(
+                    &logger,
+                    LogLevel::Warn,
+                    "history",
+                    "history.password_migration_failed",
+                    "无法检查本机历史密码保护迁移。",
+                    [("error".into(), error)],
+                ),
+            }
             write_log(
                 &logger,
                 LogLevel::Info,
@@ -2585,16 +2528,15 @@ pub fn run() {
                 history: Mutex::new(history),
                 settings: Mutex::new(settings),
                 logger,
-                engine_install: Arc::new(Mutex::new(())),
                 recovery_task: Mutex::new(None),
                 compression_task: Mutex::new(None),
-                recovery_starting: AtomicBool::new(false),
-                compression_starting: AtomicBool::new(false),
+                archive_task_starting: AtomicBool::new(false),
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             health,
+            clipboard_clear_if_matches,
             log_write,
             log_list,
             log_export,
@@ -2604,7 +2546,6 @@ pub fn run() {
             dictionary_list,
             dictionary_count,
             dictionary_add,
-            dictionary_import_file,
             dictionary_delete,
             history_list,
             history_reveal_password,

@@ -14,8 +14,8 @@ mod seven_zip;
 
 #[cfg(test)]
 use archive::{
-    FINGERPRINT_SAMPLE_COUNT, FINGERPRINT_SAMPLE_SIZE, MAX_LZ4_DECODED_BYTES, RAR5_SIGNATURE,
-    SEVEN_ZIP_SIGNATURE, ZIP_SIGNATURES, fingerprint_sample_ranges, lz4_decoded_byte_limit,
+    MAX_LZ4_DECODED_BYTES, RAR5_SIGNATURE, SEVEN_ZIP_SIGNATURE, ZIP_SIGNATURES,
+    lz4_decoded_byte_limit,
 };
 pub use archive::{
     analyze_archive, detect_archive_format, fingerprint_file_sha256, path_for_display,

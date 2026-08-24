@@ -224,7 +224,10 @@ export function LogsPage() {
   )
   const requestSequence = React.useRef(0)
   const autoRefreshPaused =
-    autoRefresh && (listFocused || expandedEntryIds.size > 0)
+    autoRefresh &&
+    (listFocused ||
+      expandedEntryIds.size > 0 ||
+      deferredSearch.trim().length > 0)
 
   const refresh = React.useCallback(
     async (silent = false) => {

@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS recovery_history (
     first_success_at_ms   INTEGER NOT NULL,
     last_verified_at_ms   INTEGER NOT NULL,
     verification_count    INTEGER NOT NULL DEFAULT 1,
-    password_text         TEXT,
+    password_protected    TEXT,
     CHECK (length(fingerprint_sha256) = 64),
     CHECK (file_size >= 0),
     CHECK (volume_count > 0),
@@ -48,7 +48,13 @@ pub struct RecoveryHistoryRecord {
     pub file_size: u64,
     pub volume_count: u32,
     pub verified_at_ms: u64,
-    pub password: Option<String>,
+    pub protected_password: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredRecoveryPassword {
+    pub id: i64,
+    pub protected_password: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +122,7 @@ impl RecoveryHistoryStore {
         };
         store.with_connection(|conn| {
             conn.execute_batch(SCHEMA_SQL)?;
+            migrate_password_column(conn)?;
             Ok(())
         })?;
         Ok(store)
@@ -132,14 +139,17 @@ impl RecoveryHistoryStore {
         let verified_at_ms = i64::try_from(record.verified_at_ms)
             .map_err(|_| RecoveryHistoryError::InvalidFingerprint)?;
         let volume_count = i64::from(record.volume_count.max(1));
-        let password = record.password.as_deref().filter(|value| !value.is_empty());
+        let protected_password = record
+            .protected_password
+            .as_deref()
+            .filter(|value| !value.is_empty());
 
         let _guard = self.write_lock.lock().expect("history write lock");
         self.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO recovery_history (
                     fingerprint_sha256, archive_format, file_size, volume_count,
-                    first_success_at_ms, last_verified_at_ms, password_text
+                    first_success_at_ms, last_verified_at_ms, password_protected
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
                  ON CONFLICT(fingerprint_sha256) DO UPDATE SET
                     archive_format = excluded.archive_format,
@@ -154,9 +164,9 @@ impl RecoveryHistoryStore {
                         THEN recovery_history.verification_count + 1
                         ELSE 9223372036854775807
                     END,
-                    password_text = COALESCE(
-                        excluded.password_text,
-                        recovery_history.password_text
+                    password_protected = COALESCE(
+                        excluded.password_protected,
+                        recovery_history.password_protected
                     );",
                 params![
                     fingerprint,
@@ -164,7 +174,7 @@ impl RecoveryHistoryStore {
                     file_size,
                     volume_count,
                     verified_at_ms,
-                    password,
+                    protected_password,
                 ],
             )?;
             Ok(())
@@ -183,7 +193,7 @@ impl RecoveryHistoryStore {
             let total_count = count_query(conn, "SELECT COUNT(*) FROM recovery_history;", None)?;
             let password_count = count_query(
                 conn,
-                "SELECT COUNT(*) FROM recovery_history WHERE password_text IS NOT NULL;",
+                "SELECT COUNT(*) FROM recovery_history WHERE password_protected IS NOT NULL;",
                 None,
             )?;
             let matched_count = count_query(
@@ -203,7 +213,7 @@ impl RecoveryHistoryStore {
                     first_success_at_ms,
                     last_verified_at_ms,
                     verification_count,
-                    password_text IS NOT NULL
+                    password_protected IS NOT NULL
                  FROM recovery_history
                  WHERE ?1 = '' OR instr(fingerprint_sha256, ?1) = 1
                  ORDER BY last_verified_at_ms DESC, id DESC
@@ -236,7 +246,7 @@ impl RecoveryHistoryStore {
         })
     }
 
-    pub fn password_by_fingerprint(
+    pub fn protected_password_by_fingerprint(
         &self,
         fingerprint_sha256: &str,
     ) -> Result<Option<String>, RecoveryHistoryError> {
@@ -244,7 +254,7 @@ impl RecoveryHistoryStore {
         self.with_connection(|conn| {
             Ok(conn
                 .query_row(
-                    "SELECT password_text FROM recovery_history
+                    "SELECT password_protected FROM recovery_history
                      WHERE fingerprint_sha256 = ?1;",
                     [fingerprint],
                     |row| row.get(0),
@@ -254,16 +264,53 @@ impl RecoveryHistoryStore {
         })
     }
 
-    pub fn password_by_id(&self, id: i64) -> Result<Option<String>, RecoveryHistoryError> {
+    pub fn protected_password_by_id(
+        &self,
+        id: i64,
+    ) -> Result<Option<String>, RecoveryHistoryError> {
         self.with_connection(|conn| {
             Ok(conn
                 .query_row(
-                    "SELECT password_text FROM recovery_history WHERE id = ?1;",
+                    "SELECT password_protected FROM recovery_history WHERE id = ?1;",
                     [id],
                     |row| row.get(0),
                 )
                 .optional()?
                 .flatten())
+        })
+    }
+
+    pub fn stored_passwords(&self) -> Result<Vec<StoredRecoveryPassword>, RecoveryHistoryError> {
+        self.with_connection(|conn| {
+            let mut statement = conn.prepare_cached(
+                "SELECT id, password_protected FROM recovery_history
+                 WHERE password_protected IS NOT NULL;",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok(StoredRecoveryPassword {
+                    id: row.get(0)?,
+                    protected_password: row.get(1)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(RecoveryHistoryError::from)
+        })
+    }
+
+    pub fn replace_protected_password(
+        &self,
+        id: i64,
+        protected_password: &str,
+    ) -> Result<bool, RecoveryHistoryError> {
+        if protected_password.is_empty() {
+            return Ok(false);
+        }
+        let _guard = self.write_lock.lock().expect("history write lock");
+        self.with_connection(|conn| {
+            Ok(conn.execute(
+                "UPDATE recovery_history SET password_protected = ?2 WHERE id = ?1;",
+                params![id, protected_password],
+            )? > 0)
         })
     }
 
@@ -286,7 +333,7 @@ impl RecoveryHistoryStore {
         self.with_connection(|conn| {
             let deleted = conn.execute("DELETE FROM recovery_history WHERE id = ?1;", [id])? > 0;
             if deleted {
-                purge_deleted_content(conn)?;
+                checkpoint_deleted_content(conn)?;
             }
             Ok(deleted)
         })
@@ -297,7 +344,7 @@ impl RecoveryHistoryStore {
         self.with_connection(|conn| {
             let deleted = conn.execute("DELETE FROM recovery_history;", [])? as u64;
             if deleted > 0 {
-                purge_deleted_content(conn)?;
+                checkpoint_deleted_content(conn)?;
             }
             Ok(deleted)
         })
@@ -316,10 +363,36 @@ impl RecoveryHistoryStore {
     }
 }
 
-fn purge_deleted_content(conn: &Connection) -> Result<(), RecoveryHistoryError> {
-    conn.execute_batch(
-        "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
-    )?;
+fn migrate_password_column(conn: &Connection) -> Result<(), RecoveryHistoryError> {
+    let mut statement = conn.prepare("PRAGMA table_info(recovery_history);")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+
+    let has_protected = columns.iter().any(|column| column == "password_protected");
+    let has_legacy = columns.iter().any(|column| column == "password_text");
+    if !has_protected {
+        conn.execute(
+            "ALTER TABLE recovery_history ADD COLUMN password_protected TEXT;",
+            [],
+        )?;
+    }
+    if has_legacy {
+        conn.execute_batch(
+            "UPDATE recovery_history
+             SET password_protected = COALESCE(password_protected, password_text)
+             WHERE password_text IS NOT NULL;
+             UPDATE recovery_history SET password_text = NULL WHERE password_text IS NOT NULL;",
+        )?;
+    }
+    Ok(())
+}
+
+fn checkpoint_deleted_content(conn: &Connection) -> Result<(), RecoveryHistoryError> {
+    // `secure_delete=ON` clears deleted cells. A WAL truncate is sufficient to
+    // remove the journal copy without a full rewrite of the shared database.
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     Ok(())
 }
 
@@ -361,7 +434,7 @@ mod tests {
             file_size: 1_024,
             volume_count: 1,
             verified_at_ms: timestamp,
-            password: password.map(str::to_owned),
+            protected_password: password.map(str::to_owned),
         }
     }
 
@@ -383,7 +456,7 @@ mod tests {
         assert_eq!(result.entries[0].verification_count, 2);
         assert_eq!(
             store
-                .password_by_fingerprint(&"a".repeat(64))
+                .protected_password_by_fingerprint(&"a".repeat(64))
                 .expect("password")
                 .as_deref(),
             Some("second")
@@ -400,10 +473,56 @@ mod tests {
 
         assert_eq!(
             store
-                .password_by_fingerprint(&"b".repeat(64))
+                .protected_password_by_fingerprint(&"b".repeat(64))
                 .expect("password")
                 .as_deref(),
             Some("saved")
+        );
+    }
+
+    #[test]
+    fn migrates_legacy_plaintext_column_into_protected_storage() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy.db");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE recovery_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fingerprint_sha256 TEXT NOT NULL UNIQUE,
+                    archive_format TEXT NOT NULL,
+                    file_size INTEGER NOT NULL,
+                    volume_count INTEGER NOT NULL,
+                    first_success_at_ms INTEGER NOT NULL,
+                    last_verified_at_ms INTEGER NOT NULL,
+                    verification_count INTEGER NOT NULL,
+                    password_text TEXT
+                 );
+                 INSERT INTO recovery_history VALUES (
+                    1,
+                    'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                    'ZIP', 10, 1, 1, 1, 1, 'legacy-secret'
+                 );",
+            )
+            .unwrap();
+        drop(connection);
+
+        let store = RecoveryHistoryStore::open(&path).unwrap();
+
+        assert_eq!(
+            store.stored_passwords().unwrap()[0].protected_password,
+            "legacy-secret"
+        );
+        let connection = Connection::open(path).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT password_text FROM recovery_history WHERE id = 1;",
+                    [],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .unwrap(),
+            None
         );
     }
 

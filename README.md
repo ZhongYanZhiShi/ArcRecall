@@ -28,13 +28,14 @@ ArcRecall 会读取文件内容来判断真实格式，补回或修正后缀，�
 
 ## 恢复历史
 
-成功处理的根归档和嵌套归档会按文件大小与多段内容生成本机指纹并写入 SQLite；文件改名后
-仍可命中。大文件只读取固定数量的内容片段，不会为了历史功能完整扫描文件。
+成功处理的根归档和嵌套归档会按完整文件内容生成 SHA-256 指纹并写入 SQLite；文件改名后
+仍可命中，文件任意位置发生变化都会生成不同指纹。
 历史页展示指纹前缀、格式、大小、分卷数和验证时间，支持查询、查看或复制密码、删除单条
 记录和清空全部。历史不会保存来源文件名、路径或字典内容。
 
-历史密码以明文保存在本机数据库中，用于再次处理相同内容时优先复验；密码不会写入运行
-日志。请仅在可信的本机用户环境中使用此功能。
+历史密码在写入本机数据库前使用 Windows DPAPI CurrentUser 加密，用于再次处理相同内容时
+优先复验；已有明文记录会在应用启动时自动迁移，密码不会写入运行日志。查看或复制密码后，
+界面会自动隐藏，并仅在剪贴板内容未被其他内容替换时定时清除该密码。
 
 ## 日志与诊断
 
@@ -96,12 +97,14 @@ Tauri 会启动 Next.js 开发服务器，并在原生桌面窗口中打开它�
 ```powershell
 # Rust
 cargo fmt --all -- --check
-cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets --all-features
 
 # Web
 pnpm format:check
 pnpm lint
 pnpm typecheck
+pnpm test
 pnpm build
 
 # Desktop
