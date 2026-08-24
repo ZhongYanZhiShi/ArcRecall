@@ -780,7 +780,7 @@ export const SettingsPage = React.forwardRef<
                 <TabsTrigger
                   key={item.id}
                   value={item.id}
-                  className="min-h-8 flex-none"
+                  className="flex-none"
                 >
                   <Icon data-icon="inline-start" />
                   {item.label}
