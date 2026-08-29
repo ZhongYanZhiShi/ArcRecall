@@ -29,18 +29,21 @@ ArcRecall reads file contents to determine the actual format, restores or correc
 ## Recovery history
 
 Successfully processed root and nested archives are stored in the local SQLite
-database using a fingerprint derived from file size and multiple content
-samples, so renaming a file does not break a match. Large files use a bounded
-number of samples instead of an additional full-file scan.
+database using a full-content SHA-256 fingerprint. Recognized volumes are
+fingerprinted together in their resolved order. Recovery tasks calculate this
+fingerprint and look up saved passwords in the background, so renaming an
+archive does not break a match while changing any byte produces a new one.
 The History page shows fingerprint prefixes, format, size, volume count, and
 verification times, with search, password reveal/copy, per-entry deletion, and
 clear-all actions. Source filenames, paths, and dictionary contents are not
 stored.
 
-Saved history passwords are plain text in the local database and are tried
-before the global dictionary when the same content is processed again. They
-are not written to runtime logs. Use this feature only in a trusted local user
-environment.
+Saved history passwords are protected with Windows DPAPI CurrentUser before
+they reach the local database and are tried before the global dictionary when
+the same content is processed again. Legacy plaintext records are migrated at
+application startup, and passwords are not written to runtime logs. Revealed
+or copied passwords are hidden automatically; clipboard contents are cleared
+after a delay only if another value has not replaced them.
 
 ## Logging and diagnostics
 

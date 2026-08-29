@@ -138,6 +138,8 @@ export function ExtractPage({
   const openedTasks = React.useRef(new Set<string>())
   const autoOpenTasks = React.useRef(new Set<string>())
   const analysisRequestId = React.useRef(0)
+  const taskResultRef = React.useRef<HTMLDivElement>(null)
+  const revealedTaskId = React.useRef<string | null>(null)
   const running = Boolean(task?.running)
   const runningRef = React.useRef(running)
 
@@ -337,6 +339,28 @@ export function ExtractPage({
   }, [refreshDictionaryCount, task?.running, task?.taskId])
 
   React.useEffect(() => {
+    if (!task?.completed || revealedTaskId.current === task.taskId) {
+      return
+    }
+    revealedTaskId.current = task.taskId
+    const frame = requestAnimationFrame(() => {
+      const result = taskResultRef.current
+      if (!result) {
+        return
+      }
+      result.focus({ preventScroll: true })
+      const reduceMotion = window.matchMedia(
+        "(prefers-reduced-motion: reduce)"
+      ).matches
+      result.scrollIntoView({
+        block: "nearest",
+        behavior: reduceMotion ? "auto" : "smooth",
+      })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [task?.completed, task?.taskId])
+
+  React.useEffect(() => {
     if (
       !openWhenDone ||
       !task?.completed ||
@@ -391,7 +415,6 @@ export function ExtractPage({
     try {
       const started = await startRecovery({
         archivePath: analysis.archivePath,
-        fingerprintSha256: analysis.fingerprintSha256,
         outputDirectory:
           outputMode === "custom"
             ? outputDir
@@ -505,7 +528,7 @@ export function ExtractPage({
           title="恢复并解压"
           description="按文件内容识别格式，尝试已知或本机候选密码，并安全解包。"
           size="large"
-          className="mb-5"
+          className="mb-3"
         />
 
         <Card
@@ -529,117 +552,118 @@ export function ExtractPage({
             setDragOver(false)
           }}
           className={cn(
-            "relative flex min-h-0 flex-col justify-center gap-0 border-dashed py-0 shadow-none transition-[background-color,border-color] duration-200",
-            analysis ? "min-h-36 shrink-0" : "min-h-52 flex-1",
+            "relative min-h-0 border-dashed shadow-none transition-[background-color,border-color] duration-200",
+            analysis || analyzingPath
+              ? "flex shrink-0 flex-row items-center gap-3 px-4 py-3"
+              : "flex min-h-52 flex-1 flex-col justify-center gap-0 py-0",
             dragOver
               ? "border-primary/70 bg-primary/10"
               : "border-border bg-card dark:border-foreground/20"
           )}
         >
-          <CardHeader
-            aria-live="polite"
-            aria-busy={Boolean(analyzingPath)}
-            className={cn(
-              "justify-items-center px-5 text-center",
-              analysis ? "pt-5" : "pt-8"
-            )}
-          >
-            <div
-              aria-hidden
-              className={cn(
-                "flex items-center justify-center rounded-xl border border-border bg-muted/40",
-                analysis ? "size-9" : "size-12"
-              )}
-            >
-              {busy ? (
-                <Spinner className="size-5" />
-              ) : (
-                <PackageOpen
-                  className={analysis ? "size-5" : "size-6"}
-                  strokeWidth={1.75}
-                />
-              )}
-            </div>
-            <CardTitle className="mt-1 max-w-full truncate text-base font-semibold tracking-tight">
-              {analyzingName
-                ? analyzingName
-                : dragOver
-                  ? "松开以分析归档"
-                  : analysis
-                    ? analysis.fileName
-                    : "将压缩包拖到这里"}
-            </CardTitle>
-            <CardDescription
-              className={cn(
-                "max-w-lg text-xs leading-relaxed",
-                analysis ? "truncate" : "text-pretty"
-              )}
-            >
-              {analyzingName
-                ? "正在按文件内容识别格式与加密状态…"
-                : analysis
-                  ? `${analysis.formatLabel} · ${formatFileSize(analysis.fileSize)} · 不依赖扩展名`
-                  : "按内容识别 7z / ZIP / RAR，支持乱后缀、无后缀与文件内嵌归档"}
-            </CardDescription>
-          </CardHeader>
-          <CardContent
-            className={cn(
-              "flex flex-col items-center gap-3 px-5",
-              analysis ? "pb-5" : "pb-8"
-            )}
-          >
-            <Button onClick={handlePickArchive} disabled={busy || running}>
-              {analyzingPath ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <Upload data-icon="inline-start" />
-              )}
-              {analyzingPath
-                ? "正在识别"
-                : analysis
-                  ? "更换压缩包"
-                  : "选择压缩包"}
-            </Button>
-            {!analysis ? (
-              <div className="flex flex-col items-center gap-2 text-xs text-muted-foreground">
-                <p className="inline-flex items-center gap-1.5 text-center leading-relaxed">
-                  <ShieldCheck aria-hidden className="size-3.5 shrink-0" />
-                  文件与密码仅在本机处理，源文件保持不变
-                </p>
-                {!analyzingPath ? (
+          {analysis || analyzingPath ? (
+            <>
+              <div
+                aria-hidden
+                className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-muted/40"
+              >
+                {analyzingPath ? (
+                  <Spinner className="size-5" />
+                ) : (
+                  <PackageOpen className="size-5" strokeWidth={1.75} />
+                )}
+              </div>
+              <div
+                aria-live="polite"
+                aria-busy={Boolean(analyzingPath)}
+                className="min-w-0 flex-1"
+              >
+                <CardTitle className="truncate text-sm font-semibold tracking-tight">
+                  {analyzingName ?? analysis?.fileName}
+                </CardTitle>
+                <CardDescription className="mt-0.5 truncate text-xs leading-relaxed">
+                  {analyzingName
+                    ? "正在读取文件签名并识别归档格式…"
+                    : analysis
+                      ? `${analysis.formatLabel} · ${formatFileSize(analysis.fileSize)} · 不依赖扩展名`
+                      : null}
+                </CardDescription>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0"
+                onClick={handlePickArchive}
+                disabled={busy || running}
+              >
+                {analyzingPath ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <Upload data-icon="inline-start" />
+                )}
+                {analyzingPath ? "正在识别" : "更换压缩包"}
+              </Button>
+            </>
+          ) : (
+            <>
+              <CardHeader
+                aria-live="polite"
+                className="justify-items-center px-5 pt-8 text-center"
+              >
+                <div
+                  aria-hidden
+                  className="flex size-12 items-center justify-center rounded-xl border border-border bg-muted/40"
+                >
+                  <PackageOpen className="size-6" strokeWidth={1.75} />
+                </div>
+                <CardTitle className="mt-1 max-w-full truncate text-base font-semibold tracking-tight">
+                  {dragOver ? "松开以分析归档" : "将压缩包拖到这里"}
+                </CardTitle>
+                <CardDescription className="max-w-lg text-xs leading-relaxed text-pretty">
+                  按内容识别 7z / ZIP / RAR，支持乱后缀、无后缀与文件内嵌归档
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col items-center gap-3 px-5 pb-8">
+                <Button onClick={handlePickArchive} disabled={busy || running}>
+                  <Upload data-icon="inline-start" />
+                  选择压缩包
+                </Button>
+                <div className="flex flex-col items-center gap-2 text-xs text-muted-foreground">
+                  <p className="inline-flex items-center gap-1.5 text-center leading-relaxed">
+                    <ShieldCheck aria-hidden className="size-3.5 shrink-0" />
+                    文件与密码仅在本机处理，源文件保持不变
+                  </p>
                   <p>
                     也可粘贴绝对路径
                     <Kbd className="ml-1">Ctrl + V</Kbd>
                   </p>
-                ) : null}
-                <ol
-                  aria-label={`恢复流程：${EMPTY_RECOVERY_STEPS.join("、")}`}
-                  className="mt-1 flex max-w-2xl flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-xs"
-                >
-                  {EMPTY_RECOVERY_STEPS.map((step, index) => (
-                    <li key={step} className="flex items-center gap-1.5">
-                      {index > 0 ? (
-                        <ChevronRight
-                          aria-hidden
-                          className="size-3 text-muted-foreground/55"
-                        />
-                      ) : null}
-                      <span
-                        className={cn(
-                          "whitespace-nowrap",
-                          analyzingPath && index === 0
-                            ? "font-medium text-foreground"
-                            : "text-muted-foreground"
-                        )}
-                      >
-                        {step}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            ) : null}
-          </CardContent>
+                  <ol
+                    aria-label={`恢复流程：${EMPTY_RECOVERY_STEPS.join("、")}`}
+                    className="mt-1 flex max-w-2xl flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-xs"
+                  >
+                    {EMPTY_RECOVERY_STEPS.map((step, index) => (
+                      <li key={step} className="flex items-center gap-1.5">
+                        {index > 0 ? (
+                          <ChevronRight
+                            aria-hidden
+                            className="size-3 text-muted-foreground/55"
+                          />
+                        ) : null}
+                        <span
+                          className={cn(
+                            "whitespace-nowrap",
+                            "text-muted-foreground"
+                          )}
+                        >
+                          {step}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              </CardContent>
+            </>
+          )}
         </Card>
 
         <button
@@ -841,56 +865,18 @@ export function ExtractPage({
 
         {analysis ? (
           <section className="mt-3 flex min-h-0 flex-1 scroll-fade flex-col gap-2 overflow-y-auto pr-1 pb-1">
-            <div className="grid gap-2 sm:grid-cols-2">
-              <StatusCard
-                title="归档分析"
-                body={`${analysis.formatLabel} · ${analysis.fileName}`}
-                hint={
-                  analysis.hasSavedPassword
-                    ? "历史密码可复用"
-                    : analysis.historyMatched
-                      ? "历史记录已命中"
-                      : "签名已识别"
-                }
-                icon={<ShieldCheck className="size-3.5" />}
-              />
-              <StatusCard
-                title="全局字典"
-                body={
-                  dictionaryCount == null
-                    ? "候选数量未知"
-                    : `${dictionaryCount} 条候选密码`
-                }
-                hint="成功项优先"
-                icon={<KeyRound className="size-3.5" />}
-              />
-            </div>
-
             <div className="workbench-panel rounded-2xl border border-border/80 bg-card p-3">
               <div className="mb-1 flex items-center justify-between gap-2">
                 <FieldLabel htmlFor="known-password" className="text-xs">
                   已知密码（可选）
                 </FieldLabel>
                 <Badge variant="secondary" className="font-normal">
-                  自动回退
+                  {dictionaryCount == null
+                    ? "自动回退"
+                    : `${dictionaryCount} 条候选`}
                 </Badge>
               </div>
               <RecoveryRoute recursive={recursive} />
-              {analysis.hasSavedPassword ? (
-                <Alert variant="success" className="mb-2 py-2">
-                  <ShieldCheck />
-                  <AlertDescription className="text-xs">
-                    已命中本机历史密码；留空时会优先自动复验，不会在任务开始前显示明文。
-                  </AlertDescription>
-                </Alert>
-              ) : analysis.historyMatched ? (
-                <Alert variant="warning" className="mb-2 py-2">
-                  <CircleAlert />
-                  <AlertDescription className="text-xs">
-                    已找到相同内容的成功记录，但该记录没有保存密码。
-                  </AlertDescription>
-                </Alert>
-              ) : null}
               <TaskPreflight
                 outputPath={outputSummaryLabel}
                 outputMode={outputMode}
@@ -904,7 +890,7 @@ export function ExtractPage({
                     type={showKnownPassword ? "text" : "password"}
                     value={knownPassword}
                     onChange={(event) => setKnownPassword(event.target.value)}
-                    placeholder="输入后优先复验；留空则尝试历史密码"
+                    placeholder="输入后优先复验；留空则后台查找历史密码"
                     disabled={running}
                     autoComplete="off"
                     aria-describedby="recovery-route"
@@ -943,6 +929,7 @@ export function ExtractPage({
 
             {task ? (
               <RecoveryTaskResult
+                rootRef={taskResultRef}
                 task={task}
                 showPassword={showRecoveredPassword}
                 passwordCopied={passwordCopied}
@@ -985,6 +972,7 @@ export function ExtractPage({
               </AlertDescription>
             </Alert>
             <RecoveryTaskResult
+              rootRef={taskResultRef}
               task={task}
               showPassword={showRecoveredPassword}
               passwordCopied={passwordCopied}
@@ -1100,7 +1088,7 @@ function TaskPreflight({
     <div
       id="recovery-start-summary"
       aria-label="任务启动摘要"
-      className="mb-2 grid gap-px overflow-hidden rounded-xl border border-border/70 bg-border sm:grid-cols-2"
+      className="mb-2 grid gap-px overflow-hidden rounded-xl border border-border/70 bg-border sm:grid-cols-2 lg:grid-cols-4"
     >
       <PreflightItem label="输出位置" value={outputPath} />
       <PreflightItem label="同名处理" value={collisionPolicy} />
@@ -1121,37 +1109,6 @@ function PreflightItem({ label, value }: { label: string; value: string }) {
         {value}
       </p>
     </div>
-  )
-}
-
-function StatusCard({
-  title,
-  body,
-  hint,
-  icon,
-}: {
-  title: string
-  body: string
-  hint: string
-  icon: React.ReactNode
-}) {
-  return (
-    <Card size="sm" className="gap-0 py-0">
-      <CardHeader className="flex-row items-center justify-between gap-2 px-3 pt-2 pb-0">
-        <p className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground">
-          {icon}
-          {title}
-        </p>
-        <Badge variant="secondary" className="font-normal">
-          {hint}
-        </Badge>
-      </CardHeader>
-      <CardContent className="px-3 pt-1 pb-2">
-        <p className="truncate text-xs text-foreground" title={body}>
-          {body}
-        </p>
-      </CardContent>
-    </Card>
   )
 }
 

@@ -146,6 +146,7 @@ pub fn recover_and_extract_recursive_lazy(
     tools: &RecoveryToolPaths,
     cancellation: &CancellationToken,
     options: RecursiveRecoveryOptions,
+    precomputed_root_fingerprint_sha256: Option<String>,
     prepare_dictionary: impl FnOnce() -> Result<RecoveryDictionary, RecoveryError>,
     mut report: impl FnMut(RecoveryUpdate),
 ) -> Result<RecursiveRecoveryResult, RecoveryError> {
@@ -185,6 +186,7 @@ pub fn recover_and_extract_recursive_lazy(
         tools,
         cancellation,
         options.compute_mode,
+        precomputed_root_fingerprint_sha256.as_deref(),
         &mut dictionary_provider,
         &mut report,
     )?;
@@ -324,6 +326,7 @@ pub fn recover_and_extract_recursive_lazy(
             tools,
             cancellation,
             state.options.compute_mode,
+            None,
             &mut dictionary_provider,
             &mut |update| {
                 let mut update = update.with_recursive_context(

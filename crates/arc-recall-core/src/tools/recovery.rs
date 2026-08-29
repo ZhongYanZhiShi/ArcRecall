@@ -15,17 +15,21 @@ mod seven_zip;
 #[cfg(test)]
 use archive::{
     MAX_LZ4_DECODED_BYTES, RAR5_SIGNATURE, SEVEN_ZIP_SIGNATURE, ZIP_SIGNATURES,
-    lz4_decoded_byte_limit,
+    lz4_decoded_byte_limit, materialize_volume_with,
 };
 pub use archive::{
-    analyze_archive, detect_archive_format, fingerprint_file_sha256, path_for_display,
+    analyze_archive, detect_archive_format, fingerprint_archive_sha256,
+    fingerprint_archive_sha256_with_cancellation, fingerprint_file_sha256, path_for_display,
 };
-use archive::{detect_nested_archive_format, is_lz4_frame, materialize_lz4_archive};
+use archive::{
+    detect_nested_archive_format, is_lz4_frame, materialize_lz4_archive, materialize_split_archive,
+};
 pub use cracking::probe_recovery_capabilities;
 #[cfg(test)]
 use cracking::{
     HashcatComputeDevice, HashcatDeviceAvailability, decode_password, extract_hashes,
     fallback_hashcat_modes, hashcat_device_plan, parse_hash_records, parse_hashcat_device_types,
+    seven_zip_converter_archive_args,
 };
 use cracking::{recover_with_dictionary, validate_base_job_inputs, validate_dictionary_input};
 #[cfg(test)]
@@ -140,6 +144,9 @@ pub struct ArchiveAnalysis {
     pub format: ArchiveFormat,
     pub format_label: String,
     pub file_size: u64,
+    pub volume_count: u32,
+    #[serde(skip)]
+    pub volume_paths: Vec<PathBuf>,
     pub suggested_output_directory: String,
 }
 
@@ -148,6 +155,7 @@ pub struct ArchiveAnalysis {
 pub struct RecoveryUpdate {
     pub phase: RecoveryPhase,
     pub engine: Option<String>,
+    pub compute_device: Option<RecoveryComputeDevice>,
     pub message: String,
     pub attempted_count: Option<u64>,
     pub total_count: Option<u64>,
@@ -169,6 +177,7 @@ impl RecoveryUpdate {
         Self {
             phase,
             engine: engine.map(Into::into),
+            compute_device: None,
             message: message.into(),
             attempted_count: None,
             total_count: None,
@@ -192,6 +201,7 @@ impl RecoveryUpdate {
         Self {
             phase,
             engine: Some(engine.into()),
+            compute_device: None,
             message: message.into(),
             attempted_count: Some(attempted_count),
             total_count: Some(total_count),
@@ -207,6 +217,11 @@ impl RecoveryUpdate {
 
     fn with_root_extraction_completed(mut self) -> Self {
         self.root_extraction_completed = Some(true);
+        self
+    }
+
+    fn with_compute_device(mut self, compute_device: RecoveryComputeDevice) -> Self {
+        self.compute_device = Some(compute_device);
         self
     }
 
@@ -353,6 +368,7 @@ pub fn recover_and_extract_lazy(
         tools,
         cancellation,
         RecoveryComputeMode::default(),
+        None,
         &mut || {
             let prepare = prepare_dictionary
                 .take()
@@ -368,6 +384,7 @@ fn recover_single_archive(
     tools: &RecoveryToolPaths,
     cancellation: &CancellationToken,
     compute_mode: RecoveryComputeMode,
+    precomputed_fingerprint_sha256: Option<&str>,
     prepare_dictionary: &mut impl FnMut() -> Result<RecoveryDictionary, RecoveryError>,
     report: &mut impl FnMut(RecoveryUpdate),
 ) -> Result<RecoveryResult, RecoveryError> {
@@ -375,6 +392,22 @@ fn recover_single_archive(
     let analysis = analyze_archive(&job.archive_path)?;
     fs::create_dir_all(&job.work_directory)?;
     let mut processing_job = job.clone();
+    let mut converter_archive_paths = analysis.volume_paths.clone();
+    let split_materialization =
+        materialize_split_archive(&analysis, &job.work_directory, cancellation)?;
+
+    if let Some(materialization) = &split_materialization {
+        report(RecoveryUpdate::stage(
+            RecoveryPhase::Preparing,
+            Some("7-Zip"),
+            format!(
+                "检测到 {} 个归档分卷，已在任务工作目录准备可读分卷序列。",
+                analysis.volume_count
+            ),
+        ));
+        processing_job.archive_path = materialization.primary_path().to_path_buf();
+        converter_archive_paths = materialization.volume_paths().to_vec();
+    }
 
     if is_lz4_frame(&job.archive_path)? {
         report(RecoveryUpdate::stage(
@@ -392,6 +425,7 @@ fn recover_single_archive(
             cancellation,
         )?
         .ok_or_else(|| RecoveryError::Message("LZ4 临时归档准备失败。".into()))?;
+        converter_archive_paths = vec![processing_job.archive_path.clone()];
     }
 
     validate_archive_container(
@@ -411,7 +445,7 @@ fn recover_single_archive(
         return Ok(attach_recovered_archive(
             success_result(&processing_job, None, "7-Zip", "归档无需密码，已直接解压。"),
             &analysis,
-            &job.archive_path,
+            precomputed_fingerprint_sha256,
         ));
     }
 
@@ -435,7 +469,7 @@ fn recover_single_archive(
                     "优先密码验证通过，归档已解压。",
                 ),
                 &analysis,
-                &job.archive_path,
+                precomputed_fingerprint_sha256,
             ));
         }
     }
@@ -476,6 +510,7 @@ fn recover_single_archive(
         &dictionary_job,
         tools,
         analysis.format,
+        &converter_archive_paths,
         cancellation,
         compute_mode,
         report,
@@ -483,7 +518,7 @@ fn recover_single_archive(
     Ok(attach_recovered_archive(
         result,
         &analysis,
-        &job.archive_path,
+        precomputed_fingerprint_sha256,
     ))
 }
 
@@ -537,19 +572,19 @@ fn exhausted_result(job: &RecoveryJob, message: &str) -> RecoveryResult {
 fn attach_recovered_archive(
     mut result: RecoveryResult,
     analysis: &ArchiveAnalysis,
-    archive_path: &Path,
+    precomputed_fingerprint_sha256: Option<&str>,
 ) -> RecoveryResult {
     if result.success {
-        result.recovered_archive =
-            fingerprint_file_sha256(archive_path)
-                .ok()
-                .map(|fingerprint_sha256| RecoveredArchive {
-                    fingerprint_sha256,
-                    archive_format: analysis.format,
-                    file_size: analysis.file_size,
-                    volume_count: 1,
-                    password: result.password.clone().filter(|value| !value.is_empty()),
-                });
+        result.recovered_archive = precomputed_fingerprint_sha256
+            .map(str::to_owned)
+            .or_else(|| fingerprint_archive_sha256(analysis).ok())
+            .map(|fingerprint_sha256| RecoveredArchive {
+                fingerprint_sha256,
+                archive_format: analysis.format,
+                file_size: analysis.file_size,
+                volume_count: analysis.volume_count,
+                password: result.password.clone().filter(|value| !value.is_empty()),
+            });
     }
     result
 }

@@ -21,6 +21,11 @@ export const RECOVERY_PHASE_LABELS: Record<RecoveryPhase, string> = {
 }
 
 const COUNT_FORMATTER = new Intl.NumberFormat("zh-CN")
+const PRE_GPU_FAILURE_PHASES = new Set<RecoveryPhase>([
+  "preparing",
+  "verifying",
+  "converting",
+])
 
 export function recoveryComputeSummary(
   task: RecoveryTaskStatus | null,
@@ -38,6 +43,17 @@ export function recoveryComputeSummary(
     return `当前正在使用：${task.engine || "7-Zip CPU 基础校验"}`
   }
   if (task?.completed) {
+    if (
+      task.phase === "failed" &&
+      task.computeMode === "gpuPreferred" &&
+      !task.gpuStarted &&
+      task.failurePhase !== null &&
+      PRE_GPU_FAILURE_PHASES.has(task.failurePhase)
+    ) {
+      return isArchiveContainerFailure(task)
+        ? "7-Zip 基础校验失败，尚未进入 GPU 密码恢复"
+        : "任务在 GPU 启动前失败，尚未进入 GPU 密码恢复"
+    }
     return `本次实际使用：${task.engine || "7-Zip CPU"}`
   }
   if (mode === "cpuOnly") {
@@ -47,6 +63,10 @@ export function recoveryComputeSummary(
     return "未检测到可用 GPU，任务会自动使用 CPU"
   }
   return "准备优先使用 GPU，失败时自动回退 CPU"
+}
+
+export function isArchiveContainerFailure(task: RecoveryTaskStatus): boolean {
+  return task.phase === "failed" && task.failureKind === "invalidArchive"
 }
 
 export function formatFileSize(bytes: number): string {

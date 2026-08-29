@@ -7,6 +7,14 @@ import { isDesktopRuntime } from "@/lib/dictionary"
 export type ArchiveFormat = "sevenZip" | "zip" | "rar3" | "rar5"
 export type RecoveryComputeMode = "gpuPreferred" | "cpuOnly"
 export type RecoveryComputeDevice = "gpu" | "cpu"
+export type RecoveryFailureKind =
+  | "invalidArchive"
+  | "unsupportedFormat"
+  | "missingTool"
+  | "notFound"
+  | "io"
+  | "process"
+  | "other"
 
 export type RecoveryMethodCapability = {
   id: string
@@ -44,10 +52,8 @@ export type ArchiveAnalysis = {
   format: ArchiveFormat
   formatLabel: string
   fileSize: number
+  volumeCount: number
   suggestedOutputDirectory: string
-  fingerprintSha256: string
-  historyMatched: boolean
-  hasSavedPassword: boolean
 }
 
 export type RecoveryTaskEvent = {
@@ -70,6 +76,9 @@ export type RecoveryTaskStatus = {
   completed: boolean
   success: boolean
   cancelled: boolean
+  failureKind: RecoveryFailureKind | null
+  failurePhase: RecoveryPhase | null
+  gpuStarted: boolean
   archivePath: string
   archiveFormat: ArchiveFormat
   archiveFormatLabel: string
@@ -97,7 +106,6 @@ export type RecoveryTaskStatus = {
 
 export type RecoveryStartRequest = {
   archivePath: string
-  fingerprintSha256?: string | null
   outputDirectory?: string | null
   knownPassword?: string | null
   avoidOutputCollision?: boolean

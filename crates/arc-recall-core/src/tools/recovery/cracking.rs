@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::super::runner::{
@@ -36,6 +36,7 @@ pub(super) fn recover_with_dictionary(
     job: &RecoveryJob,
     tools: &RecoveryToolPaths,
     format: ArchiveFormat,
+    archive_paths: &[PathBuf],
     cancellation: &CancellationToken,
     compute_mode: RecoveryComputeMode,
     report: &mut impl FnMut(RecoveryUpdate),
@@ -51,7 +52,7 @@ pub(super) fn recover_with_dictionary(
                 format.label()
             ),
         ));
-        match extract_hashes(job, tools, format, cancellation) {
+        match extract_hashes(job, tools, format, archive_paths, cancellation) {
             Ok(records) if !records.is_empty() => Some(records),
             Ok(_) => {
                 fallback_reasons.push(format!("{} 未生成可用哈希", converter_name(format)));
@@ -91,14 +92,17 @@ pub(super) fn recover_with_dictionary(
                         identify_hashcat_modes(&hash_file, &record.hash, tools, cancellation);
                     for mode in modes {
                         ensure_not_cancelled(cancellation)?;
-                        report(RecoveryUpdate::stage(
-                            RecoveryPhase::Hashcat,
-                            Some(engine),
-                            format!(
-                                "{engine} 正在尝试模式 {mode}（{} 条候选）。",
-                                job.dictionary_count
-                            ),
-                        ));
+                        report(
+                            RecoveryUpdate::stage(
+                                RecoveryPhase::Hashcat,
+                                Some(engine),
+                                format!(
+                                    "{engine} 正在尝试模式 {mode}（{} 条候选）。",
+                                    job.dictionary_count
+                                ),
+                            )
+                            .with_compute_device(device.recovery_device()),
+                        );
                         hashcat_attempted = true;
                         match run_hashcat(job, tools, &hash_file, mode, device, cancellation) {
                             Ok(attempt) => {
@@ -274,6 +278,13 @@ impl HashcatComputeDevice {
         match self {
             Self::Gpu => "Hashcat GPU",
             Self::Cpu => "Hashcat CPU",
+        }
+    }
+
+    const fn recovery_device(self) -> RecoveryComputeDevice {
+        match self {
+            Self::Gpu => RecoveryComputeDevice::Gpu,
+            Self::Cpu => RecoveryComputeDevice::Cpu,
         }
     }
 }
@@ -538,17 +549,16 @@ pub(super) fn extract_hashes(
     job: &RecoveryJob,
     tools: &RecoveryToolPaths,
     format: ArchiveFormat,
+    archive_paths: &[PathBuf],
     cancellation: &CancellationToken,
 ) -> Result<Vec<HashRecord>, RecoveryError> {
     let john_dir = &tools.john_tools_directory;
     let (program, args) = match format {
-        ArchiveFormat::SevenZip => (
-            tools.perl.clone(),
-            vec![
-                john_dir.join("7z2john.pl").into_os_string(),
-                job.archive_path.as_os_str().to_owned(),
-            ],
-        ),
+        ArchiveFormat::SevenZip => {
+            let mut args = vec![john_dir.join("7z2john.pl").into_os_string()];
+            args.extend(seven_zip_converter_archive_args(archive_paths));
+            (tools.perl.clone(), args)
+        }
         ArchiveFormat::Zip => (
             john_dir.join("zip2john.exe"),
             vec![job.archive_path.as_os_str().to_owned()],
@@ -576,6 +586,16 @@ pub(super) fn extract_hashes(
         return Err(process_failure(converter_name(format), &output));
     }
     Ok(parse_hash_records(&output.stdout))
+}
+
+pub(super) fn seven_zip_converter_archive_args(archive_paths: &[PathBuf]) -> Vec<OsString> {
+    // Strawberry Perl/File::Glob cannot open Windows verbatim paths
+    // (`\\?\E:\...`). Keep every resolved path explicit, but remove that
+    // namespace prefix before handing the exact volume sequence to 7z2john.
+    archive_paths
+        .iter()
+        .map(|path| OsString::from(path_for_display(path)))
+        .collect()
 }
 
 fn identify_hashcat_modes(

@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use super::*;
 
+const SEVEN_ZIP_START_HEADER_SIZE_FOR_TEST: usize = 32;
+
 #[test]
 fn lz4_decode_budget_limits_ratio_and_absolute_size() {
     assert_eq!(lz4_decoded_byte_limit(1024), 10_240_000);
@@ -113,6 +115,94 @@ fn signature_detection_does_not_depend_on_extension() {
         detect_archive_format(&path).unwrap(),
         ArchiveFormat::SevenZip
     );
+}
+
+#[test]
+fn analysis_pairs_disguised_seven_zip_tail_by_header_and_crc() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("F254.JPG");
+    let second = dir.path().join("F254.PNG");
+    let first_length = 128u64;
+    let second_length = 24u64;
+    let next_header = b"nexthead";
+    let next_header_offset = first_length + second_length - 32 - next_header.len() as u64;
+
+    let mut start_header = [0u8; 32];
+    start_header[..SEVEN_ZIP_SIGNATURE.len()].copy_from_slice(SEVEN_ZIP_SIGNATURE);
+    start_header[6..8].copy_from_slice(&[0, 4]);
+    start_header[12..20].copy_from_slice(&next_header_offset.to_le_bytes());
+    start_header[20..28].copy_from_slice(&(next_header.len() as u64).to_le_bytes());
+    start_header[28..32].copy_from_slice(&test_crc32(next_header).to_le_bytes());
+    let start_header_crc = test_crc32(&start_header[12..32]);
+    start_header[8..12].copy_from_slice(&start_header_crc.to_le_bytes());
+
+    let mut first_contents = vec![0x11; first_length as usize];
+    first_contents[..start_header.len()].copy_from_slice(&start_header);
+    fs::write(&first, first_contents).unwrap();
+    let mut second_contents = vec![0x22; second_length as usize];
+    let next_header_start = second_contents.len() - next_header.len();
+    second_contents[next_header_start..].copy_from_slice(next_header);
+    fs::write(&second, second_contents).unwrap();
+
+    let analysis = analyze_archive(&first).unwrap();
+    assert_eq!(analysis.file_size, first_length + second_length);
+}
+
+#[test]
+fn analysis_prefers_numbered_split_sequence_over_duplicate_tail_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("archive.7z.001");
+    let second = dir.path().join("archive.7z.002");
+    let duplicate = dir.path().join("duplicate-tail.bin");
+    write_two_part_seven_zip_fixture(&first, &second);
+    fs::copy(&second, &duplicate).unwrap();
+
+    let analysis = analyze_archive(&first).unwrap();
+
+    assert_eq!(analysis.volume_count, 2);
+    assert_eq!(analysis.volume_paths[0], first.canonicalize().unwrap());
+    assert_eq!(analysis.volume_paths[1], second.canonicalize().unwrap());
+}
+
+#[test]
+fn standard_numbered_split_does_not_need_materialization() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("archive.7z.001");
+    let second = dir.path().join("archive.7z.002");
+    write_two_part_seven_zip_fixture(&first, &second);
+    let analysis = analyze_archive(&first).unwrap();
+    let work_directory = dir.path().join("work");
+    fs::create_dir_all(&work_directory).unwrap();
+
+    let materialization =
+        materialize_split_archive(&analysis, &work_directory, &CancellationToken::default())
+            .unwrap();
+
+    assert!(materialization.is_none());
+    assert!(fs::read_dir(&work_directory).unwrap().next().is_none());
+}
+
+#[test]
+fn split_materialization_copies_when_hard_links_are_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.bin");
+    let destination = dir.path().join("destination.bin");
+    fs::write(&source, b"copy-fallback").unwrap();
+
+    materialize_volume_with(
+        &source,
+        &destination,
+        &CancellationToken::default(),
+        |_, _| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "hard links unavailable",
+            ))
+        },
+    )
+    .unwrap();
+
+    assert_eq!(fs::read(&destination).unwrap(), b"copy-fallback");
 }
 
 #[test]
@@ -373,6 +463,20 @@ fn fallback_modes_cover_7z_zip_rar3_and_rar5() {
 }
 
 #[test]
+fn seven_zip_converter_receives_exact_resolved_split_parts() {
+    assert_eq!(
+        seven_zip_converter_archive_args(&[
+            PathBuf::from(r"\\?\E:\test\.temp\archive.7z.01"),
+            PathBuf::from(r"\\?\E:\test\.temp\archive.7z.02"),
+        ]),
+        [
+            OsString::from(r"E:\test\.temp\archive.7z.01"),
+            OsString::from(r"E:\test\.temp\archive.7z.02"),
+        ]
+    );
+}
+
+#[test]
 fn decodes_hashcat_and_john_hex_passwords() {
     assert_eq!(decode_password("$HEX[70c3a47373]"), Some("päss".to_owned()));
     assert_eq!(decode_password("$HEX$70c3a47373"), Some("päss".to_owned()));
@@ -611,6 +715,74 @@ fn seven_zip_extracts_unencrypted_archive_without_password() {
 }
 
 #[test]
+fn seven_zip_recovers_disguised_two_part_archive_from_task_workspace() {
+    let Some(seven_zip) = locate_seven_zip() else {
+        eprintln!("skip: 7z.exe not found");
+        return;
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let payload = dir.path().join("split-payload.txt");
+    fs::write(&payload, b"disguised-split-ok").unwrap();
+    let password = "split-pass-42";
+    let original = dir.path().join("original.7z");
+    create_encrypted_archive(&seven_zip, "-t7z", password, &original, &payload);
+    let archive_bytes = fs::read(&original).unwrap();
+    let split_at = (archive_bytes.len() / 2).max(SEVEN_ZIP_START_HEADER_SIZE_FOR_TEST);
+    assert!(split_at < archive_bytes.len());
+    let first = dir.path().join("F254.JPG");
+    let second = dir.path().join("F254.PNG");
+    fs::write(&first, &archive_bytes[..split_at]).unwrap();
+    fs::write(&second, &archive_bytes[split_at..]).unwrap();
+    fs::remove_file(original).unwrap();
+
+    let output_directory = dir.path().join("split-out");
+    let job = RecoveryJob {
+        archive_path: first,
+        output_directory: output_directory.clone(),
+        dictionary_path: dir.path().join("unused.dict"),
+        dictionary_count: 0,
+        known_password: Some(password.into()),
+        work_directory: dir.path().join("split-work"),
+    };
+    let tools = RecoveryToolPaths {
+        seven_zip,
+        hashcat: dir.path().join("missing-hashcat"),
+        john_tools_directory: dir.path().join("missing-john"),
+        perl: dir.path().join("missing-perl"),
+    };
+
+    let result = recover_and_extract_lazy(
+        &job,
+        &tools,
+        &CancellationToken::default(),
+        || panic!("known password must avoid dictionary preparation"),
+        |_| {},
+    )
+    .expect("recover disguised split archive");
+
+    assert!(result.success, "{}", result.message);
+    assert_eq!(
+        fs::read_to_string(output_directory.join("split-payload.txt")).unwrap(),
+        "disguised-split-ok"
+    );
+    assert_eq!(
+        result
+            .recovered_archive
+            .as_ref()
+            .map(|archive| archive.volume_count),
+        Some(2)
+    );
+    assert!(!fs::read_dir(dir.path()).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".arcrecall-volumes-")
+    }));
+}
+
+#[test]
 fn seven_zip_container_validation_rejects_pe_with_zip_bytes() {
     let Some(seven_zip) = locate_seven_zip() else {
         eprintln!("skip: 7z.exe not found");
@@ -676,6 +848,7 @@ fn recursively_extracts_misleading_suffix_archive_with_inherited_password() {
         &tools,
         &CancellationToken::default(),
         RecursiveRecoveryOptions::default(),
+        None,
         || panic!("inherited password must avoid dictionary preparation"),
         |update| updates.push(update),
     )
@@ -745,6 +918,7 @@ fn recursively_uses_dictionary_once_for_different_nested_password() {
         &tools,
         &CancellationToken::default(),
         RecursiveRecoveryOptions::default(),
+        None,
         || {
             preparation_count.set(preparation_count.get() + 1);
             Ok(RecoveryDictionary {
@@ -774,6 +948,113 @@ fn recursively_uses_dictionary_once_for_different_nested_password() {
         .unwrap(),
         "nested-dictionary-ok"
     );
+}
+
+#[test]
+fn recursively_uses_dictionary_after_inherited_password_fails_for_split_archive() {
+    let Some(seven_zip) = locate_seven_zip() else {
+        eprintln!("skip: 7z.exe not found");
+        return;
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let payload = dir.path().join("split-nested-payload.bin");
+    let payload_bytes: Vec<u8> = (0..4096).map(|index| (index % 251) as u8).collect();
+    fs::write(&payload, &payload_bytes).unwrap();
+    let outer_password = "outer-split-pass";
+    let inner_password = "inner-split-pass";
+    let split_base = dir.path().join("nested-secret.7z");
+    let split_password_arg = format!("-p{inner_password}");
+    run_seven_zip(
+        &seven_zip,
+        &[
+            "a",
+            "-t7z",
+            "-y",
+            &split_password_arg,
+            "-mhe=on",
+            "-mx=0",
+            "-v2048b",
+            split_base.to_str().unwrap(),
+            payload.to_str().unwrap(),
+        ],
+    );
+    let mut split_parts: Vec<PathBuf> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("nested-secret.7z."))
+        })
+        .collect();
+    split_parts.sort();
+    assert_eq!(split_parts.len(), 3, "fixture must have exactly 3 volumes");
+    let anonymous_names = ["cover.jpg", "middle.bin", "trailer.dat"];
+    for (part, anonymous_name) in split_parts.iter_mut().zip(anonymous_names) {
+        let anonymous_path = dir.path().join(anonymous_name);
+        fs::rename(&*part, &anonymous_path).unwrap();
+        *part = anonymous_path;
+    }
+
+    let outer_archive = dir.path().join("outer-with-split.7z");
+    let outer_password_arg = format!("-p{outer_password}");
+    let mut outer_args = vec![
+        "a".to_owned(),
+        "-t7z".to_owned(),
+        "-y".to_owned(),
+        outer_password_arg,
+        "-mhe=on".to_owned(),
+        outer_archive.display().to_string(),
+    ];
+    outer_args.extend(split_parts.iter().map(|part| part.display().to_string()));
+    let outer_arg_refs: Vec<&str> = outer_args.iter().map(String::as_str).collect();
+    run_seven_zip(&seven_zip, &outer_arg_refs);
+    for part in &split_parts {
+        fs::remove_file(part).unwrap();
+    }
+
+    let dictionary_path = dir.path().join("nested-split.dict");
+    fs::write(&dictionary_path, format!("{inner_password}\n")).unwrap();
+    let output_directory = dir.path().join("nested-split-out");
+    let job = RecoveryJob {
+        archive_path: outer_archive,
+        output_directory,
+        dictionary_path: dictionary_path.clone(),
+        dictionary_count: 1,
+        known_password: Some(outer_password.into()),
+        work_directory: dir.path().join("nested-split-work"),
+    };
+    let tools = RecoveryToolPaths {
+        seven_zip,
+        hashcat: dir.path().join("missing-hashcat"),
+        john_tools_directory: dir.path().join("missing-john"),
+        perl: dir.path().join("missing-perl"),
+    };
+    let preparation_count = std::cell::Cell::new(0);
+
+    let result = recover_and_extract_recursive_lazy(
+        &job,
+        &tools,
+        &CancellationToken::default(),
+        RecursiveRecoveryOptions::default(),
+        None,
+        || {
+            preparation_count.set(preparation_count.get() + 1);
+            Ok(RecoveryDictionary {
+                path: dictionary_path,
+                candidate_count: 1,
+            })
+        },
+        |_| {},
+    )
+    .expect("recursive split recovery");
+
+    assert!(result.root.success, "{}", result.root.message);
+    assert_eq!(preparation_count.get(), 1);
+    assert_eq!(result.discovered_nested_archives, 1);
+    assert_eq!(result.extracted_nested_archives, 1);
+    assert_eq!(result.skipped_nested_archives, 0);
 }
 
 #[test]
@@ -818,6 +1099,7 @@ fn recursive_extraction_enforces_depth_limit() {
             max_nested_archives: 100,
             compute_mode: RecoveryComputeMode::GpuPreferred,
         },
+        None,
         || panic!("plain archives must avoid dictionary preparation"),
         |_| {},
     )
@@ -881,6 +1163,7 @@ fn recursive_extraction_ignores_preexisting_output_archives() {
         &tools,
         &CancellationToken::default(),
         RecursiveRecoveryOptions::default(),
+        None,
         || panic!("plain archive must avoid dictionary preparation"),
         |_| {},
     )
@@ -1082,8 +1365,14 @@ fn dictionary_recovery_cracks_encrypted_7z_and_zip() {
             work_directory: dir.path().join(format!("{name}-convert-work")),
         };
         fs::create_dir_all(&convert_job.work_directory).unwrap();
-        let records = extract_hashes(&convert_job, &tools, format, &CancellationToken::default())
-            .expect("converter should emit hash lines");
+        let records = extract_hashes(
+            &convert_job,
+            &tools,
+            format,
+            std::slice::from_ref(&convert_job.archive_path),
+            &CancellationToken::default(),
+        )
+        .expect("converter should emit hash lines");
         assert!(
             !records.is_empty(),
             "{name}: converter produced no hash records"
@@ -1173,8 +1462,14 @@ fn dictionary_recovery_cracks_openwall_rar_samples() {
             work_directory: dir.path().join(format!("{name}-convert")),
         };
         fs::create_dir_all(&convert_job.work_directory).unwrap();
-        let records = extract_hashes(&convert_job, &tools, format, &CancellationToken::default())
-            .unwrap_or_else(|error| panic!("{name} rar2john failed: {error}"));
+        let records = extract_hashes(
+            &convert_job,
+            &tools,
+            format,
+            std::slice::from_ref(&convert_job.archive_path),
+            &CancellationToken::default(),
+        )
+        .unwrap_or_else(|error| panic!("{name} rar2john failed: {error}"));
         assert!(!records.is_empty(), "{name}: rar2john produced no hashes");
 
         let output_directory = dir.path().join(format!("{name}-out"));
@@ -1268,6 +1563,44 @@ fn cancel_token_kills_long_running_hashcat_attempt() {
             ),
         "expected cancel, got {outcome:?}"
     );
+}
+
+fn test_crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn write_two_part_seven_zip_fixture(first: &Path, second: &Path) {
+    let first_length = 128u64;
+    let second_length = 24u64;
+    let next_header = b"nexthead";
+    let next_header_offset = first_length + second_length
+        - SEVEN_ZIP_START_HEADER_SIZE_FOR_TEST as u64
+        - next_header.len() as u64;
+
+    let mut start_header = [0u8; SEVEN_ZIP_START_HEADER_SIZE_FOR_TEST];
+    start_header[..SEVEN_ZIP_SIGNATURE.len()].copy_from_slice(SEVEN_ZIP_SIGNATURE);
+    start_header[6..8].copy_from_slice(&[0, 4]);
+    start_header[12..20].copy_from_slice(&next_header_offset.to_le_bytes());
+    start_header[20..28].copy_from_slice(&(next_header.len() as u64).to_le_bytes());
+    start_header[28..32].copy_from_slice(&test_crc32(next_header).to_le_bytes());
+    let start_header_crc = test_crc32(&start_header[12..32]);
+    start_header[8..12].copy_from_slice(&start_header_crc.to_le_bytes());
+
+    let mut first_contents = vec![0x11; first_length as usize];
+    first_contents[..start_header.len()].copy_from_slice(&start_header);
+    fs::write(first, first_contents).unwrap();
+    let mut second_contents = vec![0x22; second_length as usize];
+    let next_header_start = second_contents.len() - next_header.len();
+    second_contents[next_header_start..].copy_from_slice(next_header);
+    fs::write(second, second_contents).unwrap();
 }
 
 fn rar_fixture_dir() -> PathBuf {

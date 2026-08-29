@@ -18,6 +18,7 @@ import {
   formatCompactElapsed,
   formatCount,
   formatElapsed,
+  isArchiveContainerFailure,
   pathForDisplay,
   RECOVERY_PHASE_LABELS,
   resolveTaskProgress,
@@ -39,6 +40,7 @@ import type { RecoveryTaskEvent, RecoveryTaskStatus } from "@/lib/recovery"
 import { cn } from "@/lib/utils"
 
 export function RecoveryTaskResult({
+  rootRef,
   task,
   showPassword,
   passwordCopied,
@@ -48,6 +50,7 @@ export function RecoveryTaskResult({
   onOpenOptions,
   onOpenEngineSettings,
 }: {
+  rootRef?: React.Ref<HTMLDivElement>
   task: RecoveryTaskStatus
   showPassword: boolean
   passwordCopied: boolean
@@ -73,11 +76,16 @@ export function RecoveryTaskResult({
       ? "递归处理"
       : RECOVERY_PHASE_LABELS[task.phase]
   const recoveryHint = taskRecoveryHint(task)
+  const archiveContainerFailure = isArchiveContainerFailure(task)
 
   return (
     <div
+      ref={rootRef}
+      tabIndex={-1}
+      role={task.phase === "failed" ? "alert" : "status"}
+      aria-live="polite"
       className={cn(
-        "workbench-panel animate-task-card-enter motion-safe-only overflow-hidden rounded-2xl border bg-card",
+        "workbench-panel animate-task-card-enter motion-safe-only shrink-0 overflow-hidden rounded-2xl border bg-card outline-none",
         task.success
           ? "border-success/35"
           : task.phase === "failed"
@@ -166,23 +174,27 @@ export function RecoveryTaskResult({
               <p className="min-w-52 flex-1 text-xs leading-relaxed text-muted-foreground">
                 {recoveryHint}
               </p>
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                onClick={onOpenOptions}
-              >
-                <Settings2 data-icon="inline-start" />
-                调整选项
-              </Button>
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                onClick={onOpenEngineSettings}
-              >
-                检查引擎
-              </Button>
+              {!archiveContainerFailure ? (
+                <>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={onOpenOptions}
+                  >
+                    <Settings2 data-icon="inline-start" />
+                    调整选项
+                  </Button>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={onOpenEngineSettings}
+                  >
+                    检查引擎
+                  </Button>
+                </>
+              ) : null}
             </div>
           ) : null}
           <RecoveryProcessDetails key={task.taskId} task={task} />
@@ -245,6 +257,9 @@ function taskRecoveryHint(task: RecoveryTaskStatus): string | null {
     return "没有找到可用密码。可补充已知密码、导入候选字典或检查解密引擎后重试。"
   }
   if (task.phase === "failed") {
+    if (isArchiveContainerFailure(task)) {
+      return "7-Zip 无法读取有效归档结构。请确认文件完整，且确实包含可打开的 7z、ZIP 或 RAR 数据；GPU 尚未开始。"
+    }
     return "请先查看详细过程定位原因，再调整输出选项或解密引擎后重试。"
   }
   return null

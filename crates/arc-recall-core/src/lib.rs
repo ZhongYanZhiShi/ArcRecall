@@ -33,8 +33,9 @@ pub use tools::{
     RecoveryComputeDevice, RecoveryComputeMode, RecoveryDictionary, RecoveryError, RecoveryJob,
     RecoveryMethodCapability, RecoveryPhase, RecoveryResult, RecoveryToolPaths, RecoveryUpdate,
     RecursiveRecoveryOptions, RecursiveRecoveryResult, SEVEN_ZIP_VERSION, analyze_archive,
-    compress_archive, fingerprint_file_sha256, path_for_display, prepare_compression,
-    probe_john_perl, probe_recovery_capabilities, recover_and_extract, recover_and_extract_lazy,
+    compress_archive, fingerprint_archive_sha256, fingerprint_archive_sha256_with_cancellation,
+    fingerprint_file_sha256, path_for_display, prepare_compression, probe_john_perl,
+    probe_recovery_capabilities, recover_and_extract, recover_and_extract_lazy,
     recover_and_extract_recursive_lazy, resolve_available_archive_path, sanitize_archive_base_name,
 };
 

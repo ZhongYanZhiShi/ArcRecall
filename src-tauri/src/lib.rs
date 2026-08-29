@@ -23,13 +23,13 @@ use arc_recall_core::{
     DictionaryListResult, FullEngineBundleInstallResult, FullEngineBundleManager,
     FullEngineBundleStatus, HashcatInstallResult, HashcatStatus, HashcatToolDownloader,
     JohnPerlStatus, LoggingSettings, MAX_LOG_MAX_DISK_MIB, MIN_LOG_MAX_DISK_MIB,
-    RecoveryCapabilities, RecoveryComputeMode, RecoveryDictionary, RecoveryError,
-    RecoveryHistoryStore, RecoveryJob, RecoveryPhase, RecoveryToolPaths, RecoveryUpdate,
-    RecursiveRecoveryOptions, SERVICE_NAME, SettingsStore, analyze_archive, compress_archive,
-    fingerprint_file_sha256, generate_archive_name, health_status, list_ai_models,
-    path_for_display, prepare_compression, probe_john_perl, probe_recovery_capabilities,
-    recover_and_extract_recursive_lazy, resolve_tools_directory, test_ai_connection,
-    validate_ai_base_url,
+    RecoveryCapabilities, RecoveryComputeDevice, RecoveryComputeMode, RecoveryDictionary,
+    RecoveryError, RecoveryHistoryStore, RecoveryJob, RecoveryPhase, RecoveryToolPaths,
+    RecoveryUpdate, RecursiveRecoveryOptions, SERVICE_NAME, SettingsStore, analyze_archive,
+    compress_archive, fingerprint_archive_sha256_with_cancellation, generate_archive_name,
+    health_status, list_ai_models, path_for_display, prepare_compression, probe_john_perl,
+    probe_recovery_capabilities, recover_and_extract_recursive_lazy, resolve_tools_directory,
+    test_ai_connection, validate_ai_base_url,
 };
 use clipboard_security::clipboard_clear_if_matches;
 use history_commands::{history_clear, history_delete, history_list, history_reveal_password};
@@ -115,7 +115,6 @@ struct HealthResponse {
 #[serde(rename_all = "camelCase")]
 struct RecoveryStartRequest {
     archive_path: String,
-    fingerprint_sha256: Option<String>,
     output_directory: Option<String>,
     known_password: Option<String>,
     #[serde(default)]
@@ -220,16 +219,6 @@ const fn default_compression_level() -> u8 {
     5
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ArchiveAnalysisResponse {
-    #[serde(flatten)]
-    analysis: ArchiveAnalysis,
-    fingerprint_sha256: String,
-    history_matched: bool,
-    has_saved_password: bool,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RecoveryTaskEvent {
@@ -245,6 +234,18 @@ struct RecoveryTaskEvent {
     scanned_file_count: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum RecoveryFailureKind {
+    InvalidArchive,
+    UnsupportedFormat,
+    MissingTool,
+    NotFound,
+    Io,
+    Process,
+    Other,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RecoveryTaskStatus {
@@ -254,6 +255,9 @@ struct RecoveryTaskStatus {
     completed: bool,
     success: bool,
     cancelled: bool,
+    failure_kind: Option<RecoveryFailureKind>,
+    failure_phase: Option<RecoveryPhase>,
+    gpu_started: bool,
     archive_path: String,
     archive_format: ArchiveFormat,
     archive_format_label: String,
@@ -307,6 +311,8 @@ impl Drop for RecoveryTaskCompletionGuard {
                 Err(poisoned) => poisoned.into_inner(),
             };
             if status.running {
+                status.failure_kind = Some(RecoveryFailureKind::Other);
+                status.failure_phase = Some(status.phase);
                 status.running = false;
                 status.completed = true;
                 status.success = false;
@@ -523,6 +529,48 @@ fn catch_recovery_panic<T>(
             panic_payload_message(payload.as_ref())
         ))),
     }
+}
+
+fn recovery_failure_kind(error: &RecoveryError) -> RecoveryFailureKind {
+    match error {
+        RecoveryError::InvalidArchive(_) => RecoveryFailureKind::InvalidArchive,
+        RecoveryError::UnsupportedFormat => RecoveryFailureKind::UnsupportedFormat,
+        RecoveryError::MissingTool(_) => RecoveryFailureKind::MissingTool,
+        RecoveryError::NotFound(_) => RecoveryFailureKind::NotFound,
+        RecoveryError::Io(_) => RecoveryFailureKind::Io,
+        RecoveryError::Process(_) => RecoveryFailureKind::Process,
+        RecoveryError::Cancelled | RecoveryError::Message(_) => RecoveryFailureKind::Other,
+    }
+}
+
+fn resolve_preferred_recovery_password(
+    manual_password: Option<String>,
+    analysis: &ArchiveAnalysis,
+    database_path: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(Option<String>, Option<String>), RecoveryError> {
+    if manual_password.is_some() {
+        return Ok((manual_password, None));
+    }
+    let fingerprint = fingerprint_archive_sha256_with_cancellation(analysis, cancellation)?;
+    let store = RecoveryHistoryStore::open(database_path)
+        .map_err(|error| RecoveryError::Message(format!("打开恢复历史失败：{error}")))?;
+    let password = history_password_by_fingerprint(&store, &fingerprint)
+        .map_err(|error| RecoveryError::Message(format!("读取恢复历史失败：{error}")))?;
+    Ok((password, Some(fingerprint)))
+}
+
+fn update_recovery_preparation(
+    status: &Arc<Mutex<RecoveryTaskStatus>>,
+    message: impl Into<String>,
+) {
+    let Ok(mut status) = status.lock() else {
+        return;
+    };
+    status.phase = RecoveryPhase::Preparing;
+    status.engine = Some("本机历史".into());
+    status.message = message.into();
+    append_current_recovery_event(&mut status);
 }
 
 #[tauri::command]
@@ -1528,49 +1576,21 @@ async fn tool_set_john_perl(
 async fn archive_analyze(
     state: State<'_, AppState>,
     path: String,
-) -> Result<ArchiveAnalysisResponse, String> {
-    let analyzed = tauri::async_runtime::spawn_blocking(move || {
-        let analysis = analyze_archive(path).map_err(|error| error.to_string())?;
-        let fingerprint_sha256 =
-            fingerprint_file_sha256(&analysis.archive_path).map_err(|error| error.to_string())?;
-        Ok::<_, String>((analysis, fingerprint_sha256))
+) -> Result<ArchiveAnalysis, String> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        analyze_archive(path).map_err(|error| error.to_string())
     })
     .await
     .map_err(|error| error.to_string())
     .and_then(|result| result);
-    let result = analyzed.and_then(|(analysis, fingerprint_sha256)| {
-        let (history_matched, has_saved_password) = {
-            let store = state.history.lock().map_err(|error| error.to_string())?;
-            let matched = store
-                .contains(&fingerprint_sha256)
-                .map_err(|error| error.to_string())?;
-            let has_password = store
-                .protected_password_by_fingerprint(&fingerprint_sha256)
-                .map_err(|error| error.to_string())?
-                .is_some();
-            (matched, has_password)
-        };
-        Ok(ArchiveAnalysisResponse {
-            analysis,
-            fingerprint_sha256,
-            history_matched,
-            has_saved_password,
-        })
-    });
     match &result {
-        Ok(response) => write_log(
+        Ok(analysis) => write_log(
             &state.logger,
             LogLevel::Debug,
             "recovery",
             "archive.analyzed",
             "归档分析已完成。",
-            [
-                ("format".into(), response.analysis.format_label.clone()),
-                (
-                    "history_matched".into(),
-                    response.history_matched.to_string(),
-                ),
-            ],
+            [("format".into(), analysis.format_label.clone())],
         ),
         Err(_) => write_log(
             &state.logger,
@@ -1852,28 +1872,11 @@ async fn recovery_start(
     let archive_path = std::fs::canonicalize(PathBuf::from(&request.archive_path))
         .map_err(|error| format!("无法解析归档路径：{error}"))?;
     let analysis = analyze_archive(&archive_path).map_err(|error| error.to_string())?;
-    let fingerprint_sha256 =
-        fingerprint_file_sha256(&archive_path).map_err(|error| error.to_string())?;
-    if let Some(supplied_fingerprint) = request
-        .fingerprint_sha256
-        .as_deref()
-        .filter(|value| is_sha256_fingerprint(value))
-        && !supplied_fingerprint.eq_ignore_ascii_case(&fingerprint_sha256)
-    {
-        return Err("归档内容自分析后已发生变化，请重新选择并分析该文件。".into());
-    }
     let manual_password = request
         .known_password
         .as_deref()
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
-    let history_password = if manual_password.is_none() {
-        let store = state.history.lock().map_err(|error| error.to_string())?;
-        history_password_by_fingerprint(&store, &fingerprint_sha256)?
-    } else {
-        None
-    };
-    let preferred_password = manual_password.or(history_password);
     let mut output_directory = request
         .output_directory
         .as_deref()
@@ -1908,7 +1911,12 @@ async fn recovery_start(
     let work_directory = state.paths.temp.join("recovery").join(&task_id);
     let dictionary_path = work_directory.join("dictionary.txt");
     let started_at_ms = current_time_ms();
-    let initial_message = "恢复任务已启动，正在优先检查免密与手动密码。".to_owned();
+    let initial_message = if manual_password.is_some() {
+        "恢复任务已启动，正在优先检查免密与手动密码。"
+    } else {
+        "恢复任务已启动，正在后台计算完整指纹并查找历史密码。"
+    }
+    .to_owned();
     let initial_events = VecDeque::from([RecoveryTaskEvent {
         sequence: 1,
         elapsed_ms: 0,
@@ -1929,6 +1937,9 @@ async fn recovery_start(
         completed: false,
         success: false,
         cancelled: false,
+        failure_kind: None,
+        failure_phase: None,
+        gpu_started: false,
         archive_path: analysis.archive_path.clone(),
         archive_format: analysis.format,
         archive_format_label: analysis.format_label.clone(),
@@ -1990,24 +2001,51 @@ async fn recovery_start(
         output_directory,
         dictionary_path: dictionary_path.clone(),
         dictionary_count: 0,
-        known_password: preferred_password,
+        known_password: manual_password,
         work_directory: work_directory.clone(),
     };
     let status_for_worker = Arc::clone(&status);
+    let status_for_history = Arc::clone(&status);
     let status_for_updates = Arc::clone(&status);
     let status_for_dictionary = Arc::clone(&status);
     let dictionary_database_path = state.paths.database.clone();
     let dictionary_cancellation = cancellation.clone();
+    let history_database_path = state.paths.database.clone();
     let success_database_path = state.paths.database.clone();
+    let analysis_for_history = analysis.clone();
     let logger_for_worker = Arc::clone(&state.logger);
     let logger_for_updates = Arc::clone(&state.logger);
     let worker_task_id = initial.task_id.clone();
     let update_task_id = initial.task_id.clone();
     std::thread::spawn(move || {
+        let mut job = job;
+        let mut precomputed_fingerprint_sha256 = None;
         let mut completion_guard =
             RecoveryTaskCompletionGuard::new(Arc::clone(&status_for_worker), work_directory);
         let mut last_logged_phase = None;
         let outcome = catch_recovery_panic(|| {
+            if job.known_password.is_none() {
+                update_recovery_preparation(
+                    &status_for_history,
+                    "正在后台计算完整归档指纹并查找本机历史密码。",
+                );
+                let (preferred_password, fingerprint_sha256) = resolve_preferred_recovery_password(
+                    None,
+                    &analysis_for_history,
+                    &history_database_path,
+                    &cancellation,
+                )?;
+                job.known_password = preferred_password;
+                precomputed_fingerprint_sha256 = fingerprint_sha256;
+                update_recovery_preparation(
+                    &status_for_history,
+                    if job.known_password.is_some() {
+                        "已命中本机历史密码，正在优先复验。"
+                    } else {
+                        "未命中可复用的历史密码，正在检查归档。"
+                    },
+                );
+            }
             recover_and_extract_recursive_lazy(
                 &job,
                 &tools,
@@ -2018,6 +2056,7 @@ async fn recovery_start(
                     max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
                     compute_mode: initial.compute_mode,
                 },
+                precomputed_fingerprint_sha256,
                 move || {
                     if dictionary_cancellation.is_cancelled() {
                         return Err(RecoveryError::Cancelled);
@@ -2055,6 +2094,9 @@ async fn recovery_start(
                         last_logged_phase = Some(update.phase);
                     }
                     if let Ok(mut task_status) = status_for_updates.lock() {
+                        if update.compute_device == Some(RecoveryComputeDevice::Gpu) {
+                            task_status.gpu_started = true;
+                        }
                         task_status.phase = update.phase;
                         task_status.engine = update.engine;
                         task_status.message = update.message;
@@ -2251,6 +2293,8 @@ async fn recovery_start(
                     );
                 }
                 Err(error) => {
+                    task_status.failure_kind = Some(recovery_failure_kind(&error));
+                    task_status.failure_phase = Some(task_status.phase);
                     task_status.phase = RecoveryPhase::Failed;
                     task_status.message = error.to_string();
                     append_current_recovery_event(&mut task_status);
@@ -2425,10 +2469,6 @@ fn current_time_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or_default()
-}
-
-fn is_sha256_fingerprint(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn next_recovery_task_id() -> String {
@@ -2724,6 +2764,9 @@ mod tests {
             completed: false,
             success: false,
             cancelled: false,
+            failure_kind: None,
+            failure_phase: None,
+            gpu_started: false,
             archive_path: "archive.7z".into(),
             archive_format: ArchiveFormat::SevenZip,
             archive_format_label: "7z".into(),
@@ -2763,6 +2806,66 @@ mod tests {
     }
 
     #[test]
+    fn recovery_errors_map_to_structured_failure_kinds() {
+        assert_eq!(
+            recovery_failure_kind(&RecoveryError::InvalidArchive("broken".into())),
+            RecoveryFailureKind::InvalidArchive
+        );
+        assert_eq!(
+            recovery_failure_kind(&RecoveryError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "denied",
+            ))),
+            RecoveryFailureKind::Io
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn multi_volume_history_password_is_reused_by_full_fingerprint() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("archive.7z.001");
+        let second = directory.path().join("archive.7z.002");
+        std::fs::write(&first, b"first-volume").unwrap();
+        std::fs::write(&second, b"second-volume").unwrap();
+        let analysis = ArchiveAnalysis {
+            archive_path: path_for_display(&first),
+            file_name: "archive.7z.001".into(),
+            format: ArchiveFormat::SevenZip,
+            format_label: "7z".into(),
+            file_size: 25,
+            volume_count: 2,
+            volume_paths: vec![first, second],
+            suggested_output_directory: path_for_display(&directory.path().join("archive")),
+        };
+        let fingerprint = arc_recall_core::fingerprint_archive_sha256(&analysis).unwrap();
+        let database = directory.path().join("history.db");
+        let report = save_recovered_history(
+            &database,
+            &[arc_recall_core::RecoveredArchive {
+                fingerprint_sha256: fingerprint.clone(),
+                archive_format: ArchiveFormat::SevenZip,
+                file_size: analysis.file_size,
+                volume_count: analysis.volume_count,
+                password: Some("remembered-password".into()),
+            }],
+            current_time_ms(),
+        );
+        assert_eq!(report.saved_count, 1);
+
+        let (resolved, resolved_fingerprint) = resolve_preferred_recovery_password(
+            None,
+            &analysis,
+            &database,
+            &CancellationToken::default(),
+        )
+        .unwrap();
+
+        assert_eq!(resolved.as_deref(), Some("remembered-password"));
+        assert_eq!(resolved_fingerprint.as_deref(), Some(fingerprint.as_str()));
+    }
+
+    #[test]
     fn recovery_completion_guard_finalizes_and_cleans_after_unwind() {
         let directory = tempfile::tempdir().expect("tempdir");
         let work_directory = directory.path().join("recovery-work");
@@ -2779,6 +2882,8 @@ mod tests {
         assert!(!status.running);
         assert!(status.completed);
         assert_eq!(status.phase, RecoveryPhase::Failed);
+        assert_eq!(status.failure_kind, Some(RecoveryFailureKind::Other));
+        assert_eq!(status.failure_phase, Some(RecoveryPhase::Preparing));
         assert!(!work_directory.exists());
     }
 }
