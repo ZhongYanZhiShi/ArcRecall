@@ -14,6 +14,7 @@ import {
 } from "lucide-react"
 import * as React from "react"
 
+import { useAiSettingsController } from "@/components/home/use-ai-settings-controller"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -79,40 +80,9 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import {
   AI_PROVIDER_DEFAULTS,
-  deleteAiProfile,
-  listAiModels,
-  listAiProfiles,
-  testAiConnection,
-  updateAiSettings,
-  upsertAiProfile,
   type AiModelInfo,
-  type AiProfile,
   type AiProviderKind,
-  type AiSettings,
 } from "@/lib/ai"
-import { validateAiServiceUrl } from "@/lib/ai-url"
-
-type ProfileDraft = {
-  id: string | null
-  name: string
-  provider: AiProviderKind
-  baseUrl: string
-  model: string
-  apiKey: string
-  hasApiKey: boolean
-  clearApiKey: boolean
-}
-
-type InvalidProfileField = "name" | "baseUrl"
-
-type OperationFeedback = {
-  message: string
-  error: boolean
-}
-
-type PendingDraftAction =
-  | { type: "create" }
-  | { type: "select"; profile: AiProfile }
 
 export type AiSettingsPanelHandle = {
   saveUnsavedChanges: () => Promise<boolean>
@@ -154,390 +124,47 @@ export const AiSettingsPanel = React.forwardRef<
   AiSettingsPanelProps
 >(function AiSettingsPanel({ onDirtyChange }, ref) {
   const modelComboboxAnchor = useComboboxAnchor()
-  const [settings, setSettings] = React.useState<AiSettings | null>(null)
-  const [draft, setDraft] = React.useState<ProfileDraft>(() =>
-    newProfileDraft("ollama")
-  )
-  const [models, setModels] = React.useState<AiModelInfo[]>([])
-  const [prompt, setPrompt] = React.useState("")
-  const [busyScope, setBusyScope] = React.useState<"profile" | "prompt" | null>(
-    null
-  )
-  const busy = busyScope !== null
-  const profileBusy = busyScope === "profile"
-  const promptBusy = busyScope === "prompt"
-  const [profileFeedback, setProfileFeedback] =
-    React.useState<OperationFeedback | null>(null)
-  const [promptFeedback, setPromptFeedback] =
-    React.useState<OperationFeedback | null>(null)
-  const [deleteOpen, setDeleteOpen] = React.useState(false)
-  const [pendingDraftAction, setPendingDraftAction] =
-    React.useState<PendingDraftAction | null>(null)
-  const [invalidField, setInvalidField] =
-    React.useState<InvalidProfileField | null>(null)
+  const controller = useAiSettingsController({ onDirtyChange })
+  const {
+    settings,
+    draft,
+    setDraft,
+    models,
+    prompt,
+    setPrompt,
+    busy,
+    profileBusy,
+    promptBusy,
+    profileFeedback,
+    setProfileFeedback,
+    promptFeedback,
+    setPromptFeedback,
+    deleteOpen,
+    setDeleteOpen,
+    pendingDraftAction,
+    setPendingDraftAction,
+    invalidField,
+    setInvalidField,
+    isActive,
+    profileDirty,
+    promptDirty,
+    providerMeta,
+    renamePromptError,
+    applyDraftAction,
+    handleProviderChange,
+    handleSaveProfile,
+    handleLoadModels,
+    handleTest,
+    handleSaveRenameSettings,
+    handleDelete,
+    requestDraftAction,
+    handleSavePendingDraft,
+    saveUnsavedChanges,
+  } = controller
 
-  const applySettings = React.useCallback(
-    (next: AiSettings, preferredId?: string | null, syncPrompt = true) => {
-      setSettings(next)
-      if (syncPrompt) {
-        setPrompt(next.renamePrompt)
-      }
-      const selected =
-        next.profiles.find((profile) => profile.id === preferredId) ??
-        next.profiles.find((profile) => profile.id === next.activeProfileId) ??
-        next.profiles[0]
-      if (selected) {
-        setDraft(profileToDraft(selected))
-      } else {
-        setDraft(newProfileDraft("ollama"))
-      }
-    },
-    []
-  )
-
-  React.useEffect(() => {
-    let disposed = false
-    void listAiProfiles()
-      .then((next) => {
-        if (!disposed) {
-          applySettings(next)
-        }
-      })
-      .catch((reason) => {
-        if (!disposed) {
-          setProfileFeedback({
-            error: true,
-            message: `读取 AI 配置失败：${toErrorMessage(reason)}`,
-          })
-        }
-      })
-    return () => {
-      disposed = true
-    }
-  }, [applySettings])
-
-  const applyDraftAction = (action: PendingDraftAction) => {
-    if (action.type === "select") {
-      setDraft(profileToDraft(action.profile))
-    } else {
-      setDraft(newProfileDraft("ollama"))
-    }
-    setModels([])
-    setProfileFeedback(null)
-    setInvalidField(null)
-    setPendingDraftAction(null)
-  }
-
-  const handleProviderChange = (provider: AiProviderKind) => {
-    const defaults = AI_PROVIDER_DEFAULTS[provider]
-    setDraft((current) => ({
-      ...current,
-      provider,
-      baseUrl: defaults.baseUrl,
-      model: defaults.model,
-    }))
-    setModels([])
-    setInvalidField(null)
-    setProfileFeedback(null)
-  }
-
-  const validateDraft = (): {
-    field: InvalidProfileField
-    message: string
-  } | null => {
-    if (!draft.name.trim()) {
-      return { field: "name", message: "请输入配置名称。" }
-    }
-    if (!draft.baseUrl.trim()) {
-      return {
-        field: "baseUrl",
-        message: "请输入模型服务地址。",
-      }
-    }
-    const baseUrlError = validateAiServiceUrl(draft.baseUrl)
-    if (baseUrlError) {
-      return {
-        field: "baseUrl",
-        message: baseUrlError,
-      }
-    }
-    return null
-  }
-
-  const clientDraftRequest = () => ({
-    profileId: draft.id,
-    provider: draft.provider,
-    baseUrl: draft.baseUrl.trim(),
-    model: draft.model.trim(),
-    apiKey: draft.apiKey.trim() || undefined,
-    clearApiKey: draft.clearApiKey,
-  })
-
-  const persistDraft = async (makeActive = false): Promise<AiSettings> => {
-    const shouldActivate = makeActive || draft.id === null
-    const next = await upsertAiProfile({
-      id: draft.id,
-      name: draft.name.trim(),
-      provider: draft.provider,
-      baseUrl: draft.baseUrl.trim(),
-      model: draft.model.trim(),
-      apiKey: draft.apiKey.trim() || undefined,
-      clearApiKey: draft.clearApiKey,
-      makeActive: shouldActivate,
-    })
-    const profileId = draft.id ?? next.activeProfileId
-    applySettings(next, profileId, false)
-    return next
-  }
-
-  const handleSaveProfile = async (
-    makeActive = false
-  ): Promise<AiSettings | null> => {
-    if (busy) {
-      return null
-    }
-    const validationError = validateDraft()
-    if (validationError) {
-      setInvalidField(validationError.field)
-      setProfileFeedback({ error: true, message: validationError.message })
-      return null
-    }
-    setInvalidField(null)
-    setBusyScope("profile")
-    setProfileFeedback({ error: false, message: "正在保存 AI 配置…" })
-    try {
-      const shouldActivate = makeActive || draft.id === null
-      const next = await persistDraft(makeActive)
-      setProfileFeedback({
-        error: false,
-        message: shouldActivate
-          ? "配置已保存并设为当前 AI 模型。"
-          : "AI 配置已保存。",
-      })
-      return next
-    } catch (reason) {
-      setProfileFeedback({
-        error: true,
-        message: `保存失败：${toErrorMessage(reason)}`,
-      })
-      return null
-    } finally {
-      setBusyScope(null)
-    }
-  }
-
-  const handleLoadModels = async () => {
-    if (busy) {
-      return
-    }
-    const validationError = validateDraft()
-    if (validationError) {
-      setInvalidField(validationError.field)
-      setProfileFeedback({ error: true, message: validationError.message })
-      return
-    }
-    setInvalidField(null)
-    setBusyScope("profile")
-    setProfileFeedback({
-      error: false,
-      message: "正在获取当前草稿的模型列表，不会保存更改…",
-    })
-    try {
-      const next = await listAiModels(clientDraftRequest())
-      setModels(next)
-      setProfileFeedback({
-        error: false,
-        message:
-          next.length > 0
-            ? `已获取 ${next.length} 个模型，可从列表选择或继续手动填写。`
-            : "连接成功，但服务没有返回模型；可手动填写模型标识。",
-      })
-    } catch (reason) {
-      setProfileFeedback({
-        error: true,
-        message: `获取模型失败：${toErrorMessage(reason)}`,
-      })
-    } finally {
-      setBusyScope(null)
-    }
-  }
-
-  const handleTest = async () => {
-    if (busy) {
-      return
-    }
-    const validationError = validateDraft()
-    if (validationError) {
-      setInvalidField(validationError.field)
-      setProfileFeedback({ error: true, message: validationError.message })
-      return
-    }
-    setInvalidField(null)
-    setBusyScope("profile")
-    setProfileFeedback({
-      error: false,
-      message: "正在测试当前草稿，不会保存更改…",
-    })
-    try {
-      const result = await testAiConnection(clientDraftRequest())
-      setProfileFeedback({ error: !result.success, message: result.message })
-    } catch (reason) {
-      setProfileFeedback({
-        error: true,
-        message: `连接失败：${toErrorMessage(reason)}`,
-      })
-    } finally {
-      setBusyScope(null)
-    }
-  }
-
-  const handleSaveRenameSettings = async (
-    activeProfileId = settings?.activeProfileId ?? ""
-  ): Promise<boolean> => {
-    if (!settings || busy) {
-      return false
-    }
-    if (!prompt.trim()) {
-      setPromptFeedback({ error: true, message: "提示词不能为空。" })
-      return false
-    }
-    if (prompt.length > 2_000) {
-      setPromptFeedback({
-        error: true,
-        message: "提示词不能超过 2000 个字符。",
-      })
-      return false
-    }
-    setBusyScope("prompt")
-    setPromptFeedback({
-      error: false,
-      message: "正在保存 AI 重命名设置…",
-    })
-    try {
-      const next = await updateAiSettings({
-        activeProfileId,
-        renamePrompt: prompt,
-      })
-      applySettings(next, draft.id)
-      setPromptFeedback({
-        error: false,
-        message: "AI 重命名提示词已保存。",
-      })
-      return true
-    } catch (reason) {
-      setPromptFeedback({
-        error: true,
-        message: `保存失败：${toErrorMessage(reason)}`,
-      })
-      return false
-    } finally {
-      setBusyScope(null)
-    }
-  }
-
-  const handleDelete = async () => {
-    if (!draft.id || busy) {
-      return
-    }
-    setBusyScope("profile")
-    setProfileFeedback(null)
-    try {
-      const next = await deleteAiProfile(draft.id)
-      setModels([])
-      applySettings(next, undefined, false)
-      setDeleteOpen(false)
-      setProfileFeedback({
-        error: false,
-        message: "AI 配置和对应的系统凭据已删除。",
-      })
-    } catch (reason) {
-      setProfileFeedback({
-        error: true,
-        message: `删除失败：${toErrorMessage(reason)}`,
-      })
-    } finally {
-      setBusyScope(null)
-    }
-  }
-
-  const isActive = draft.id !== null && settings?.activeProfileId === draft.id
-  const savedProfile = settings?.profiles.find(
-    (profile) => profile.id === draft.id
-  )
-  const profileDirty = isProfileDraftDirty(draft, savedProfile)
-  const promptDirty = settings !== null && prompt !== settings.renamePrompt
-  const hasUnsavedChanges = profileDirty || promptDirty
-  const providerMeta = AI_PROVIDER_DEFAULTS[draft.provider]
-  const renamePromptError =
-    settings !== null && !prompt.trim()
-      ? "提示词不能为空。"
-      : prompt.length > 2_000
-        ? "提示词不能超过 2000 个字符。"
-        : null
-
-  const requestDraftAction = (action: PendingDraftAction) => {
-    if (busy) {
-      return
-    }
-    if (action.type === "select" && action.profile.id === draft.id) {
-      return
-    }
-    if (profileDirty) {
-      setPendingDraftAction(action)
-      return
-    }
-    applyDraftAction(action)
-  }
-
-  const handleSavePendingDraft = async () => {
-    if (!pendingDraftAction) {
-      return
-    }
-    const action = pendingDraftAction
-    const savedSettings = await handleSaveProfile(false)
-    if (savedSettings) {
-      applyDraftAction(action)
-    } else {
-      setPendingDraftAction(null)
-    }
-  }
-
-  React.useImperativeHandle(ref, () => ({
-    saveUnsavedChanges: async () => {
-      if (busy) {
-        return false
-      }
-      let activeProfileId = settings?.activeProfileId
-      if (profileDirty) {
-        const savedSettings = await handleSaveProfile(false)
-        if (!savedSettings) {
-          return false
-        }
-        activeProfileId = savedSettings.activeProfileId
-      }
-      if (promptDirty && !(await handleSaveRenameSettings(activeProfileId))) {
-        return false
-      }
-      return true
-    },
-  }))
-
-  React.useEffect(() => {
-    onDirtyChange?.(hasUnsavedChanges)
-    return () => onDirtyChange?.(false)
-  }, [hasUnsavedChanges, onDirtyChange])
-
-  React.useEffect(() => {
-    if (!hasUnsavedChanges) {
-      return
-    }
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault()
-      event.returnValue = ""
-    }
-    window.addEventListener("beforeunload", handleBeforeUnload)
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload)
-  }, [hasUnsavedChanges])
+  React.useImperativeHandle(ref, () => ({ saveUnsavedChanges }), [
+    saveUnsavedChanges,
+  ])
 
   return (
     <div className="flex flex-col gap-2">
@@ -1091,59 +718,3 @@ export const AiSettingsPanel = React.forwardRef<
     </div>
   )
 })
-
-function newProfileDraft(provider: AiProviderKind): ProfileDraft {
-  const defaults = AI_PROVIDER_DEFAULTS[provider]
-  return {
-    id: null,
-    name: defaults.label,
-    provider,
-    baseUrl: defaults.baseUrl,
-    model: defaults.model,
-    apiKey: "",
-    hasApiKey: false,
-    clearApiKey: false,
-  }
-}
-
-function profileToDraft(profile: AiProfile): ProfileDraft {
-  return {
-    id: profile.id,
-    name: profile.name,
-    provider: profile.provider,
-    baseUrl: profile.baseUrl,
-    model: profile.model,
-    apiKey: "",
-    hasApiKey: profile.hasApiKey,
-    clearApiKey: false,
-  }
-}
-
-function isProfileDraftDirty(
-  draft: ProfileDraft,
-  profile: AiProfile | undefined
-): boolean {
-  if (!profile) {
-    const initial = newProfileDraft("ollama")
-    return (
-      draft.name !== initial.name ||
-      draft.provider !== initial.provider ||
-      draft.baseUrl !== initial.baseUrl ||
-      draft.model !== initial.model ||
-      draft.apiKey.trim().length > 0 ||
-      draft.clearApiKey
-    )
-  }
-  return (
-    draft.name !== profile.name ||
-    draft.provider !== profile.provider ||
-    draft.baseUrl !== profile.baseUrl ||
-    draft.model !== profile.model ||
-    draft.apiKey.trim().length > 0 ||
-    draft.clearApiKey
-  )
-}
-
-function toErrorMessage(reason: unknown) {
-  return reason instanceof Error ? reason.message : String(reason ?? "未知错误")
-}
