@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use arc_recall_core::{
     ArchiveAnalysis, CancellationToken, DEFAULT_RECURSIVE_MAX_ARCHIVES,
-    DEFAULT_RECURSIVE_MAX_DEPTH, DictionaryCandidateStore, RecoveryComputeDevice,
+    DEFAULT_RECURSIVE_MAX_DEPTH, DictionaryCandidateStore, DictionaryError, RecoveryComputeDevice,
     RecoveryComputeMode, RecoveryDictionary, RecoveryError, RecoveryHistoryStore, RecoveryJob,
     RecoveryPhase, RecursiveRecoveryOptions, analyze_archive,
     fingerprint_archive_sha256_with_cancellation, path_for_display,
@@ -17,7 +17,7 @@ use serde::Deserialize;
 use tauri::State;
 
 use crate::LogLevel;
-use crate::engine_commands::{full_bundle_manager, recovery_tool_paths};
+use crate::engine_commands::{recovery_tool_paths, require_seven_zip};
 use crate::history_support::{history_password_by_fingerprint, save_recovered_history};
 use crate::task_coordination::TaskStartReservation;
 use crate::{AppState, current_time_ms, ensure_no_active_archive_task, write_log};
@@ -86,6 +86,8 @@ pub(crate) async fn recovery_start(
     state: State<'_, AppState>,
     request: RecoveryStartRequest,
 ) -> Result<RecoveryTaskStatus, String> {
+    let task_lease = state.lifecycle.begin()?;
+    let cancellation = task_lease.cancellation.clone();
     let start_reservation = TaskStartReservation::acquire(
         &state.archive_task_starting,
         "另一个归档任务正在启动，请勿重复提交。",
@@ -107,9 +109,18 @@ pub(crate) async fn recovery_start(
     );
     ensure_no_active_archive_task(&state)?;
 
-    let archive_path = std::fs::canonicalize(PathBuf::from(&request.archive_path))
-        .map_err(|error| format!("无法解析归档路径：{error}"))?;
-    let analysis = analyze_archive(&archive_path).map_err(|error| error.to_string())?;
+    let requested_path = PathBuf::from(&request.archive_path);
+    let (archive_path, analysis) = tauri::async_runtime::spawn_blocking(move || {
+        let path = std::fs::canonicalize(requested_path)
+            .map_err(|error| format!("无法解析归档路径：{error}"))?;
+        let analysis = analyze_archive(&path).map_err(|error| error.to_string())?;
+        Ok::<_, String>((path, analysis))
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    if cancellation.is_cancelled() {
+        return Err("恢复任务已取消。".into());
+    }
     let manual_password = request
         .known_password
         .as_deref()
@@ -131,22 +142,14 @@ pub(crate) async fn recovery_start(
         return Err("输出位置已存在且不是目录。".into());
     }
 
-    let manager = full_bundle_manager(&state)?;
-    let bundle_status = manager.status();
-    // Empty / known-password paths only need 7-Zip. Dictionary recovery validates
-    // Hashcat / John / *2john later inside recover_and_extract.
-    if !bundle_status.seven_zip.runnable {
-        if bundle_status.bundled {
-            return Err(
-                "7-Zip 尚未部署，请先在“设置 → 解密引擎”中安装完整包（至少部署 7-Zip）。".into(),
-            );
-        }
-        return Err("当前构建未提供 7-Zip 资源，请使用完整发行构建并安装引擎包。".into());
+    require_seven_zip(&state).await?;
+    if cancellation.is_cancelled() {
+        return Err("恢复任务已取消。".into());
     }
     let tools = recovery_tool_paths(&state)?;
 
     let task_id = next_recovery_task_id();
-    let work_directory = state.paths.temp.join("recovery").join(&task_id);
+    let work_directory = state.recovery_session.directory().join(&task_id);
     let dictionary_path = work_directory.join("dictionary.txt");
     let started_at_ms = current_time_ms();
     let initial_message = if manual_password.is_some() {
@@ -202,7 +205,6 @@ pub(crate) async fn recovery_start(
         count_limit_reached: false,
         events: initial_events,
     }));
-    let cancellation = CancellationToken::default();
     {
         let mut current = state
             .recovery_task
@@ -256,6 +258,7 @@ pub(crate) async fn recovery_start(
     let worker_task_id = initial.task_id.clone();
     let update_task_id = initial.task_id.clone();
     std::thread::spawn(move || {
+        let _task_lease = task_lease;
         let mut job = job;
         let mut precomputed_fingerprint_sha256 = None;
         let mut completion_guard =
@@ -302,9 +305,14 @@ pub(crate) async fn recovery_start(
                     let store = DictionaryCandidateStore::open(dictionary_database_path).map_err(
                         |error| RecoveryError::Message(format!("打开全局字典失败：{error}")),
                     )?;
-                    let candidate_count =
-                        store.export_wordlist(&dictionary_path).map_err(|error| {
-                            RecoveryError::Message(format!("准备恢复字典失败：{error}"))
+                    let candidate_count = store
+                        .export_wordlist_with_cancellation(
+                            &dictionary_path,
+                            &dictionary_cancellation,
+                        )
+                        .map_err(|error| match error {
+                            DictionaryError::Cancelled => RecoveryError::Cancelled,
+                            other => RecoveryError::Message(format!("准备恢复字典失败：{other}")),
                         })?;
                     if let Ok(mut task_status) = status_for_dictionary.lock() {
                         task_status.candidate_count = candidate_count;
@@ -370,6 +378,26 @@ pub(crate) async fn recovery_start(
                 },
             )
         });
+        // Persistence can wait on SQLite or the OS credential provider. Keep
+        // status readable until it is ready to publish the final result.
+        let (history_save, dictionary_update_failed_count) = match &outcome {
+            Ok(result) if result.root.success => {
+                if let Ok(mut status) = status_for_worker.lock() {
+                    status.message = "恢复完成，正在保存本机历史记录。".into();
+                }
+                let history_save = save_recovered_history(
+                    &success_database_path,
+                    &result.recovered_archives,
+                    current_time_ms(),
+                );
+                let failed_count = DictionaryCandidateStore::open(&success_database_path)
+                    .and_then(|store| store.increment_success_many(&result.recovered_passwords))
+                    .map(|_| 0)
+                    .unwrap_or(result.recovered_passwords.len());
+                (history_save, failed_count)
+            }
+            _ => (Default::default(), 0),
+        };
         let mut task_status = match status_for_worker.lock() {
             Ok(status) => status,
             Err(poisoned) => poisoned.into_inner(),
@@ -380,27 +408,6 @@ pub(crate) async fn recovery_start(
             task_status.elapsed_ms = current_time_ms().saturating_sub(task_status.started_at_ms);
             match outcome {
                 Ok(result) => {
-                    let history_save = if result.root.success {
-                        save_recovered_history(
-                            &success_database_path,
-                            &result.recovered_archives,
-                            current_time_ms(),
-                        )
-                    } else {
-                        Default::default()
-                    };
-                    let dictionary_update_failed_count = if result.root.success {
-                        match DictionaryCandidateStore::open(&success_database_path) {
-                            Ok(store) => result
-                                .recovered_passwords
-                                .iter()
-                                .filter(|password| store.increment_success(password).is_err())
-                                .count(),
-                            Err(_) => result.recovered_passwords.len(),
-                        }
-                    } else {
-                        0
-                    };
                     task_status.success = result.root.success;
                     task_status.cancelled = result.root.cancelled;
                     task_status.phase = if result.root.cancelled {
@@ -439,6 +446,7 @@ pub(crate) async fn recovery_start(
                     task_status.current_archive_path = None;
                     task_status.recursive_depth = 0;
                     append_current_recovery_event(&mut task_status);
+                    drop(task_status);
                     write_log(
                         &logger_for_worker,
                         if result.root.success || result.root.cancelled {
@@ -521,6 +529,7 @@ pub(crate) async fn recovery_start(
                     task_status.phase = RecoveryPhase::Cancelled;
                     task_status.message = "密码恢复任务已取消。".into();
                     append_current_recovery_event(&mut task_status);
+                    drop(task_status);
                     write_log(
                         &logger_for_worker,
                         LogLevel::Info,
@@ -536,6 +545,7 @@ pub(crate) async fn recovery_start(
                     task_status.phase = RecoveryPhase::Failed;
                     task_status.message = error.to_string();
                     append_current_recovery_event(&mut task_status);
+                    drop(task_status);
                     write_log(
                         &logger_for_worker,
                         LogLevel::Error,
@@ -547,7 +557,6 @@ pub(crate) async fn recovery_start(
                 }
             }
         }
-        drop(task_status);
         completion_guard.mark_finalized();
     });
 

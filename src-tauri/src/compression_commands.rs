@@ -10,7 +10,7 @@ use arc_recall_core::{
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::engine_commands::full_bundle_manager;
+use crate::engine_commands::require_seven_zip;
 use crate::logging::LogLevel;
 use crate::task_coordination::TaskStartReservation;
 use crate::{
@@ -127,19 +127,17 @@ pub(crate) async fn compression_start(
     state: State<'_, AppState>,
     request: CompressionStartRequest,
 ) -> Result<CompressionTaskStatus, String> {
+    let task_lease = state.lifecycle.begin()?;
+    let cancellation = task_lease.cancellation.clone();
     let start_reservation = TaskStartReservation::acquire(
         &state.archive_task_starting,
         "另一个归档任务正在启动，请勿重复提交。",
     )?;
     ensure_no_active_archive_task(&state)?;
 
-    let manager = full_bundle_manager(&state)?;
-    let bundle_status = manager.status();
-    if !bundle_status.seven_zip.runnable {
-        if bundle_status.bundled {
-            return Err("7-Zip 尚未部署，请先在“设置 → 解密引擎”中安装完整包。".into());
-        }
-        return Err("当前构建未提供 7-Zip 资源，请使用完整发行构建并安装引擎包。".into());
+    let seven_zip = require_seven_zip(&state).await?;
+    if cancellation.is_cancelled() {
+        return Err("压缩任务已取消。".into());
     }
 
     let task_id = next_compression_task_id();
@@ -148,7 +146,7 @@ pub(crate) async fn compression_start(
         request.use_permanent_password,
         get_permanent_compression_password,
     )?;
-    let prepared = prepare_compression(CompressionJob {
+    let job = CompressionJob {
         sources: request.sources.into_iter().map(PathBuf::from).collect(),
         output_directory: request
             .output_directory
@@ -161,8 +159,14 @@ pub(crate) async fn compression_start(
         password,
         encrypt_file_names: request.encrypt_file_names,
         work_id: task_id.clone(),
-    })
-    .map_err(|error| error.to_string())?;
+    };
+    let prepared = tauri::async_runtime::spawn_blocking(move || prepare_compression(job))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+    if cancellation.is_cancelled() {
+        return Err("压缩任务已取消。".into());
+    }
     let started_at_ms = current_time_ms();
     let initial = CompressionTaskStatus {
         task_id: task_id.clone(),
@@ -182,7 +186,6 @@ pub(crate) async fn compression_start(
         output_path: path_for_display(prepared.output_path()),
     };
     let status = Arc::new(Mutex::new(initial.clone()));
-    let cancellation = CancellationToken::default();
     {
         let mut current = state
             .compression_task
@@ -214,11 +217,11 @@ pub(crate) async fn compression_start(
         ],
     );
 
-    let seven_zip = manager.seven_zip_executable();
     let status_for_updates = Arc::clone(&status);
     let status_for_result = Arc::clone(&status);
     let logger = Arc::clone(&state.logger);
     std::thread::spawn(move || {
+        let _task_lease = task_lease;
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
             compress_archive(
                 prepared,
@@ -245,6 +248,7 @@ pub(crate) async fn compression_start(
                     task_status.message = "压缩完成。".into();
                     task_status.processed_source_count = result.source_count;
                     task_status.output_path = path_for_display(&result.output_path);
+                    drop(task_status);
                     write_log(
                         &logger,
                         LogLevel::Info,
@@ -261,6 +265,7 @@ pub(crate) async fn compression_start(
                     task_status.phase = CompressionPhase::Cancelled;
                     task_status.cancelled = true;
                     task_status.message = "压缩任务已取消，临时归档已清理。".into();
+                    drop(task_status);
                     write_log(
                         &logger,
                         LogLevel::Warn,
@@ -273,6 +278,7 @@ pub(crate) async fn compression_start(
                 Ok(Err(error)) => {
                     task_status.phase = CompressionPhase::Failed;
                     task_status.message = error.to_string();
+                    drop(task_status);
                     write_log(
                         &logger,
                         LogLevel::Error,
@@ -288,6 +294,7 @@ pub(crate) async fn compression_start(
                         "压缩后台任务异常终止：{}",
                         panic_payload_message(payload.as_ref())
                     );
+                    drop(task_status);
                     write_log(
                         &logger,
                         LogLevel::Error,

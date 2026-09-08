@@ -9,12 +9,13 @@ mod history_support;
 mod logging;
 mod recovery_commands;
 mod task_coordination;
+mod task_lifecycle;
 
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -47,6 +48,7 @@ use recovery_commands::{
     RecoveryTaskHandle, archive_analyze, recovery_cancel, recovery_start, recovery_status,
 };
 use serde::{Deserialize, Serialize};
+use task_lifecycle::{RecoverySession, TaskLifecycle};
 use tauri::{AppHandle, Manager, State};
 
 const MIB_BYTES: u64 = 1024 * 1024;
@@ -54,13 +56,17 @@ const MIB_BYTES: u64 = 1024 * 1024;
 struct AppState {
     paths: AppPaths,
     resource_dir: PathBuf,
-    dictionary: Mutex<DictionaryCandidateStore>,
-    history: Mutex<RecoveryHistoryStore>,
+    dictionary: Arc<Mutex<DictionaryCandidateStore>>,
+    history: Arc<Mutex<RecoveryHistoryStore>>,
     settings: Mutex<SettingsStore>,
     logger: Arc<LogStore>,
     recovery_task: Mutex<Option<RecoveryTaskHandle>>,
     compression_task: Mutex<Option<CompressionTaskHandle>>,
     archive_task_starting: AtomicBool,
+    lifecycle: Arc<TaskLifecycle>,
+    recovery_session: RecoverySession,
+    exit_ready: AtomicBool,
+    seven_zip_cache: Arc<Mutex<Option<engine_commands::CachedSevenZip>>>,
 }
 
 fn ensure_no_active_archive_task(state: &AppState) -> Result<(), String> {
@@ -183,63 +189,81 @@ fn health() -> HealthResponse {
 }
 
 #[tauri::command]
-fn log_write(state: State<'_, AppState>, request: ClientLogRequest) -> Result<(), String> {
-    state
-        .logger
-        .write(
-            request.level,
-            "frontend",
-            &request.event,
-            &request.message,
-            request.context,
-        )
-        .map(|_| ())
+async fn log_write(state: State<'_, AppState>, request: ClientLogRequest) -> Result<(), String> {
+    let logger = Arc::clone(&state.logger);
+    tauri::async_runtime::spawn_blocking(move || {
+        logger
+            .write(
+                request.level,
+                "frontend",
+                &request.event,
+                &request.message,
+                request.context,
+            )
+            .map(|_| ())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-fn log_list(state: State<'_, AppState>, query: LogQuery) -> Result<LogListResult, String> {
-    state.logger.list(&query)
+async fn log_list(state: State<'_, AppState>, query: LogQuery) -> Result<LogListResult, String> {
+    let logger = Arc::clone(&state.logger);
+    tauri::async_runtime::spawn_blocking(move || logger.list(&query))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-fn log_export(state: State<'_, AppState>) -> Result<LogExportResult, String> {
-    let result = state.logger.export(&state.paths.exports);
-    match &result {
-        Ok(export) => write_log(
-            &state.logger,
+async fn log_export(state: State<'_, AppState>) -> Result<LogExportResult, String> {
+    let logger = Arc::clone(&state.logger);
+    let exports = state.paths.exports.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = logger.export(&exports);
+        match &result {
+            Ok(export) => write_log(
+                &logger,
+                LogLevel::Info,
+                "logs",
+                "logs.exported",
+                "日志已导出。",
+                [
+                    ("entry_count".into(), export.entry_count.to_string()),
+                    ("byte_count".into(), export.byte_count.to_string()),
+                ],
+            ),
+            Err(_) => write_log(
+                &logger,
+                LogLevel::Error,
+                "logs",
+                "logs.export_failed",
+                "日志导出失败。",
+                std::iter::empty(),
+            ),
+        }
+        result
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn log_clear(state: State<'_, AppState>) -> Result<usize, String> {
+    let logger = Arc::clone(&state.logger);
+    tauri::async_runtime::spawn_blocking(move || {
+        let removed = logger.clear()?;
+        write_log(
+            &logger,
             LogLevel::Info,
             "logs",
-            "logs.exported",
-            "日志已导出。",
-            [
-                ("entry_count".into(), export.entry_count.to_string()),
-                ("byte_count".into(), export.byte_count.to_string()),
-            ],
-        ),
-        Err(_) => write_log(
-            &state.logger,
-            LogLevel::Error,
-            "logs",
-            "logs.export_failed",
-            "日志导出失败。",
-            std::iter::empty(),
-        ),
-    }
-    result
-}
-
-#[tauri::command]
-fn log_clear(state: State<'_, AppState>) -> Result<usize, String> {
-    let removed = state.logger.clear()?;
-    write_log(
-        &state.logger,
-        LogLevel::Info,
-        "logs",
-        "logs.cleared",
-        "历史日志已清空。",
-        [("removed_file_count".into(), removed.to_string())],
-    );
-    Ok(removed)
+            "logs.cleared",
+            "历史日志已清空。",
+            [("removed_file_count".into(), removed.to_string())],
+        );
+        Ok(removed)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -326,6 +350,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let paths = resolve_app_paths(app.handle())?;
+            let recovery_session = RecoverySession::create(&paths.temp)?;
             let resource_dir = app
                 .path()
                 .resource_dir()
@@ -382,13 +407,17 @@ pub fn run() {
             app.manage(AppState {
                 paths,
                 resource_dir,
-                dictionary: Mutex::new(dictionary),
-                history: Mutex::new(history),
+                dictionary: Arc::new(Mutex::new(dictionary)),
+                history: Arc::new(Mutex::new(history)),
                 settings: Mutex::new(settings),
                 logger,
                 recovery_task: Mutex::new(None),
                 compression_task: Mutex::new(None),
                 archive_task_starting: AtomicBool::new(false),
+                lifecycle: Arc::new(TaskLifecycle::default()),
+                recovery_session,
+                exit_ready: AtomicBool::new(false),
+                seven_zip_cache: Arc::new(Mutex::new(None)),
             });
             Ok(())
         })
@@ -440,6 +469,48 @@ pub fn run() {
             open_output_directory,
             open_path,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run ArcRecall");
+        .on_window_event(|window, event| {
+            if window.label() == "main"
+                && let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && request_app_shutdown(window.app_handle())
+            {
+                api.prevent_close();
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("failed to build ArcRecall")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event
+                && request_app_shutdown(app)
+            {
+                api.prevent_exit();
+            }
+        });
+}
+
+fn request_app_shutdown(app: &AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    if state.exit_ready.load(Ordering::Acquire) {
+        return false;
+    }
+    if state.lifecycle.request_shutdown() {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let state = app.state::<AppState>();
+            state.lifecycle.wait_until_finished();
+            if state.recovery_session.cleanup().is_err() {
+                write_log(
+                    &state.logger,
+                    LogLevel::Warn,
+                    "desktop",
+                    "app.cleanup_failed",
+                    "部分临时文件将在下次启动时重试清理。",
+                    std::iter::empty(),
+                );
+            }
+            state.exit_ready.store(true, Ordering::Release);
+            app.exit(0);
+        });
+    }
+    true
 }

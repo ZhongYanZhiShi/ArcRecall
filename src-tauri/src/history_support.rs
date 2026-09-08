@@ -76,29 +76,29 @@ pub fn save_recovered_history(
         };
     };
     let mut report = HistorySaveReport::default();
+    let mut records = Vec::with_capacity(archives.len());
     for archive in archives {
         let protected_password = archive
             .password
             .as_deref()
             .map(protect_history_password)
             .transpose();
-        let saved = protected_password.and_then(|protected_password| {
-            store
-                .upsert(&RecoveryHistoryRecord {
-                    fingerprint_sha256: archive.fingerprint_sha256.clone(),
-                    archive_format: archive.archive_format.label().into(),
-                    file_size: archive.file_size,
-                    volume_count: archive.volume_count,
-                    verified_at_ms,
-                    protected_password,
-                })
-                .map_err(|error| error.to_string())
-        });
-        if saved.is_ok() {
-            report.saved_count += 1;
-        } else {
-            report.failed_count += 1;
+        match protected_password {
+            Ok(protected_password) => records.push(RecoveryHistoryRecord {
+                fingerprint_sha256: archive.fingerprint_sha256.clone(),
+                archive_format: archive.archive_format.label().into(),
+                file_size: archive.file_size,
+                volume_count: archive.volume_count,
+                verified_at_ms,
+                protected_password,
+            }),
+            Err(_) => report.failed_count += 1,
         }
+    }
+    if store.upsert_many(&records).is_ok() {
+        report.saved_count = records.len();
+    } else {
+        report.failed_count += records.len();
     }
     report
 }

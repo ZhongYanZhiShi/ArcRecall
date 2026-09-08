@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use arc_recall_core::{
     AppSettings, DatabaseInfo, DictionaryCandidateAddSummary, DictionaryCandidateQuery,
-    DictionaryListResult, MAX_LOG_MAX_DISK_MIB, MIN_LOG_MAX_DISK_MIB,
+    DictionaryCandidateStore, DictionaryListResult, MAX_LOG_MAX_DISK_MIB, MIN_LOG_MAX_DISK_MIB,
 };
 use serde::Serialize;
 use tauri::State;
@@ -22,17 +23,21 @@ pub(crate) struct DatabaseBackupResult {
 }
 
 #[tauri::command]
-pub(crate) fn database_backup(state: State<'_, AppState>) -> Result<DatabaseBackupResult, String> {
+pub(crate) async fn database_backup(
+    state: State<'_, AppState>,
+) -> Result<DatabaseBackupResult, String> {
     let created_at_ms = current_time_ms();
-    let destination = unique_database_backup_path(&state.paths.exports, created_at_ms)?;
-    let result = {
-        let store = state.dictionary.lock().map_err(|error| error.to_string())?;
-        store
+    let exports = state.paths.exports.clone();
+    let result = run_dictionary(Arc::clone(&state.dictionary), move |store| {
+        let destination = unique_database_backup_path(&exports, created_at_ms)?;
+        let byte_count = store
             .backup(&destination)
-            .map_err(|error| error.to_string())
-    };
+            .map_err(|error| error.to_string())?;
+        Ok((destination, byte_count))
+    })
+    .await;
     match result {
-        Ok(byte_count) => {
+        Ok((destination, byte_count)) => {
             write_log(
                 &state.logger,
                 LogLevel::Info,
@@ -62,31 +67,35 @@ pub(crate) fn database_backup(state: State<'_, AppState>) -> Result<DatabaseBack
 }
 
 #[tauri::command]
-pub(crate) fn dictionary_list(
+pub(crate) async fn dictionary_list(
     state: State<'_, AppState>,
     query: DictionaryCandidateQuery,
 ) -> Result<DictionaryListResult, String> {
-    let store = state.dictionary.lock().map_err(|error| error.to_string())?;
-    store.list(&query).map_err(|error| error.to_string())
+    run_dictionary(Arc::clone(&state.dictionary), move |store| {
+        store.list(&query).map_err(|error| error.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn dictionary_count(state: State<'_, AppState>) -> Result<u64, String> {
-    let store = state.dictionary.lock().map_err(|error| error.to_string())?;
-    store.count().map_err(|error| error.to_string())
+pub(crate) async fn dictionary_count(state: State<'_, AppState>) -> Result<u64, String> {
+    run_dictionary(Arc::clone(&state.dictionary), |store| {
+        store.count().map_err(|error| error.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn dictionary_add(
+pub(crate) async fn dictionary_add(
     state: State<'_, AppState>,
     candidates: Vec<String>,
 ) -> Result<DictionaryCandidateAddSummary, String> {
-    let result = {
-        let store = state.dictionary.lock().map_err(|error| error.to_string())?;
+    let result = run_dictionary(Arc::clone(&state.dictionary), move |store| {
         store
             .add_candidates(candidates)
             .map_err(|error| error.to_string())
-    };
+    })
+    .await;
     match &result {
         Ok(summary) => write_log(
             &state.logger,
@@ -120,12 +129,15 @@ pub(crate) fn dictionary_add(
 }
 
 #[tauri::command]
-pub(crate) fn dictionary_delete(state: State<'_, AppState>, ids: Vec<i64>) -> Result<u64, String> {
+pub(crate) async fn dictionary_delete(
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+) -> Result<u64, String> {
     let requested_count = ids.len();
-    let result = {
-        let store = state.dictionary.lock().map_err(|error| error.to_string())?;
+    let result = run_dictionary(Arc::clone(&state.dictionary), move |store| {
         store.delete(&ids).map_err(|error| error.to_string())
-    };
+    })
+    .await;
     match &result {
         Ok(deleted_count) => write_log(
             &state.logger,
@@ -151,9 +163,11 @@ pub(crate) fn dictionary_delete(state: State<'_, AppState>, ids: Vec<i64>) -> Re
 }
 
 #[tauri::command]
-pub(crate) fn database_info(state: State<'_, AppState>) -> Result<DatabaseInfo, String> {
-    let store = state.dictionary.lock().map_err(|error| error.to_string())?;
-    let count = store.count().map_err(|error| error.to_string())?;
+pub(crate) async fn database_info(state: State<'_, AppState>) -> Result<DatabaseInfo, String> {
+    let count = run_dictionary(Arc::clone(&state.dictionary), |store| {
+        store.count().map_err(|error| error.to_string())
+    })
+    .await?;
     Ok(DatabaseInfo {
         path: state.paths.database.display().to_string(),
         exists: state.paths.database_exists(),
@@ -163,6 +177,18 @@ pub(crate) fn database_info(state: State<'_, AppState>) -> Result<DatabaseInfo, 
         logs_path: state.paths.logs.display().to_string(),
         tools_path: state.paths.tools.display().to_string(),
     })
+}
+
+async fn run_dictionary<T: Send + 'static>(
+    store: Arc<Mutex<DictionaryCandidateStore>>,
+    operation: impl FnOnce(&DictionaryCandidateStore) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = store.lock().map_err(|error| error.to_string())?;
+        operation(&store)
+    })
+    .await
+    .map_err(|error| format!("数据库任务失败：{error}"))?
 }
 
 #[tauri::command]

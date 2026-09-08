@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
 use arc_recall_core::{
     AppSettings, FullEngineBundleInstallResult, FullEngineBundleManager, FullEngineBundleStatus,
@@ -11,6 +13,60 @@ use tauri::State;
 use crate::logging::LogLevel;
 use crate::task_coordination::TaskStartReservation;
 use crate::{AppState, ensure_no_active_archive_task, write_log};
+
+pub(crate) struct CachedSevenZip {
+    path: PathBuf,
+    signature: (u64, SystemTime),
+    checked_at: Instant,
+}
+
+impl CachedSevenZip {
+    fn matches(&self, path: &Path, signature: Option<(u64, SystemTime)>) -> bool {
+        self.path == path
+            && signature == Some(self.signature)
+            && self.checked_at.elapsed() < Duration::from_secs(30)
+    }
+}
+
+/// Task starts only need 7-Zip; full capability probing belongs to the settings page.
+pub(crate) async fn require_seven_zip(state: &AppState) -> Result<PathBuf, String> {
+    let manager = full_bundle_manager(state)?;
+    let cache = Arc::clone(&state.seven_zip_cache);
+    tauri::async_runtime::spawn_blocking(move || {
+        let executable = manager.seven_zip_executable();
+        let signature = std::fs::metadata(&executable).ok().and_then(|metadata| {
+            metadata
+                .modified()
+                .ok()
+                .map(|modified| (metadata.len(), modified))
+        });
+        let mut cache = cache.lock().map_err(|error| error.to_string())?;
+        if cache
+            .as_ref()
+            .is_some_and(|entry| entry.matches(&executable, signature))
+        {
+            return Ok(executable);
+        }
+        let status = manager.seven_zip_status();
+        if !status.runnable {
+            *cache = None;
+            return Err(if status.bundled {
+                "7-Zip 尚未部署，请先在“设置 → 解密引擎”中安装完整包。"
+            } else {
+                "当前构建未提供可用的 7-Zip，请使用完整发行构建并安装引擎包。"
+            }
+            .into());
+        }
+        *cache = signature.map(|signature| CachedSevenZip {
+            path: executable.clone(),
+            signature,
+            checked_at: Instant::now(),
+        });
+        Ok(executable)
+    })
+    .await
+    .map_err(|error| format!("7-Zip 探测任务失败：{error}"))?
+}
 
 fn hashcat_downloader(state: &AppState) -> Result<HashcatToolDownloader, String> {
     let settings = state.settings.lock().map_err(|error| error.to_string())?;
@@ -279,7 +335,25 @@ fn configured_path_or(default: PathBuf, configured: &str) -> PathBuf {
 mod tests {
     use std::path::PathBuf;
 
-    use super::configured_path_or;
+    use super::*;
+
+    #[test]
+    fn seven_zip_cache_expires_and_invalidates_changed_executables() {
+        let path = PathBuf::from("tools/7z.exe");
+        let modified = SystemTime::UNIX_EPOCH;
+        let mut cached = CachedSevenZip {
+            path: path.clone(),
+            signature: (123, modified),
+            checked_at: Instant::now(),
+        };
+        assert!(cached.matches(&path, Some((123, modified))));
+        assert!(!cached.matches(Path::new("other/7z.exe"), Some((123, modified))));
+        assert!(!cached.matches(&path, None));
+        assert!(!cached.matches(&path, Some((124, modified))));
+        assert!(!cached.matches(&path, Some((123, modified + Duration::from_secs(1)))));
+        cached.checked_at = Instant::now() - Duration::from_secs(31);
+        assert!(!cached.matches(&path, Some((123, modified))));
+    }
 
     #[test]
     fn configured_recovery_path_overrides_bundle_default() {
