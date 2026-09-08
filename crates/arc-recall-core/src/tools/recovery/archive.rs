@@ -104,6 +104,15 @@ fn update_sha256_from_file(
 ) -> Result<(), RecoveryError> {
     let file = fs::File::open(path)?;
     let mut reader = BufReader::with_capacity(FINGERPRINT_READ_BUFFER_SIZE, file);
+    update_sha256_from_reader(hasher, &mut reader, buffer, cancellation)
+}
+
+fn update_sha256_from_reader(
+    hasher: &mut Sha256,
+    reader: &mut impl Read,
+    buffer: &mut [u8],
+    cancellation: Option<&CancellationToken>,
+) -> Result<(), RecoveryError> {
     loop {
         if let Some(cancellation) = cancellation {
             ensure_not_cancelled(cancellation)?;
@@ -828,5 +837,41 @@ fn strip_windows_verbatim_prefix(path: &str) -> String {
         rest.to_owned()
     } else {
         path.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fingerprint_stops_before_reading_another_chunk_after_cancellation() {
+        struct CancellingReader {
+            token: CancellationToken,
+            reads: usize,
+        }
+        impl Read for CancellingReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.reads += 1;
+                buffer[0] = b'a';
+                self.token.cancel();
+                Ok(1)
+            }
+        }
+
+        let cancellation = CancellationToken::default();
+        let mut reader = CancellingReader {
+            token: cancellation.clone(),
+            reads: 0,
+        };
+        let result = update_sha256_from_reader(
+            &mut Sha256::new(),
+            &mut reader,
+            &mut [0u8; 8],
+            Some(&cancellation),
+        );
+
+        assert!(matches!(result, Err(RecoveryError::Cancelled)));
+        assert_eq!(reader.reads, 1);
     }
 }

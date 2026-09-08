@@ -2,6 +2,35 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum SevenZipConverter {
+    Executable(PathBuf),
+    PerlScript { perl: PathBuf, script: PathBuf },
+}
+
+/// Resolve one converter plan shared by readiness reporting and execution.
+pub(super) fn resolve_seven_zip_converter(
+    john_directory: &Path,
+    perl: &Path,
+) -> Option<SevenZipConverter> {
+    if !john_directory.is_dir() {
+        return None;
+    }
+    let executable = john_directory.join(exe_name("7z2john"));
+    if executable.is_file() {
+        return Some(SevenZipConverter::Executable(executable));
+    }
+    let script = john_directory.join("7z2john.pl");
+    if script.is_file() && perl.is_file() {
+        Some(SevenZipConverter::PerlScript {
+            perl: perl.to_path_buf(),
+            script,
+        })
+    } else {
+        None
+    }
+}
+
 /// Status of John-related hash converters used for external cracking.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,7 +72,8 @@ pub fn probe_john_perl(john_tools_directory: &str, perl_path: &str) -> JohnPerlS
     let has_john_exe = directory_exists && path_exists(&Path::new(john_dir).join(exe_name("john")));
     let perl_exists = !perl.is_empty() && Path::new(perl).is_file();
 
-    let seven_zip_converter_ready = has_7z2john_exe || (has_7z2john_pl && perl_exists);
+    let seven_zip_converter_ready = directory_exists
+        && resolve_seven_zip_converter(Path::new(john_dir), Path::new(perl)).is_some();
     let rar_converter_ready = has_rar2john_exe;
     let zip_converter_ready = has_zip2john_exe;
     let john_cpu_ready = has_john_exe;
@@ -130,7 +160,7 @@ fn build_message(facts: JohnProbeFacts) -> String {
     }
 
     if missing.is_empty() {
-        "John CPU 引擎、Perl 与全部归档转换器已就绪。".into()
+        "John CPU 引擎与全部归档转换器已就绪。".into()
     } else {
         format!("缺少：{}", missing.join("、"))
     }

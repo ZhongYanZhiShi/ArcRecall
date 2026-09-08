@@ -133,6 +133,33 @@ impl RecoveryHistoryStore {
     }
 
     pub fn upsert(&self, record: &RecoveryHistoryRecord) -> Result<(), RecoveryHistoryError> {
+        self.upsert_many(std::slice::from_ref(record))
+    }
+
+    /// Save a group of verified archives atomically using one connection and
+    /// transaction. Invalid records leave the entire group unchanged.
+    pub fn upsert_many(
+        &self,
+        records: &[RecoveryHistoryRecord],
+    ) -> Result<(), RecoveryHistoryError> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let _guard = self.write_lock.lock().expect("history write lock");
+        self.with_connection(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            for record in records {
+                Self::upsert_record(&tx, record)?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    fn upsert_record(
+        conn: &Connection,
+        record: &RecoveryHistoryRecord,
+    ) -> Result<(), RecoveryHistoryError> {
         let fingerprint = normalize_fingerprint(&record.fingerprint_sha256)?;
         let file_size = i64::try_from(record.file_size)
             .map_err(|_| RecoveryHistoryError::InvalidFingerprint)?;
@@ -144,10 +171,8 @@ impl RecoveryHistoryStore {
             .as_deref()
             .filter(|value| !value.is_empty());
 
-        let _guard = self.write_lock.lock().expect("history write lock");
-        self.with_connection(|conn| {
-            conn.execute(
-                "INSERT INTO recovery_history (
+        conn.prepare_cached(
+            "INSERT INTO recovery_history (
                     fingerprint_sha256, archive_format, file_size, volume_count,
                     first_success_at_ms, last_verified_at_ms, password_protected
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
@@ -168,17 +193,16 @@ impl RecoveryHistoryStore {
                         excluded.password_protected,
                         recovery_history.password_protected
                     );",
-                params![
-                    fingerprint,
-                    record.archive_format,
-                    file_size,
-                    volume_count,
-                    verified_at_ms,
-                    protected_password,
-                ],
-            )?;
-            Ok(())
-        })
+        )?
+        .execute(params![
+            fingerprint,
+            record.archive_format,
+            file_size,
+            volume_count,
+            verified_at_ms,
+            protected_password,
+        ])?;
+        Ok(())
     }
 
     pub fn list(
@@ -477,6 +501,51 @@ mod tests {
                 .expect("password")
                 .as_deref(),
             Some("saved")
+        );
+    }
+
+    #[test]
+    fn history_batch_rolls_back_all_rows_if_any_record_is_invalid() {
+        let (_directory, store) = store();
+        let mut invalid = record('b', 200, Some("second"));
+        invalid.fingerprint_sha256 = "invalid".into();
+
+        assert!(
+            store
+                .upsert_many(&[record('a', 100, Some("first")), invalid])
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .list(&RecoveryHistoryQuery::default())
+                .unwrap()
+                .total_count,
+            0
+        );
+    }
+
+    #[test]
+    fn history_batch_preserves_upsert_semantics_for_repeated_fingerprints() {
+        let (_directory, store) = store();
+        store
+            .upsert_many(&[
+                record('a', 100, Some("first")),
+                record('b', 150, None),
+                record('a', 200, Some("updated")),
+            ])
+            .unwrap();
+
+        let result = store.list(&RecoveryHistoryQuery::default()).unwrap();
+        assert_eq!(result.total_count, 2);
+        assert_eq!(result.entries[0].verification_count, 2);
+        assert_eq!(result.entries[0].first_success_at_ms, 100);
+        assert_eq!(result.entries[0].last_verified_at_ms, 200);
+        assert_eq!(
+            store
+                .protected_password_by_fingerprint(&"a".repeat(64))
+                .unwrap()
+                .as_deref(),
+            Some("updated")
         );
     }
 

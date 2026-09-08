@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use super::super::runner::{CancellationToken, ProcessOutput, ProcessRequest};
 use super::{
-    ArchiveFormat, RecoveryError, RecoveryJob, RecoveryPhase, RecoveryToolPaths, RecoveryUpdate,
+    ArchiveFormat, RecoveryError, RecoveryInput, RecoveryPhase, RecoveryToolPaths, RecoveryUpdate,
     ensure_not_cancelled, is_password_rejection, path_for_display, process_failure,
     process_failure_detail, run_checked,
 };
@@ -14,6 +14,16 @@ const MAX_EXTRACTED_ENTRY_COUNT: u64 = 100_000;
 const MAX_EXTRACTED_TOTAL_BYTES: u64 = 100 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_EXPANSION_RATIO: u64 = 10_000;
 const SEVEN_ZIP_LIST_OUTPUT_LIMIT: usize = 32 * 1024 * 1024;
+// Both `t` and `x` decode archive contents. Verification must allow the same
+// long-running work as extraction; cancellation remains handled by the runner.
+const ARCHIVE_CONTENT_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+
+fn archive_content_request(seven_zip: &Path) -> ProcessRequest {
+    let mut request = ProcessRequest::new(seven_zip);
+    request.current_dir = seven_zip.parent().map(Path::to_path_buf);
+    request.timeout = ARCHIVE_CONTENT_TIMEOUT;
+    request
+}
 
 /// Build the 7-Zip `-p{Password}` switch as a single argv entry.
 ///
@@ -99,7 +109,7 @@ pub(super) fn verify_password(
     tools: &RecoveryToolPaths,
     cancellation: &CancellationToken,
 ) -> Result<bool, RecoveryError> {
-    let mut request = ProcessRequest::new(&tools.seven_zip);
+    let mut request = archive_content_request(&tools.seven_zip);
     request.args = vec![
         OsString::from("t"),
         OsString::from("-y"),
@@ -108,8 +118,6 @@ pub(super) fn verify_password(
         seven_zip_password_arg(password),
         archive.as_os_str().to_owned(),
     ];
-    request.current_dir = tools.seven_zip.parent().map(Path::to_path_buf);
-    request.timeout = Duration::from_secs(5 * 60);
     request.max_output_bytes = 1024 * 1024;
     let output = run_checked(&request, cancellation)?;
     if output.success {
@@ -124,14 +132,21 @@ pub(super) fn verify_password(
 }
 
 pub(super) fn extract_with_password(
-    job: &RecoveryJob,
+    input: &RecoveryInput<'_>,
     tools: &RecoveryToolPaths,
     password: &str,
     cancellation: &CancellationToken,
     report: &mut impl FnMut(RecoveryUpdate),
 ) -> Result<(), RecoveryError> {
+    let job = input.job;
     ensure_not_cancelled(cancellation)?;
-    validate_extraction_budget(&job.archive_path, password, tools, cancellation)?;
+    validate_extraction_budget(
+        &job.archive_path,
+        input.archive_bytes,
+        password,
+        tools,
+        cancellation,
+    )?;
     report(RecoveryUpdate::stage(
         RecoveryPhase::Extracting,
         Some("7-Zip"),
@@ -141,7 +156,7 @@ pub(super) fn extract_with_password(
         ),
     ));
     fs::create_dir_all(&job.output_directory)?;
-    let mut request = ProcessRequest::new(&tools.seven_zip);
+    let mut request = archive_content_request(&tools.seven_zip);
     request.args = vec![
         OsString::from("x"),
         OsString::from("-y"),
@@ -154,8 +169,6 @@ pub(super) fn extract_with_password(
         OsString::from(format!("-o{}", job.output_directory.display())),
         job.archive_path.as_os_str().to_owned(),
     ];
-    request.current_dir = tools.seven_zip.parent().map(Path::to_path_buf);
-    request.timeout = Duration::from_secs(24 * 60 * 60);
     request.max_output_bytes = 4 * 1024 * 1024;
     let output = run_checked(&request, cancellation)?;
     if !output.success {
@@ -172,6 +185,7 @@ pub(super) struct ArchiveExtractionBudget {
 
 fn validate_extraction_budget(
     archive: &Path,
+    archive_bytes: u64,
     password: &str,
     tools: &RecoveryToolPaths,
     cancellation: &CancellationToken,
@@ -193,8 +207,16 @@ fn validate_extraction_budget(
         return Err(process_failure("7-Zip 安全预检", &output));
     }
     let budget = parse_seven_zip_extraction_budget(&output)?;
-    let archive_bytes = fs::metadata(archive)?.len().max(1);
-    let ratio_limit = archive_bytes.saturating_mul(MAX_ARCHIVE_EXPANSION_RATIO);
+    check_extraction_budget(budget, archive_bytes)
+}
+
+fn check_extraction_budget(
+    budget: ArchiveExtractionBudget,
+    archive_bytes: u64,
+) -> Result<(), RecoveryError> {
+    let ratio_limit = archive_bytes
+        .max(1)
+        .saturating_mul(MAX_ARCHIVE_EXPANSION_RATIO);
     let byte_limit = ratio_limit.min(MAX_EXTRACTED_TOTAL_BYTES);
 
     if budget.entry_count > MAX_EXTRACTED_ENTRY_COUNT {
@@ -256,4 +278,51 @@ pub(super) fn parse_seven_zip_extraction_budget(
         entry_count,
         total_bytes,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_processing_allows_long_archives_and_keeps_the_tool_directory() {
+        let executable = Path::new("tools").join("7z.exe");
+        let request = archive_content_request(&executable);
+        assert_eq!(request.timeout, Duration::from_secs(24 * 60 * 60));
+        assert_eq!(request.current_dir.as_deref(), Some(Path::new("tools")));
+    }
+
+    #[test]
+    fn expansion_ratio_uses_the_entire_physical_archive_size() {
+        let budget = ArchiveExtractionBudget {
+            entry_count: 1,
+            total_bytes: 20 * 1024 * 1024 * 1024,
+        };
+        assert!(check_extraction_budget(budget, 100 * 1024 * 1024).is_ok());
+        assert!(check_extraction_budget(budget, 1024 * 1024).is_err());
+    }
+
+    #[test]
+    fn large_inputs_do_not_bypass_absolute_or_entry_limits() {
+        assert!(
+            check_extraction_budget(
+                ArchiveExtractionBudget {
+                    entry_count: 1,
+                    total_bytes: MAX_EXTRACTED_TOTAL_BYTES + 1,
+                },
+                u64::MAX,
+            )
+            .is_err()
+        );
+        assert!(
+            check_extraction_budget(
+                ArchiveExtractionBudget {
+                    entry_count: MAX_EXTRACTED_ENTRY_COUNT + 1,
+                    total_bytes: 1,
+                },
+                u64::MAX,
+            )
+            .is_err()
+        );
+    }
 }

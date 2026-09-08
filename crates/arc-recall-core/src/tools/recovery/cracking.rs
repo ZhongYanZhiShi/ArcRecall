@@ -5,14 +5,16 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use super::super::john::{SevenZipConverter, resolve_seven_zip_converter};
 use super::super::runner::{
     CancellationToken, ProcessRequest, run_process, strawberry_perl_path_entries,
 };
 use super::{
     ArchiveFormat, RecoveryCapabilities, RecoveryComputeDevice, RecoveryComputeMode, RecoveryError,
-    RecoveryJob, RecoveryMethodCapability, RecoveryPhase, RecoveryResult, RecoveryToolPaths,
-    RecoveryUpdate, ensure_not_cancelled, exhausted_result, extract_with_password,
-    path_for_display, process_failure, run_checked, success_result, verify_password,
+    RecoveryInput, RecoveryJob, RecoveryMethodCapability, RecoveryPhase, RecoveryResult,
+    RecoveryToolPaths, RecoveryUpdate, ensure_not_cancelled, exhausted_result,
+    extract_with_password, path_for_display, process_failure, run_checked, success_result,
+    verify_password,
 };
 
 const HASHCAT_ARCHIVE_MODES: [u32; 13] = [
@@ -33,7 +35,7 @@ enum CrackAttempt {
 }
 
 pub(super) fn recover_with_dictionary(
-    job: &RecoveryJob,
+    input: &RecoveryInput<'_>,
     tools: &RecoveryToolPaths,
     format: ArchiveFormat,
     archive_paths: &[PathBuf],
@@ -41,6 +43,7 @@ pub(super) fn recover_with_dictionary(
     compute_mode: RecoveryComputeMode,
     report: &mut impl FnMut(RecoveryUpdate),
 ) -> Result<RecoveryResult, RecoveryError> {
+    let job = input.job;
     let mut fallback_reasons = Vec::new();
     let records = if converter_is_available(tools, format) {
         report(RecoveryUpdate::stage(
@@ -111,7 +114,7 @@ pub(super) fn recover_with_dictionary(
                                 hashcat_completed |= completed;
                                 if let Some(result) = verify_crack_attempt(
                                     attempt,
-                                    job,
+                                    input,
                                     tools,
                                     cancellation,
                                     report,
@@ -167,7 +170,7 @@ pub(super) fn recover_with_dictionary(
                     john_completed = attempt == CrackAttempt::Exhausted;
                     if let Some(result) = verify_crack_attempt(
                         attempt,
-                        job,
+                        input,
                         tools,
                         cancellation,
                         report,
@@ -205,7 +208,7 @@ pub(super) fn recover_with_dictionary(
         job.dictionary_count,
     ));
     if let Some(result) =
-        run_internal_dictionary(job, tools, cancellation, report, &verified_candidates)?
+        run_internal_dictionary(input, tools, cancellation, report, &verified_candidates)?
     {
         return Ok(result);
     }
@@ -243,7 +246,7 @@ pub(super) fn validate_dictionary_input(job: &RecoveryJob) -> Result<(), Recover
 fn converter_is_available(tools: &RecoveryToolPaths, format: ArchiveFormat) -> bool {
     match format {
         ArchiveFormat::SevenZip => {
-            tools.perl.is_file() && tools.john_tools_directory.join("7z2john.pl").is_file()
+            resolve_seven_zip_converter(&tools.john_tools_directory, &tools.perl).is_some()
         }
         ArchiveFormat::Zip => tools.john_tools_directory.join("zip2john.exe").is_file(),
         ArchiveFormat::Rar3 | ArchiveFormat::Rar5 => {
@@ -471,12 +474,13 @@ pub(super) fn parse_hashcat_device_types(output: &str) -> (bool, bool) {
 }
 
 fn run_internal_dictionary(
-    job: &RecoveryJob,
+    input: &RecoveryInput<'_>,
     tools: &RecoveryToolPaths,
     cancellation: &CancellationToken,
     report: &mut impl FnMut(RecoveryUpdate),
     already_verified: &HashSet<String>,
 ) -> Result<Option<RecoveryResult>, RecoveryError> {
+    let job = input.job;
     let file = fs::File::open(&job.dictionary_path)?;
     let mut reader = BufReader::with_capacity(64 * 1024, file);
     let mut line = String::new();
@@ -520,7 +524,7 @@ fn run_internal_dictionary(
             continue;
         }
         if verify_password(&job.archive_path, &line, tools, cancellation)? {
-            extract_with_password(job, tools, &line, cancellation, report)?;
+            extract_with_password(input, tools, &line, cancellation, report)?;
             return Ok(Some(success_result(
                 job,
                 Some(line.clone()),
@@ -552,20 +556,46 @@ pub(super) fn extract_hashes(
     archive_paths: &[PathBuf],
     cancellation: &CancellationToken,
 ) -> Result<Vec<HashRecord>, RecoveryError> {
+    let request = hash_extraction_request(job, tools, format, archive_paths)?;
+    let output = run_checked(&request, cancellation)?;
+    if !output.success && output.stdout.trim().is_empty() {
+        return Err(process_failure(converter_name(format), &output));
+    }
+    Ok(parse_hash_records(&output.stdout))
+}
+
+fn hash_extraction_request(
+    job: &RecoveryJob,
+    tools: &RecoveryToolPaths,
+    format: ArchiveFormat,
+    archive_paths: &[PathBuf],
+) -> Result<ProcessRequest, RecoveryError> {
     let john_dir = &tools.john_tools_directory;
-    let (program, args) = match format {
+    let (program, args, uses_perl) = match format {
         ArchiveFormat::SevenZip => {
-            let mut args = vec![john_dir.join("7z2john.pl").into_os_string()];
-            args.extend(seven_zip_converter_archive_args(archive_paths));
-            (tools.perl.clone(), args)
+            let converter =
+                resolve_seven_zip_converter(john_dir, &tools.perl).ok_or_else(|| {
+                    RecoveryError::MissingTool("7z2john.exe 或 7z2john.pl + Perl".into())
+                })?;
+            let archive_args = seven_zip_converter_archive_args(archive_paths);
+            match converter {
+                SevenZipConverter::Executable(program) => (program, archive_args, false),
+                SevenZipConverter::PerlScript { perl, script } => {
+                    let mut args = vec![script.into_os_string()];
+                    args.extend(archive_args);
+                    (perl, args, true)
+                }
+            }
         }
         ArchiveFormat::Zip => (
             john_dir.join("zip2john.exe"),
             vec![job.archive_path.as_os_str().to_owned()],
+            false,
         ),
         ArchiveFormat::Rar3 | ArchiveFormat::Rar5 => (
             john_dir.join("rar2john.exe"),
             vec![job.archive_path.as_os_str().to_owned()],
+            false,
         ),
     };
     if !program.is_file() {
@@ -575,17 +605,13 @@ pub(super) fn extract_hashes(
     let mut request = ProcessRequest::new(program);
     request.args = args;
     request.current_dir = Some(john_dir.clone());
-    if matches!(format, ArchiveFormat::SevenZip) {
+    if uses_perl {
         // Portable Strawberry needs c\bin (liblzma) on PATH for Compress::Raw::Lzma.
         request.path_prepend = strawberry_perl_path_entries(&tools.perl);
     }
     request.timeout = Duration::from_secs(10 * 60);
     request.max_output_bytes = 16 * 1024 * 1024;
-    let output = run_checked(&request, cancellation)?;
-    if !output.success && output.stdout.trim().is_empty() {
-        return Err(process_failure(converter_name(format), &output));
-    }
-    Ok(parse_hash_records(&output.stdout))
+    Ok(request)
 }
 
 pub(super) fn seven_zip_converter_archive_args(archive_paths: &[PathBuf]) -> Vec<OsString> {
@@ -751,13 +777,14 @@ fn run_john(
 
 fn verify_crack_attempt(
     attempt: CrackAttempt,
-    job: &RecoveryJob,
+    input: &RecoveryInput<'_>,
     tools: &RecoveryToolPaths,
     cancellation: &CancellationToken,
     report: &mut impl FnMut(RecoveryUpdate),
     verified_candidates: &mut HashSet<String>,
     engine: &str,
 ) -> Result<Option<RecoveryResult>, RecoveryError> {
+    let job = input.job;
     let CrackAttempt::Found(password) = attempt else {
         return Ok(None);
     };
@@ -773,7 +800,7 @@ fn verify_crack_attempt(
     if !verify_password(&job.archive_path, &password, tools, cancellation)? {
         return Ok(None);
     }
-    extract_with_password(job, tools, &password, cancellation, report)?;
+    extract_with_password(input, tools, &password, cancellation, report)?;
     Ok(Some(success_result(
         job,
         Some(password),
@@ -861,5 +888,75 @@ pub(super) fn decode_password(value: &str) -> Option<String> {
         String::from_utf8(bytes).ok()
     } else {
         Some(value.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::probe_john_perl;
+
+    #[test]
+    fn converter_readiness_matches_the_program_and_exact_volume_arguments() {
+        let directory = tempfile::tempdir().unwrap();
+        let john_dir = directory.path().join("john");
+        fs::create_dir(&john_dir).unwrap();
+        let tools = RecoveryToolPaths {
+            seven_zip: directory.path().join("unused-7z"),
+            hashcat: directory.path().join("unused-hashcat"),
+            john_tools_directory: john_dir.clone(),
+            perl: directory.path().join("perl.exe"),
+        };
+        let job = RecoveryJob {
+            archive_path: PathBuf::from(r"\\?\E:\data\archive.7z.001"),
+            output_directory: directory.path().join("output"),
+            dictionary_path: directory.path().join("dictionary"),
+            dictionary_count: 0,
+            known_password: None,
+            work_directory: directory.path().join("work"),
+        };
+        let volumes = vec![
+            job.archive_path.clone(),
+            PathBuf::from(r"\\?\E:\data\archive.7z.002"),
+        ];
+        let archive_args = seven_zip_converter_archive_args(&volumes);
+        let ready = || {
+            probe_john_perl(john_dir.to_str().unwrap(), tools.perl.to_str().unwrap())
+                .seven_zip_converter_ready
+        };
+        let request = || hash_extraction_request(&job, &tools, ArchiveFormat::SevenZip, &volumes);
+
+        assert!(!ready());
+        assert!(request().is_err());
+        let script = john_dir.join("7z2john.pl");
+        fs::write(&script, b"fixture").unwrap();
+        assert!(!ready());
+        assert!(request().is_err());
+
+        fs::write(&tools.perl, b"fixture").unwrap();
+        assert!(ready());
+        let perl_request = request().unwrap();
+        assert_eq!(perl_request.program, tools.perl);
+        assert_eq!(perl_request.args[0], script.as_os_str());
+        assert_eq!(&perl_request.args[1..], archive_args);
+        assert!(!perl_request.path_prepend.is_empty());
+
+        let executable = john_dir.join(if cfg!(windows) {
+            "7z2john.exe"
+        } else {
+            "7z2john"
+        });
+        fs::write(&executable, b"fixture").unwrap();
+        assert!(ready());
+        let exe_request = request().unwrap();
+        assert_eq!(exe_request.program, executable);
+        assert_eq!(exe_request.args, archive_args);
+        assert!(exe_request.path_prepend.is_empty());
+
+        fs::remove_file(script).unwrap();
+        fs::remove_file(&tools.perl).unwrap();
+        assert!(ready());
+        assert!(converter_is_available(&tools, ArchiveFormat::SevenZip));
+        assert_eq!(request().unwrap().program, executable);
     }
 }

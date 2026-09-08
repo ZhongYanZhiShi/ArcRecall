@@ -350,16 +350,19 @@ fn canonicalize_sources(sources: &[PathBuf]) -> Result<Vec<PathBuf>, Compression
 }
 
 fn remove_nested_sources(sources: Vec<PathBuf>) -> Vec<PathBuf> {
-    sources
+    let directories: HashSet<_> = sources
         .iter()
+        .filter(|source| source.is_dir())
+        .map(|source| path_identity(source))
+        .collect();
+    sources
+        .into_iter()
         .filter(|candidate| {
-            !sources.iter().any(|possible_parent| {
-                possible_parent != *candidate
-                    && possible_parent.is_dir()
-                    && candidate.starts_with(possible_parent)
-            })
+            !candidate
+                .ancestors()
+                .skip(1)
+                .any(|parent| directories.contains(&path_identity(parent)))
         })
-        .cloned()
         .collect()
 }
 
@@ -598,6 +601,27 @@ mod tests {
             prepared.source_groups[0].source_names,
             [OsString::from("folder"), OsString::from("sibling.txt")]
         );
+    }
+
+    #[test]
+    fn source_deduplication_preserves_order_and_sibling_prefixes() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("folder");
+        let child = parent.join("nested").join("file.txt");
+        let sibling = directory.path().join("folder-backup");
+        fs::create_dir_all(child.parent().unwrap()).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+        fs::write(&child, b"nested").unwrap();
+        let mut sources = vec![child, sibling.clone(), parent.clone()];
+        let mut expected = vec![sibling, parent];
+        for index in 0..256 {
+            let path = directory.path().join(format!("file-{index}.txt"));
+            fs::write(&path, b"payload").unwrap();
+            sources.push(path.clone());
+            expected.push(path);
+        }
+
+        assert_eq!(remove_nested_sources(sources), expected);
     }
 
     #[test]

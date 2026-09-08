@@ -147,17 +147,22 @@ impl FullEngineBundleManager {
             .join("perl.exe")
     }
 
-    pub fn status(&self) -> FullEngineBundleStatus {
-        let bundled = self.resources_present();
-        let seven_zip = probe_component(
+    /// Probe only the component required for archive compression and extraction.
+    pub fn seven_zip_status(&self) -> EngineComponentStatus {
+        probe_component(
             "7zip",
             "7-Zip",
             SEVEN_ZIP_VERSION,
-            bundled,
+            self.resources_present(),
             self.seven_zip_executable(),
             ["i"],
             "7-Zip",
-        );
+        )
+    }
+
+    pub fn status(&self) -> FullEngineBundleStatus {
+        let seven_zip = self.seven_zip_status();
+        let bundled = seven_zip.bundled;
         let hashcat = probe_component(
             "hashcat",
             "Hashcat",
@@ -598,6 +603,10 @@ mod tests {
         assert!(!status.bundled);
         assert!(!status.installed);
         assert!(!status.has_zip2john);
+        let seven_zip = manager.seven_zip_status();
+        assert_eq!(seven_zip.id, "7zip");
+        assert!(!seven_zip.installed);
+        assert_eq!(seven_zip, status.seven_zip);
     }
 
     #[test]

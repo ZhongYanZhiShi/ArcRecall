@@ -2,11 +2,72 @@ use std::env;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[cfg(windows)]
+#[path = "windows_job.rs"]
+mod windows_job;
+
+struct ManagedChild {
+    child: Child,
+    #[cfg(windows)]
+    job: windows_job::ProcessJob,
+}
+
+impl ManagedChild {
+    fn spawn(command: &mut Command) -> io::Result<Self> {
+        #[cfg(windows)]
+        let job = windows_job::ProcessJob::new()?;
+        let child = command.spawn()?;
+        let managed = Self {
+            child,
+            #[cfg(windows)]
+            job,
+        };
+        #[cfg(windows)]
+        if let Err(error) = managed.job.attach_and_resume(&managed.child) {
+            let mut managed = managed;
+            let _ = managed.kill();
+            let _ = managed.child.wait();
+            return Err(error);
+        }
+        Ok(managed)
+    }
+
+    fn kill(&mut self) -> io::Result<()> {
+        self.terminate_descendants();
+        self.child.kill()
+    }
+
+    fn terminate_descendants(&self) {
+        #[cfg(windows)]
+        self.job.terminate();
+    }
+}
+
+impl std::ops::Deref for ManagedChild {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        &self.child
+    }
+}
+
+impl std::ops::DerefMut for ManagedChild {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
+}
+
+impl Drop for ManagedChild {
+    fn drop(&mut self) {
+        let _ = self.kill();
+        let _ = self.child.wait();
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct CancellationToken {
@@ -90,6 +151,9 @@ pub fn run_process(
     request: &ProcessRequest,
     cancellation: Option<&CancellationToken>,
 ) -> Result<ProcessOutput, ProcessRunnerError> {
+    if cancellation.is_some_and(CancellationToken::is_cancelled) {
+        return Err(ProcessRunnerError::Cancelled);
+    }
     let mut command = Command::new(&request.program);
     command
         .args(&request.args)
@@ -108,7 +172,7 @@ pub fn run_process(
     }
     configure_hidden_window(&mut command);
 
-    let mut child = command.spawn().map_err(ProcessRunnerError::Spawn)?;
+    let mut child = ManagedChild::spawn(&mut command).map_err(ProcessRunnerError::Spawn)?;
     if let Some(input) = &request.stdin_bytes {
         let mut stdin = child
             .stdin
@@ -152,6 +216,7 @@ pub fn run_process(
         }
     };
 
+    child.terminate_descendants();
     let (stdout, stderr) = join_output(stdout_reader, stderr_reader)?;
     Ok(ProcessOutput {
         exit_code: status.code(),
@@ -210,7 +275,8 @@ fn configure_hidden_window(command: &mut Command) {
     use std::os::windows::process::CommandExt;
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(CREATE_NO_WINDOW);
+    const CREATE_SUSPENDED: u32 = 0x0000_0004;
+    command.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
 }
 
 #[cfg(not(windows))]
@@ -244,5 +310,117 @@ mod tests {
         assert!(!clone.is_cancelled());
         token.cancel();
         assert!(clone.is_cancelled());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_job_runs_a_real_child_and_captures_output() {
+        let mut request = ProcessRequest::new("cmd.exe");
+        request.args = ["/D", "/C", "echo managed-child"]
+            .map(OsString::from)
+            .to_vec();
+        let output = run_process(&request, None).unwrap();
+        assert!(output.success);
+        assert!(output.stdout.contains("managed-child"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dropping_managed_child_terminates_the_native_process() {
+        use std::os::windows::io::{AsRawHandle, BorrowedHandle};
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 30",
+        ]);
+        configure_hidden_window(&mut command);
+        let process = ManagedChild::spawn(&mut command).unwrap();
+        let handle = unsafe { BorrowedHandle::borrow_raw(process.child.as_raw_handle()) }
+            .try_clone_to_owned()
+            .unwrap();
+        drop(process);
+        assert_eq!(
+            unsafe { WaitForSingleObject(handle.as_raw_handle(), 2_000) },
+            WAIT_OBJECT_0
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn closing_the_job_handle_kills_the_child_without_explicit_termination() {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+        let job = windows_job::ProcessJob::new().unwrap();
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 30",
+        ]);
+        configure_hidden_window(&mut command);
+        let mut child = command.spawn().unwrap();
+        job.attach_and_resume(&child).unwrap();
+        // This is the same kernel cleanup used if the owning application exits abruptly.
+        drop(job);
+        assert_eq!(
+            unsafe { WaitForSingleObject(child.as_raw_handle(), 2_000) },
+            WAIT_OBJECT_0
+        );
+        child.wait().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cancelling_a_managed_process_also_terminates_its_descendant() {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+        };
+
+        let temp = tempfile::tempdir().unwrap();
+        let pid_file = temp.path().join("descendant.pid");
+        let mut command = Command::new("powershell.exe");
+        command.args(["-NoProfile", "-NonInteractive", "-Command", r#"
+            $child = Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 30' -WindowStyle Hidden -PassThru
+            [System.IO.File]::WriteAllText($env:ARC_RECALL_TEST_PID_FILE, [string]$child.Id)
+            Start-Sleep -Seconds 30
+        "#]);
+        command.env("ARC_RECALL_TEST_PID_FILE", &pid_file);
+        configure_hidden_window(&mut command);
+        let mut process = ManagedChild::spawn(&mut command).unwrap();
+        let started = Instant::now();
+        let pid = loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|text| text.parse::<u32>().ok())
+            {
+                break pid;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "descendant did not start"
+            );
+            thread::sleep(Duration::from_millis(25));
+        };
+        let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        assert!(
+            !raw.is_null(),
+            "descendant should be running before cancellation"
+        );
+        let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let _ = process.kill();
+        process.wait().unwrap();
+        assert_eq!(
+            unsafe { WaitForSingleObject(handle.as_raw_handle(), 2_000) },
+            WAIT_OBJECT_0
+        );
     }
 }

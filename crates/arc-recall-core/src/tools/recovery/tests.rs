@@ -306,6 +306,62 @@ fn full_fingerprint_changes_when_any_middle_byte_changes() {
 }
 
 #[test]
+fn successful_extraction_does_not_ignore_fingerprint_cancellation() {
+    let directory = tempfile::tempdir().unwrap();
+    let archive = directory.path().join("archive.7z");
+    fs::write(&archive, SEVEN_ZIP_SIGNATURE).unwrap();
+    let analysis = analyze_archive(&archive).unwrap();
+    let job = RecoveryJob {
+        archive_path: archive,
+        output_directory: directory.path().join("output"),
+        dictionary_path: directory.path().join("unused"),
+        dictionary_count: 0,
+        known_password: Some("known".into()),
+        work_directory: directory.path().join("work"),
+    };
+    let cancellation = CancellationToken::default();
+    cancellation.cancel();
+
+    for precomputed in [None, Some("precomputed")] {
+        assert!(matches!(
+            attach_recovered_archive(
+                success_result(&job, Some("known".into()), "7-Zip", "extracted"),
+                &analysis,
+                precomputed,
+                &cancellation,
+            ),
+            Err(RecoveryError::Cancelled),
+        ));
+    }
+}
+
+#[test]
+fn missing_fingerprint_source_preserves_successful_extraction() {
+    let directory = tempfile::tempdir().unwrap();
+    let archive = directory.path().join("archive.7z");
+    fs::write(&archive, SEVEN_ZIP_SIGNATURE).unwrap();
+    let analysis = analyze_archive(&archive).unwrap();
+    let job = RecoveryJob {
+        archive_path: archive.clone(),
+        output_directory: directory.path().join("output"),
+        dictionary_path: directory.path().join("unused"),
+        dictionary_count: 0,
+        known_password: None,
+        work_directory: directory.path().join("work"),
+    };
+    fs::remove_file(archive).unwrap();
+    let result = attach_recovered_archive(
+        success_result(&job, None, "7-Zip", "extracted"),
+        &analysis,
+        None,
+        &CancellationToken::default(),
+    )
+    .unwrap();
+    assert!(result.success);
+    assert!(result.recovered_archive.is_none());
+}
+
+#[test]
 fn nested_detection_is_content_driven_and_ignores_extensions() {
     let dir = tempfile::tempdir().unwrap();
     let mut carrier = vec![0u8; 256 * 1024];
@@ -780,6 +836,63 @@ fn seven_zip_recovers_disguised_two_part_archive_from_task_workspace() {
             .to_string_lossy()
             .starts_with(".arcrecall-volumes-")
     }));
+}
+
+#[test]
+fn split_extraction_budget_counts_every_volume() {
+    let Some(seven_zip) = locate_seven_zip() else {
+        eprintln!("skip: 7z.exe not found");
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let payload = directory.path().join("payload.bin");
+    let payload_bytes = vec![0u8; 2 * 1024 * 1024];
+    fs::write(&payload, &payload_bytes).unwrap();
+    let archive_base = directory.path().join("small-volumes.7z");
+    run_seven_zip(
+        &seven_zip,
+        &[
+            "a",
+            "-t7z",
+            "-y",
+            "-v128b",
+            archive_base.to_str().unwrap(),
+            payload.to_str().unwrap(),
+        ],
+    );
+    let first_volume = directory.path().join("small-volumes.7z.001");
+    let analysis = analyze_archive(&first_volume).unwrap();
+    assert!(analysis.volume_count > 1);
+    assert!((payload_bytes.len() as u64) > fs::metadata(&first_volume).unwrap().len() * 10_000);
+    assert!((payload_bytes.len() as u64) <= analysis.file_size * 10_000);
+
+    let tools = RecoveryToolPaths {
+        seven_zip,
+        hashcat: directory.path().join("unused-hashcat"),
+        john_tools_directory: directory.path().join("unused-john"),
+        perl: directory.path().join("unused-perl"),
+    };
+    let job = RecoveryJob {
+        archive_path: first_volume,
+        output_directory: directory.path().join("output"),
+        dictionary_path: directory.path().join("unused-dictionary"),
+        dictionary_count: 0,
+        known_password: None,
+        work_directory: directory.path().join("work"),
+    };
+    let result = recover_and_extract_lazy(
+        &job,
+        &tools,
+        &CancellationToken::default(),
+        || panic!("plain split archive must not need a dictionary"),
+        |_| {},
+    )
+    .unwrap();
+    assert!(result.success);
+    assert_eq!(
+        fs::read(job.output_directory.join("payload.bin")).unwrap(),
+        payload_bytes
+    );
 }
 
 #[test]

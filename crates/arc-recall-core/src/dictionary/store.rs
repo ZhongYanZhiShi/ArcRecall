@@ -5,6 +5,8 @@ use std::sync::Mutex;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::tools::CancellationToken;
+
 use super::models::{
     DictionaryCandidateAddSummary, DictionaryCandidateEntry, DictionaryCandidateQuery,
     DictionaryListResult,
@@ -30,8 +32,10 @@ CREATE TABLE IF NOT EXISTS dictionary_candidates (
     UNIQUE (candidate_text)
 );
 
-CREATE INDEX IF NOT EXISTS ix_dictionary_candidates_insertion_order
-ON dictionary_candidates(id);
+CREATE INDEX IF NOT EXISTS ix_dictionary_candidates_success_order
+ON dictionary_candidates(success_count DESC, id ASC);
+
+DROP INDEX IF EXISTS ix_dictionary_candidates_insertion_order;
 "#;
 
 /// Errors from the global dictionary candidate store.
@@ -43,6 +47,8 @@ pub enum DictionaryError {
     Io(#[from] std::io::Error),
     #[error("dictionary source not found: {0}")]
     NotFound(String),
+    #[error("dictionary export cancelled")]
+    Cancelled,
 }
 
 /// Thread-safe SQLite-backed global password candidate set.
@@ -157,32 +163,37 @@ impl DictionaryCandidateStore {
         &self,
         query: &DictionaryCandidateQuery,
     ) -> Result<Vec<DictionaryCandidateEntry>, DictionaryError> {
-        self.with_connection(|conn| {
-            let take = query.take.clamp(1, DEFAULT_PAGE_SIZE);
-            let skip = query.skip.max(0);
-            let mut stmt = conn.prepare_cached(
-                "SELECT id, candidate_text, byte_count, success_count \
+        self.with_connection(|conn| Self::list_entries_with_connection(conn, query))
+    }
+
+    fn list_entries_with_connection(
+        conn: &Connection,
+        query: &DictionaryCandidateQuery,
+    ) -> Result<Vec<DictionaryCandidateEntry>, DictionaryError> {
+        let take = query.take.clamp(1, DEFAULT_PAGE_SIZE);
+        let skip = query.skip.max(0);
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, candidate_text, byte_count, success_count \
                  FROM dictionary_candidates \
                  WHERE ?1 = '' OR instr(candidate_text, ?1) > 0 \
                  ORDER BY id ASC \
                  LIMIT ?2 OFFSET ?3;",
-            )?;
+        )?;
 
-            let rows = stmt.query_map(params![query.search_text.as_str(), take, skip], |row| {
-                Ok(DictionaryCandidateEntry {
-                    id: row.get(0)?,
-                    value: row.get(1)?,
-                    byte_count: row.get(2)?,
-                    success_count: row.get(3)?,
-                })
-            })?;
+        let rows = stmt.query_map(params![query.search_text.as_str(), take, skip], |row| {
+            Ok(DictionaryCandidateEntry {
+                id: row.get(0)?,
+                value: row.get(1)?,
+                byte_count: row.get(2)?,
+                success_count: row.get(3)?,
+            })
+        })?;
 
-            let mut entries = Vec::new();
-            for row in rows {
-                entries.push(row?);
-            }
-            Ok(entries)
-        })
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row?);
+        }
+        Ok(entries)
     }
 
     pub fn count(&self) -> Result<u64, DictionaryError> {
@@ -196,10 +207,13 @@ impl DictionaryCandidateStore {
     }
 
     pub fn count_matches(&self, search_text: &str) -> Result<u64, DictionaryError> {
+        if search_text.is_empty() {
+            return self.count();
+        }
         self.with_connection(|conn| {
             let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM dictionary_candidates \
-                 WHERE ?1 = '' OR instr(candidate_text, ?1) > 0;",
+                 WHERE instr(candidate_text, ?1) > 0;",
                 [search_text],
                 |row| row.get(0),
             )?;
@@ -211,10 +225,31 @@ impl DictionaryCandidateStore {
         &self,
         query: &DictionaryCandidateQuery,
     ) -> Result<DictionaryListResult, DictionaryError> {
-        Ok(DictionaryListResult {
-            entries: self.list_entries(query)?,
-            total_count: self.count()?,
-            matched_count: self.count_matches(&query.search_text)?,
+        self.with_connection(|conn| {
+            // Keep the rows and both counts in the same read snapshot, even if a
+            // background recovery task updates the shared database concurrently.
+            let tx = conn.unchecked_transaction()?;
+            let total_count: u64 =
+                tx.query_row("SELECT COUNT(*) FROM dictionary_candidates;", [], |row| {
+                    row.get(0)
+                })?;
+            let matched_count = if query.search_text.is_empty() {
+                total_count
+            } else {
+                tx.query_row(
+                    "SELECT COUNT(*) FROM dictionary_candidates \
+                     WHERE instr(candidate_text, ?1) > 0;",
+                    [&query.search_text],
+                    |row| row.get(0),
+                )?
+            };
+            let entries = Self::list_entries_with_connection(&tx, query)?;
+            tx.commit()?;
+            Ok(DictionaryListResult {
+                entries,
+                total_count,
+                matched_count,
+            })
         })
     }
 
@@ -241,17 +276,29 @@ impl DictionaryCandidateStore {
     }
 
     pub fn increment_success(&self, candidate: &str) -> Result<(), DictionaryError> {
+        self.increment_success_many(std::iter::once(candidate))
+    }
+
+    pub fn increment_success_many(
+        &self,
+        candidates: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<(), DictionaryError> {
         let _guard = self.write_lock.lock().expect("dictionary write lock");
         self.with_connection(|conn| {
-            conn.execute(
+            let tx = conn.unchecked_transaction()?;
+            let mut statement = tx.prepare_cached(
                 "UPDATE dictionary_candidates \
                  SET success_count = CASE \
                      WHEN success_count < 9223372036854775807 THEN success_count + 1 \
                      ELSE 9223372036854775807 \
                  END \
                  WHERE candidate_text = ?1;",
-                params![candidate],
             )?;
+            for candidate in candidates {
+                statement.execute(params![candidate.as_ref()])?;
+            }
+            drop(statement);
+            tx.commit()?;
             Ok(())
         })
     }
@@ -262,14 +309,36 @@ impl DictionaryCandidateStore {
     /// or NUL cannot be represented losslessly by line-oriented Hashcat/John
     /// wordlists and are skipped.
     pub fn export_wordlist(&self, destination: impl AsRef<Path>) -> Result<u64, DictionaryError> {
-        let destination = destination.as_ref();
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        self.export_wordlist_with_cancellation(destination, &CancellationToken::default())
+    }
 
-        self.with_connection(|conn| {
-            let file = File::create(destination)?;
-            let mut writer = BufWriter::with_capacity(64 * 1024, file);
+    pub fn export_wordlist_with_cancellation(
+        &self,
+        destination: impl AsRef<Path>,
+        cancellation: &CancellationToken,
+    ) -> Result<u64, DictionaryError> {
+        self.export_wordlist_checked(destination.as_ref(), || cancellation.is_cancelled())
+    }
+
+    fn export_wordlist_checked(
+        &self,
+        destination: &Path,
+        mut is_cancelled: impl FnMut() -> bool,
+    ) -> Result<u64, DictionaryError> {
+        if is_cancelled() {
+            return Err(DictionaryError::Cancelled);
+        }
+        let parent = destination
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent)?;
+
+        // Publish only a complete wordlist. Cancellation and any I/O failure
+        // discard the temporary file without replacing an existing destination.
+        let temporary = tempfile::NamedTempFile::new_in(parent)?;
+        let exported = self.with_connection(|conn| {
+            let mut writer = BufWriter::with_capacity(64 * 1024, temporary.as_file());
             let mut stmt = conn.prepare_cached(
                 "SELECT candidate_text \
                  FROM dictionary_candidates \
@@ -278,6 +347,9 @@ impl DictionaryCandidateStore {
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             let mut exported = 0u64;
             for row in rows {
+                if is_cancelled() {
+                    return Err(DictionaryError::Cancelled);
+                }
                 let candidate = row?;
                 if candidate.contains(['\r', '\n', '\0']) {
                     continue;
@@ -288,7 +360,14 @@ impl DictionaryCandidateStore {
             }
             writer.flush()?;
             Ok(exported)
-        })
+        })?;
+        if is_cancelled() {
+            return Err(DictionaryError::Cancelled);
+        }
+        temporary
+            .persist(destination)
+            .map_err(|error| DictionaryError::Io(error.error))?;
+        Ok(exported)
     }
 
     /// Create a consistent SQLite snapshot, including committed WAL contents.
@@ -342,7 +421,7 @@ enum BoundedCandidateLine {
 fn read_bounded_candidate_line(
     reader: &mut impl BufRead,
 ) -> Result<Option<BoundedCandidateLine>, std::io::Error> {
-    let mut bytes = Vec::with_capacity(MAX_CANDIDATE_BYTES.min(64 * 1024));
+    let mut bytes = Vec::with_capacity(128);
     let mut saw_data = false;
     let mut oversized = false;
     let mut ended_with_newline = false;
@@ -607,5 +686,87 @@ mod tests {
             .unwrap();
 
         assert_eq!(entries.len(), DEFAULT_PAGE_SIZE as usize);
+    }
+
+    #[test]
+    fn cancelling_wordlist_export_preserves_destination_and_removes_partial_file() {
+        let (directory, store) = temp_db();
+        store.add_candidates(["first", "second", "third"]).unwrap();
+        let destination = directory.path().join("dictionary.txt");
+        std::fs::write(&destination, "previous-complete-wordlist\n").unwrap();
+        let mut checks = 0;
+
+        let result = store.export_wordlist_checked(&destination, || {
+            checks += 1;
+            checks == 3
+        });
+
+        assert!(matches!(result, Err(DictionaryError::Cancelled)));
+        assert_eq!(
+            std::fs::read_to_string(&destination).unwrap(),
+            "previous-complete-wordlist\n"
+        );
+        let files = std::fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            files
+                .iter()
+                .all(|name| name == "dictionary.txt" || name.starts_with("arcrecall.db"))
+        );
+    }
+
+    #[test]
+    fn already_cancelled_wordlist_export_creates_no_output() {
+        let (directory, store) = temp_db();
+        let cancellation = CancellationToken::default();
+        cancellation.cancel();
+        let destination = directory.path().join("dictionary.txt");
+
+        assert!(matches!(
+            store.export_wordlist_with_cancellation(&destination, &cancellation),
+            Err(DictionaryError::Cancelled)
+        ));
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn wordlist_order_uses_index_without_temporary_sort() {
+        let (_directory, store) = temp_db();
+        store.add_candidates(["first", "winner", "third"]).unwrap();
+        store
+            .increment_success_many(["winner", "winner", "third"])
+            .unwrap();
+        store.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "EXPLAIN QUERY PLAN SELECT candidate_text FROM dictionary_candidates ORDER BY success_count DESC, id ASC;",
+            )?;
+            let plan = statement.query_map([], |row| row.get::<_, String>(3))?
+                .collect::<Result<Vec<_>, _>>()?.join("\n");
+            assert!(plan.contains("ix_dictionary_candidates_success_order"), "{plan}");
+            assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn bounded_reader_preserves_maximum_crlf_line_and_handles_short_lines_compactly() {
+        let mut contents = vec![b'x'; MAX_CANDIDATE_BYTES];
+        contents.extend_from_slice(b"\r\nshort\n");
+        let mut reader = BufReader::new(contents.as_slice());
+        let Some(BoundedCandidateLine::Valid(maximum)) =
+            read_bounded_candidate_line(&mut reader).unwrap()
+        else {
+            panic!("maximum CRLF line should be valid");
+        };
+        assert_eq!(maximum.len(), MAX_CANDIDATE_BYTES);
+        let Some(BoundedCandidateLine::Valid(short)) =
+            read_bounded_candidate_line(&mut reader).unwrap()
+        else {
+            panic!("short line should be valid");
+        };
+        assert_eq!(short, "short");
+        assert!(short.capacity() < 1024);
     }
 }

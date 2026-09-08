@@ -259,6 +259,13 @@ pub struct RecoveryJob {
     pub work_directory: PathBuf,
 }
 
+/// The physical size of the archive being processed, including every volume.
+/// For an LZ4 wrapper this describes the decoded inner archive instead.
+struct RecoveryInput<'a> {
+    job: &'a RecoveryJob,
+    archive_bytes: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct RecoveryDictionary {
     pub path: PathBuf,
@@ -392,6 +399,7 @@ fn recover_single_archive(
     let analysis = analyze_archive(&job.archive_path)?;
     fs::create_dir_all(&job.work_directory)?;
     let mut processing_job = job.clone();
+    let mut archive_bytes = analysis.file_size;
     let mut converter_archive_paths = analysis.volume_paths.clone();
     let split_materialization =
         materialize_split_archive(&analysis, &job.work_directory, cancellation)?;
@@ -426,8 +434,13 @@ fn recover_single_archive(
         )?
         .ok_or_else(|| RecoveryError::Message("LZ4 临时归档准备失败。".into()))?;
         converter_archive_paths = vec![processing_job.archive_path.clone()];
+        archive_bytes = fs::metadata(&processing_job.archive_path)?.len();
     }
 
+    let processing_input = RecoveryInput {
+        job: &processing_job,
+        archive_bytes,
+    };
     validate_archive_container(
         &processing_job.archive_path,
         analysis.format,
@@ -441,12 +454,13 @@ fn recover_single_archive(
         "正在检查归档是否无需密码。",
     ));
     if verify_password(&processing_job.archive_path, "", tools, cancellation)? {
-        extract_with_password(&processing_job, tools, "", cancellation, report)?;
-        return Ok(attach_recovered_archive(
+        extract_with_password(&processing_input, tools, "", cancellation, report)?;
+        return attach_recovered_archive(
             success_result(&processing_job, None, "7-Zip", "归档无需密码，已直接解压。"),
             &analysis,
             precomputed_fingerprint_sha256,
-        ));
+            cancellation,
+        );
     }
 
     if let Some(password) = job
@@ -460,8 +474,8 @@ fn recover_single_archive(
             "正在验证手动输入或历史记录中的密码。",
         ));
         if verify_password(&processing_job.archive_path, password, tools, cancellation)? {
-            extract_with_password(&processing_job, tools, password, cancellation, report)?;
-            return Ok(attach_recovered_archive(
+            extract_with_password(&processing_input, tools, password, cancellation, report)?;
+            return attach_recovered_archive(
                 success_result(
                     &processing_job,
                     Some(password.to_owned()),
@@ -470,7 +484,8 @@ fn recover_single_archive(
                 ),
                 &analysis,
                 precomputed_fingerprint_sha256,
-            ));
+                cancellation,
+            );
         }
     }
 
@@ -507,7 +522,10 @@ fn recover_single_archive(
     }
 
     let result = recover_with_dictionary(
-        &dictionary_job,
+        &RecoveryInput {
+            job: &dictionary_job,
+            archive_bytes,
+        },
         tools,
         analysis.format,
         &converter_archive_paths,
@@ -515,11 +533,12 @@ fn recover_single_archive(
         compute_mode,
         report,
     )?;
-    Ok(attach_recovered_archive(
+    attach_recovered_archive(
         result,
         &analysis,
         precomputed_fingerprint_sha256,
-    ))
+        cancellation,
+    )
 }
 
 fn run_checked(
@@ -573,20 +592,29 @@ fn attach_recovered_archive(
     mut result: RecoveryResult,
     analysis: &ArchiveAnalysis,
     precomputed_fingerprint_sha256: Option<&str>,
-) -> RecoveryResult {
+    cancellation: &CancellationToken,
+) -> Result<RecoveryResult, RecoveryError> {
     if result.success {
-        result.recovered_archive = precomputed_fingerprint_sha256
-            .map(str::to_owned)
-            .or_else(|| fingerprint_archive_sha256(analysis).ok())
-            .map(|fingerprint_sha256| RecoveredArchive {
-                fingerprint_sha256,
-                archive_format: analysis.format,
-                file_size: analysis.file_size,
-                volume_count: analysis.volume_count,
-                password: result.password.clone().filter(|value| !value.is_empty()),
-            });
+        ensure_not_cancelled(cancellation)?;
+        let fingerprint = match precomputed_fingerprint_sha256 {
+            Some(fingerprint) => Some(fingerprint.to_owned()),
+            None => match fingerprint_archive_sha256_with_cancellation(analysis, cancellation) {
+                Ok(fingerprint) => Some(fingerprint),
+                Err(RecoveryError::Cancelled) => return Err(RecoveryError::Cancelled),
+                // A missing history record must not undo a completed extraction.
+                Err(_) => None,
+            },
+        };
+        ensure_not_cancelled(cancellation)?;
+        result.recovered_archive = fingerprint.map(|fingerprint_sha256| RecoveredArchive {
+            fingerprint_sha256,
+            archive_format: analysis.format,
+            file_size: analysis.file_size,
+            volume_count: analysis.volume_count,
+            password: result.password.clone().filter(|value| !value.is_empty()),
+        });
     }
-    result
+    Ok(result)
 }
 
 fn process_failure(tool: &str, output: &ProcessOutput) -> RecoveryError {
