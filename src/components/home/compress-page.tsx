@@ -79,16 +79,23 @@ export function CompressPage({
     })
   const openedTasks = React.useRef(new Set<string>())
   const archiveNamesAwaitingCompletion = React.useRef(new Set<string>())
+  const operationBusy = React.useRef(false)
+  const operationVersion = React.useRef(0)
+  const isDraftLocked = React.useCallback(
+    () => operationBusy.current || runningRef.current,
+    [runningRef]
+  )
 
   const setSources = React.useCallback(
     (update: React.SetStateAction<string[]>) => {
+      if (isDraftLocked()) return
       onDraftChange((current) => {
         const sources =
           typeof update === "function" ? update(current.sources) : update
         return sources === current.sources ? current : { ...current, sources }
       })
     },
-    [onDraftChange]
+    [isDraftLocked, onDraftChange]
   )
 
   const updateDraft = React.useCallback(
@@ -96,11 +103,12 @@ export function CompressPage({
       key: Key,
       value: CompressionDraft[Key]
     ) => {
+      if (isDraftLocked()) return
       onDraftChange((current) =>
         Object.is(current[key], value) ? current : { ...current, [key]: value }
       )
     },
-    [onDraftChange]
+    [isDraftLocked, onDraftChange]
   )
 
   React.useEffect(() => {
@@ -129,26 +137,33 @@ export function CompressPage({
   }, [])
 
   const handleSavePermanentPassword = React.useCallback(async () => {
+    if (isDraftLocked()) return
     if (!password) {
       setError("请先输入要永久保存的密码。")
       return
     }
+    operationBusy.current = true
+    operationVersion.current += 1
     setPasswordCredentialBusy(true)
     setError(null)
     try {
       const status = await savePermanentCompressionPassword(password)
       setHasPermanentPassword(status.hasPassword)
       setUsePermanentPassword(status.hasPassword)
-      updateDraft("password", "")
+      onDraftChange((current) => ({ ...current, password: "" }))
       setShowPassword(false)
     } catch (reason) {
       setError(toErrorMessage(reason))
     } finally {
+      operationBusy.current = false
       setPasswordCredentialBusy(false)
     }
-  }, [password, updateDraft])
+  }, [isDraftLocked, onDraftChange, password])
 
   const handleDeletePermanentPassword = React.useCallback(async () => {
+    if (isDraftLocked()) return
+    operationBusy.current = true
+    operationVersion.current += 1
     setPasswordCredentialBusy(true)
     setError(null)
     try {
@@ -159,9 +174,10 @@ export function CompressPage({
     } catch (reason) {
       setError(toErrorMessage(reason))
     } finally {
+      operationBusy.current = false
       setPasswordCredentialBusy(false)
     }
-  }, [])
+  }, [isDraftLocked])
 
   const refreshAiSettings = React.useCallback(() => {
     void listAiProfiles()
@@ -204,7 +220,7 @@ export function CompressPage({
     let unlisten: (() => void) | undefined
     void getCurrentWebview()
       .onDragDropEvent((event) => {
-        if (disposed || runningRef.current) {
+        if (disposed || isDraftLocked()) {
           setDragOver(false)
           return
         }
@@ -229,7 +245,7 @@ export function CompressPage({
       disposed = true
       unlisten?.()
     }
-  }, [appendSources, runningRef])
+  }, [appendSources, isDraftLocked])
 
   React.useEffect(() => {
     if (!shouldAutoOpenCompletedTask(task, openWhenDone, openedTasks.current)) {
@@ -251,30 +267,40 @@ export function CompressPage({
   }, [onDraftChange, task])
 
   const handlePickFiles = React.useCallback(async () => {
+    if (isDraftLocked()) return
+    const version = operationVersion.current
     setError(null)
     try {
-      appendSources(await pickCompressionFiles())
+      const paths = await pickCompressionFiles()
+      if (isDraftLocked() || version !== operationVersion.current) return
+      appendSources(paths)
     } catch (reason) {
       setError(toErrorMessage(reason))
     }
-  }, [appendSources])
+  }, [appendSources, isDraftLocked])
 
   const handlePickFolder = React.useCallback(async () => {
+    if (isDraftLocked()) return
+    const version = operationVersion.current
     setError(null)
     try {
       const path = await pickCompressionFolder()
+      if (isDraftLocked() || version !== operationVersion.current) return
       if (path) {
         appendSources([path])
       }
     } catch (reason) {
       setError(toErrorMessage(reason))
     }
-  }, [appendSources])
+  }, [appendSources, isDraftLocked])
 
   const handlePickOutput = React.useCallback(async () => {
+    if (isDraftLocked()) return
+    const version = operationVersion.current
     setError(null)
     try {
       const path = await pickCompressionOutputDirectory()
+      if (isDraftLocked() || version !== operationVersion.current) return
       if (path) {
         updateDraft("outputDirectory", path)
         updateDraft("outputMode", "custom")
@@ -282,7 +308,7 @@ export function CompressPage({
     } catch (reason) {
       setError(toErrorMessage(reason))
     }
-  }, [updateDraft])
+  }, [isDraftLocked, updateDraft])
 
   const handleMoveSource = React.useCallback(
     (index: number, direction: -1 | 1) => {
@@ -306,6 +332,7 @@ export function CompressPage({
 
   const handleStart = React.useCallback(
     async (skipAiRename = false) => {
+      if (isDraftLocked() || !permanentPasswordReady) return
       if (sources.length === 0) {
         setError("请先添加至少一个文件或文件夹。")
         return
@@ -331,7 +358,10 @@ export function CompressPage({
         return
       }
 
+      operationBusy.current = true
+      operationVersion.current += 1
       setBusy(true)
+      setDragOver(false)
       setError(null)
       setAiError(null)
       try {
@@ -341,7 +371,7 @@ export function CompressPage({
             resolvedName,
             activeAiProfile?.id
           )
-          updateDraft("baseName", resolvedName)
+          onDraftChange((current) => ({ ...current, baseName: resolvedName }))
         }
         const next = await startCompression({
           sources,
@@ -363,6 +393,7 @@ export function CompressPage({
           setError(message)
         }
       } finally {
+        operationBusy.current = false
         setBusy(false)
       }
     },
@@ -372,13 +403,15 @@ export function CompressPage({
       encryptFileNames,
       format,
       hasPermanentPassword,
+      isDraftLocked,
       level,
       outputDirectory,
       outputMode,
       password,
+      permanentPasswordReady,
+      onDraftChange,
       setTask,
       sources,
-      updateDraft,
       useAiRename,
       usePermanentPassword,
     ]
@@ -429,7 +462,9 @@ export function CompressPage({
       setShowPassword={setShowPassword}
       hasPermanentPassword={hasPermanentPassword}
       usePermanentPassword={usePermanentPassword}
-      setUsePermanentPassword={setUsePermanentPassword}
+      setUsePermanentPassword={(update) => {
+        if (!isDraftLocked()) setUsePermanentPassword(update)
+      }}
       permanentPasswordReady={permanentPasswordReady}
       passwordCredentialBusy={passwordCredentialBusy}
       deletePasswordOpen={deletePasswordOpen}

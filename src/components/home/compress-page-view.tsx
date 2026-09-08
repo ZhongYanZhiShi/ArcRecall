@@ -196,6 +196,7 @@ export function CompressPageView({
     openWhenDone,
     useAiRename,
   } = draft
+  const draftLocked = busy || running || passwordCredentialBusy
   const defaultOutput = sources[0]
     ? compressionSourceParent(sources[0])
     : "首个来源的上级目录"
@@ -249,7 +250,7 @@ export function CompressPageView({
                     variant="outline"
                     size="sm"
                     onClick={handlePickFiles}
-                    disabled={running}
+                    disabled={draftLocked}
                   >
                     <FilePlus2 data-icon="inline-start" />
                     添加文件
@@ -259,7 +260,7 @@ export function CompressPageView({
                     variant="outline"
                     size="sm"
                     onClick={handlePickFolder}
-                    disabled={running}
+                    disabled={draftLocked}
                   >
                     <FolderPlus data-icon="inline-start" />
                     添加文件夹
@@ -302,21 +303,21 @@ export function CompressPageView({
                         </span>
                         <SourceAction
                           label="上移"
-                          disabled={running || index === 0}
+                          disabled={draftLocked || index === 0}
                           onClick={() => handleMoveSource(index, -1)}
                         >
                           <ArrowUp />
                         </SourceAction>
                         <SourceAction
                           label="下移"
-                          disabled={running || index === sources.length - 1}
+                          disabled={draftLocked || index === sources.length - 1}
                           onClick={() => handleMoveSource(index, 1)}
                         >
                           <ArrowDown />
                         </SourceAction>
                         <SourceAction
                           label="移除"
-                          disabled={running}
+                          disabled={draftLocked}
                           onClick={() => onRemoveSource(index)}
                         >
                           <Trash2 />
@@ -410,11 +411,11 @@ export function CompressPageView({
                           updateDraft("openWhenDone", checked)
                         }
                         label="完成后打开"
-                        disabled={running}
+                        disabled={draftLocked}
                         title="归档完成后自动打开输出文件夹"
                       />
                     }
-                    disabled={running}
+                    disabled={draftLocked}
                   />
 
                   <Separator />
@@ -433,7 +434,7 @@ export function CompressPageView({
                           }
                           placeholder="例如：项目交付资料"
                           autoComplete="off"
-                          disabled={running}
+                          disabled={draftLocked}
                           aria-describedby="archive-name-hint"
                         />
                         <InputGroupAddon align="inline-end">
@@ -459,7 +460,7 @@ export function CompressPageView({
                         variant="outline"
                         spacing={0}
                         value={[format]}
-                        disabled={running}
+                        disabled={draftLocked}
                         onValueChange={(values) => {
                           const next = values[0] as
                             | CompressionFormat
@@ -494,7 +495,7 @@ export function CompressPageView({
 
                   <Field
                     orientation="horizontal"
-                    data-disabled={running || undefined}
+                    data-disabled={draftLocked || undefined}
                     className="items-center rounded-xl border border-border/80 bg-muted/30 p-3"
                   >
                     <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-background text-muted-foreground">
@@ -527,7 +528,7 @@ export function CompressPageView({
                       id="compress-ai-rename"
                       size="sm"
                       checked={useAiRename}
-                      disabled={running}
+                      disabled={draftLocked}
                       onCheckedChange={(checked) => {
                         updateDraft("useAiRename", checked)
                         setAiError(
@@ -588,7 +589,7 @@ export function CompressPageView({
 
                   <div className="grid gap-3 md:grid-cols-[176px_minmax(0,1fr)]">
                     <Field
-                      data-disabled={running || undefined}
+                      data-disabled={draftLocked || undefined}
                       className="gap-1.5"
                     >
                       <FieldLabel htmlFor="compression-level">
@@ -597,7 +598,7 @@ export function CompressPageView({
                       <Select
                         items={LEVEL_OPTIONS}
                         value={String(level)}
-                        disabled={running}
+                        disabled={draftLocked}
                         onValueChange={(value) => {
                           if (value === null) {
                             return
@@ -669,7 +670,7 @@ export function CompressPageView({
                                 ? "留空则使用已保存的永久密码"
                                 : "留空则创建无密码归档"
                             }
-                            disabled={running || passwordCredentialBusy}
+                            disabled={draftLocked}
                             autoComplete="off"
                           />
                           <InputGroupAddon align="inline-end">
@@ -691,10 +692,7 @@ export function CompressPageView({
                           size="icon-sm"
                           onClick={() => void handleSavePermanentPassword()}
                           disabled={
-                            running ||
-                            passwordCredentialBusy ||
-                            !permanentPasswordReady ||
-                            !password
+                            draftLocked || !permanentPasswordReady || !password
                           }
                           aria-label={
                             hasPermanentPassword
@@ -715,18 +713,14 @@ export function CompressPageView({
                               checked={usePermanentPassword}
                               onCheckedChange={setUsePermanentPassword}
                               label="本次使用"
-                              disabled={
-                                running ||
-                                passwordCredentialBusy ||
-                                !permanentPasswordReady
-                              }
+                              disabled={draftLocked || !permanentPasswordReady}
                             />
                             <Button
                               type="button"
                               variant="ghost"
                               size="icon-sm"
                               onClick={() => setDeletePasswordOpen(true)}
-                              disabled={running || passwordCredentialBusy}
+                              disabled={draftLocked}
                               aria-label="删除永久密码"
                               title="删除永久密码"
                             >
@@ -740,7 +734,7 @@ export function CompressPageView({
                             updateDraft("encryptFileNames", checked)
                           }
                           label="加密文件名"
-                          disabled={running || format !== "sevenZip"}
+                          disabled={draftLocked || format !== "sevenZip"}
                           title={
                             format === "zip"
                               ? "ZIP 不支持隐藏归档内的文件名"
@@ -776,7 +770,9 @@ export function CompressPageView({
                   type="button"
                   onClick={() => void handleStart(false)}
                   disabled={
-                    busy || passwordCredentialBusy || sources.length === 0
+                    draftLocked ||
+                    !permanentPasswordReady ||
+                    sources.length === 0
                   }
                 >
                   {busy ? (

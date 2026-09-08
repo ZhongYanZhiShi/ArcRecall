@@ -4,6 +4,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   DatabaseBackup,
   Download,
   FileJson,
@@ -91,9 +93,11 @@ import {
   openLogDirectory,
 } from "@/lib/logging"
 import { cn } from "@/lib/utils"
+import { createRefreshQueue } from "@/lib/refresh-queue"
 
 const PAGE_SIZE = 200
 const REFRESH_INTERVAL_MS = 2_500
+const SEARCH_DEBOUNCE_MS = 300
 
 type LevelFilter = LogLevel | "attention" | "all"
 type DisplayMode = "summary" | "all"
@@ -167,8 +171,8 @@ const LOG_REFRESH_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
 export function LogsPage() {
   const [level, setLevel] = React.useState<LevelFilter>("attention")
   const [searchText, setSearchText] = React.useState("")
-  const deferredSearch = React.useDeferredValue(searchText)
-  const [take, setTake] = React.useState(PAGE_SIZE)
+  const [appliedSearch, setAppliedSearch] = React.useState("")
+  const [pageIndex, setPageIndex] = React.useState(0)
   const [result, setResult] = React.useState<LogListResult | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [refreshing, setRefreshing] = React.useState(false)
@@ -188,70 +192,121 @@ export function LogsPage() {
     () => new Set()
   )
   const requestSequence = React.useRef(0)
+  const [refreshQueue] = React.useState(createRefreshQueue)
+  const visible = React.useRef(false)
+  const listRef = React.useRef<HTMLDivElement>(null)
   const autoRefreshPaused =
     autoRefresh &&
-    (listFocused ||
+    (pageIndex > 0 ||
+      listFocused ||
       expandedEntryIds.size > 0 ||
-      deferredSearch.trim().length > 0)
+      searchText.trim().length > 0)
+
+  React.useLayoutEffect(() => {
+    visible.current = true
+    return () => {
+      visible.current = false
+      requestSequence.current += 1
+      refreshQueue.clearPending()
+    }
+  }, [refreshQueue])
+
+  React.useLayoutEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = 0
+  }, [appliedSearch, level, pageIndex])
+
+  React.useEffect(() => {
+    if (searchText.trim() === appliedSearch) return
+    const timeout = window.setTimeout(() => {
+      setAppliedSearch(searchText.trim())
+      setPageIndex(0)
+    }, SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(timeout)
+  }, [appliedSearch, searchText])
 
   const refresh = React.useCallback(
-    async (silent = false) => {
+    (silent = false) => {
       const requestId = ++requestSequence.current
       if (!silent) {
         setRefreshing(true)
       }
-      try {
-        const next = await listLogs({
-          level: level === "all" || level === "attention" ? undefined : level,
-          attentionOnly: level === "attention",
-          searchText: deferredSearch,
-          take,
-        })
-        if (requestSequence.current !== requestId) {
-          return
-        }
-        const loadedIds = new Set(next.entries.map((entry) => entry.id))
-        setExpandedEntryIds((current) => {
-          const retained = new Set(
-            [...current].filter((entryId) => loadedIds.has(entryId))
+      return refreshQueue.run(async () => {
+        if (!visible.current || requestSequence.current !== requestId) return
+        try {
+          const next = await listLogs({
+            level: level === "all" || level === "attention" ? undefined : level,
+            attentionOnly: level === "attention",
+            searchText: appliedSearch,
+            skip: pageIndex * PAGE_SIZE,
+            take: PAGE_SIZE,
+          })
+          if (requestSequence.current !== requestId) {
+            return
+          }
+          const lastPage = Math.max(
+            0,
+            Math.ceil(next.matchedCount / PAGE_SIZE) - 1
           )
-          return retained.size === current.size ? current : retained
-        })
-        setResult(next)
-        setLastRefreshedAt(Date.now())
-        setError(null)
-      } catch (reason) {
-        if (requestSequence.current !== requestId) {
-          return
+          if (pageIndex > lastPage) {
+            setPageIndex(lastPage)
+            return
+          }
+          const loadedIds = new Set(next.entries.map((entry) => entry.id))
+          setExpandedEntryIds((current) => {
+            const retained = new Set(
+              [...current].filter((entryId) => loadedIds.has(entryId))
+            )
+            return retained.size === current.size ? current : retained
+          })
+          setResult(next)
+          setLastRefreshedAt(Date.now())
+          setError(null)
+        } catch (reason) {
+          if (requestSequence.current !== requestId) {
+            return
+          }
+          setError(`读取日志失败：${errorMessage(reason)}`)
+        } finally {
+          if (requestSequence.current === requestId) {
+            setLoading(false)
+            setRefreshing(false)
+          }
         }
-        setError(`读取日志失败：${errorMessage(reason)}`)
-      } finally {
-        if (requestSequence.current === requestId) {
-          setLoading(false)
-          setRefreshing(false)
-        }
-      }
+      })
     },
-    [deferredSearch, level, take]
+    [appliedSearch, level, pageIndex, refreshQueue]
   )
+
+  const latestRefresh = React.useRef(refresh)
+  React.useLayoutEffect(() => {
+    latestRefresh.current = refresh
+  }, [refresh])
 
   React.useEffect(() => {
     const initialRefresh = window.setTimeout(() => {
-      void refresh(true)
+      void refresh()
     }, 0)
-    const interval =
-      autoRefresh && !autoRefreshPaused
-        ? window.setInterval(() => {
-            void refresh(true)
-          }, REFRESH_INTERVAL_MS)
-        : null
     return () => {
       window.clearTimeout(initialRefresh)
-      if (interval !== null) {
-        window.clearInterval(interval)
-      }
+      requestSequence.current += 1
+      refreshQueue.clearPending()
     }
-  }, [autoRefresh, autoRefreshPaused, refresh])
+  }, [refresh, refreshQueue])
+
+  React.useEffect(() => {
+    if (!autoRefresh || autoRefreshPaused) return
+    let disposed = false
+    let timeout: number
+    const poll = async () => {
+      if (!refreshQueue.isRunning()) await refresh(true)
+      if (!disposed) timeout = window.setTimeout(poll, REFRESH_INTERVAL_MS)
+    }
+    timeout = window.setTimeout(poll, REFRESH_INTERVAL_MS)
+    return () => {
+      disposed = true
+      window.clearTimeout(timeout)
+    }
+  }, [autoRefresh, autoRefreshPaused, refresh, refreshQueue])
 
   const runAction = React.useCallback(
     async (
@@ -265,14 +320,14 @@ export function LogsPage() {
       setError(null)
       try {
         setNotice(await operation())
-        await refresh(true)
+        await latestRefresh.current(true)
       } catch (reason) {
         setError(errorMessage(reason))
       } finally {
         setAction(null)
       }
     },
-    [action, refresh]
+    [action]
   )
 
   const handleExport = () => {
@@ -298,7 +353,7 @@ export function LogsPage() {
 
   const handleClear = () => {
     setClearDialogOpen(false)
-    setTake(PAGE_SIZE)
+    setPageIndex(0)
     void runAction("clear", async () => {
       const removed = await clearLogs()
       return `历史日志已清空，共移除 ${removed} 个日志文件。`
@@ -308,9 +363,7 @@ export function LogsPage() {
   const stats = result?.stats
   const isBusy = action !== null
   const compactMode =
-    displayMode === "summary" &&
-    deferredSearch.trim() === "" &&
-    level !== "debug"
+    displayMode === "summary" && appliedSearch === "" && level !== "debug"
   const resultEntries = result?.entries
   const visibleEntries = React.useMemo(() => {
     const entries = resultEntries ?? []
@@ -436,7 +489,7 @@ export function LogsPage() {
               setLevel("attention")
               setSearchText("")
               setDisplayMode("summary")
-              setTake(PAGE_SIZE)
+              setPageIndex(0)
             }}
           />
           <SummaryMetric
@@ -469,7 +522,6 @@ export function LogsPage() {
                     value={searchText}
                     onChange={(event) => {
                       setSearchText(event.target.value)
-                      setTake(PAGE_SIZE)
                     }}
                     placeholder="搜索事件、来源或内容…"
                     className="text-xs"
@@ -482,7 +534,7 @@ export function LogsPage() {
                 onValueChange={(value) => {
                   if (value) {
                     setLevel(value as LevelFilter)
-                    setTake(PAGE_SIZE)
+                    setPageIndex(0)
                   }
                 }}
               >
@@ -565,6 +617,7 @@ export function LogsPage() {
             )}
 
             <div
+              ref={listRef}
               className="min-h-0 flex-1 scroll-fade overflow-y-auto"
               onFocusCapture={() => setListFocused(true)}
               onBlurCapture={(event) => {
@@ -640,18 +693,36 @@ export function LogsPage() {
               )}
             </div>
 
-            {result?.hasMore ? (
+            {result && (pageIndex > 0 || result.hasMore) ? (
               <>
                 <Separator />
-                <div className="shrink-0 p-2 text-center">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={refreshing}
-                    onClick={() => setTake((current) => current + PAGE_SIZE)}
-                  >
-                    查看更多
-                  </Button>
+                <div className="flex shrink-0 items-center justify-between gap-2 p-2">
+                  <p className="px-1 text-xs text-muted-foreground tabular-nums">
+                    第 {pageIndex + 1} /{" "}
+                    {Math.max(1, Math.ceil(result.matchedCount / PAGE_SIZE))} 页
+                  </p>
+                  <nav aria-label="日志分页" className="flex gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={refreshing || pageIndex === 0}
+                      onClick={() =>
+                        setPageIndex((current) => Math.max(0, current - 1))
+                      }
+                    >
+                      <ChevronLeft data-icon="inline-start" />
+                      上一页
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={refreshing || !result.hasMore}
+                      onClick={() => setPageIndex((current) => current + 1)}
+                    >
+                      下一页
+                      <ChevronRight data-icon="inline-end" />
+                    </Button>
+                  </nav>
                 </div>
               </>
             ) : null}

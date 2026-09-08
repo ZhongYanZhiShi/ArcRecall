@@ -88,6 +88,7 @@ const DATE_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
 type RevealedPassword = {
   id: number
   value: string
+  expiresAt: number
 }
 
 export function HistoryPage() {
@@ -107,6 +108,15 @@ export function HistoryPage() {
     React.useState<RecoveryHistoryEntry | null>(null)
   const [clearDialogOpen, setClearDialogOpen] = React.useState(false)
   const initialLoadStarted = React.useRef(false)
+  const revealVersion = React.useRef(0)
+
+  React.useLayoutEffect(() => {
+    return () => {
+      // Activity preserves state, so explicitly discard secrets when hidden.
+      revealVersion.current += 1
+      setRevealed(null)
+    }
+  }, [])
 
   const load = React.useCallback(
     async (searchText = appliedSearch, requestedPage = pageIndex) => {
@@ -171,7 +181,10 @@ export function HistoryPage() {
     if (!revealed) {
       return
     }
-    const timeout = window.setTimeout(() => setRevealed(null), 30_000)
+    const timeout = window.setTimeout(
+      () => setRevealed(null),
+      Math.max(0, revealed.expiresAt - Date.now())
+    )
     return () => window.clearTimeout(timeout)
   }, [revealed])
 
@@ -230,8 +243,14 @@ export function HistoryPage() {
         return
       }
       void runBusy(async () => {
+        const version = revealVersion.current
         const password = await fetchPassword(entry.id)
-        setRevealed({ id: entry.id, value: password })
+        if (version !== revealVersion.current) return
+        setRevealed({
+          id: entry.id,
+          value: password,
+          expiresAt: Date.now() + 30_000,
+        })
         setNotice("密码将在 30 秒后自动隐藏。")
       })
     },
