@@ -127,6 +127,7 @@ type CompressPageViewProps = {
   task: CompressionTaskStatus | null
   running: boolean
   showPassword: boolean
+  passwordError: string | null
   setShowPassword: React.Dispatch<React.SetStateAction<boolean>>
   hasPermanentPassword: boolean
   usePermanentPassword: boolean
@@ -163,6 +164,7 @@ export function CompressPageView({
   task,
   running,
   showPassword,
+  passwordError,
   setShowPassword,
   hasPermanentPassword,
   usePermanentPassword,
@@ -192,6 +194,7 @@ export function CompressPageView({
     format,
     level,
     password,
+    passwordConfirmation,
     encryptFileNames,
     openWhenDone,
     useAiRename,
@@ -743,6 +746,44 @@ export function CompressPageView({
                         />
                       </div>
                     </Field>
+                    {password ? (
+                      <Field
+                        className="gap-1.5 md:col-start-2"
+                        data-invalid={Boolean(passwordError)}
+                      >
+                        <FieldLabel htmlFor="compression-password-confirmation">
+                          确认新密码
+                        </FieldLabel>
+                        <InputGroup>
+                          <InputGroupInput
+                            id="compression-password-confirmation"
+                            type={showPassword ? "text" : "password"}
+                            value={passwordConfirmation}
+                            onChange={(event) =>
+                              updateDraft(
+                                "passwordConfirmation",
+                                event.target.value
+                              )
+                            }
+                            placeholder="再次输入本次新密码"
+                            disabled={draftLocked}
+                            autoComplete="off"
+                            aria-invalid={Boolean(passwordError)}
+                            aria-describedby="compression-password-confirmation-help"
+                          />
+                        </InputGroup>
+                        <FieldDescription
+                          id="compression-password-confirmation-help"
+                          role={passwordError ? "alert" : undefined}
+                          className={
+                            passwordError ? "text-destructive" : undefined
+                          }
+                        >
+                          {passwordError ??
+                            "开始压缩或保存永久密码前，两次输入需要完全一致。"}
+                        </FieldDescription>
+                      </Field>
+                    ) : null}
                   </div>
                 </div>
               </ScrollArea>

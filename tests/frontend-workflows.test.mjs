@@ -432,6 +432,79 @@ test("AI 准备阶段锁住实际输入、拖放和异步文件选择结果", as
   harness.hide()
 })
 
+test("新密码未确认时阻止压缩与永久保存，确认时保留空格", async (t) => {
+  const starts = []
+  const saves = []
+  const harness = sourceHarness({
+    "@/lib/dictionary": { isDesktopRuntime: () => false },
+    "@/lib/ai": { listAiProfiles: async () => ({ profiles: [] }) },
+    "@/lib/compression": {
+      getPermanentCompressionPasswordStatus: async () => ({
+        hasPassword: true,
+      }),
+      startCompression: async (request) => {
+        starts.push(request)
+        return { running: false }
+      },
+      savePermanentCompressionPassword: async (password) => {
+        saves.push(password)
+        return { hasPassword: true }
+      },
+    },
+    "@/hooks/use-desktop-task": {
+      useDesktopTask: () => ({
+        task: null,
+        running: false,
+        runningRef: { current: false },
+        setTask: () => {},
+      }),
+    },
+  })
+  t.after(() => harness.hide())
+  const { CompressPage } = harness.load("src/components/home/compress-page.tsx")
+  let draft = {
+    ...harness.load("src/lib/compression-draft.ts").createCompressionDraft(),
+    sources: ["C:\\fixture.txt"],
+    baseName: "fixture",
+    password: " secret ",
+  }
+  const render = () =>
+    harness.render(CompressPage, {
+      draft,
+      onDraftChange: (next) => {
+        draft = typeof next === "function" ? next(draft) : next
+      },
+      onOpenAiSettings: () => {},
+    })
+  render()
+  await settle()
+  for (const confirmation of ["", "secret"]) {
+    draft = { ...draft, passwordConfirmation: confirmation }
+    let view = render()
+    await view.props.handleStart()
+    await view.props.handleSavePermanentPassword()
+    view = render()
+    assert.match(view.props.passwordError, /不一致/)
+    const input = find(
+      view.type(view.props),
+      (node) => node.props?.id === "compression-password-confirmation"
+    )
+    assert.equal(input.props["aria-invalid"], true)
+  }
+  assert.equal(starts.length, 0)
+  assert.equal(saves.length, 0)
+  draft = { ...draft, passwordConfirmation: " secret " }
+  await render().props.handleStart()
+  assert.equal(starts[0].password, " secret ")
+  await render().props.handleSavePermanentPassword()
+  assert.deepEqual(saves, [" secret "])
+  assert.equal(draft.password, "")
+  assert.equal(draft.passwordConfirmation, "")
+  await render().props.handleStart()
+  assert.equal(starts[1].password, undefined)
+  assert.equal(starts[1].usePermanentPassword, true)
+})
+
 function enableClock(t) {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000 })
   const previous = globalThis.window

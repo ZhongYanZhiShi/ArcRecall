@@ -11,6 +11,7 @@ export type CompressionDraft = {
   format: CompressionFormat
   level: CompressionLevel
   password: string
+  passwordConfirmation: string
   encryptFileNames: boolean
   openWhenDone: boolean
   useAiRename: boolean
@@ -25,10 +26,20 @@ export function createCompressionDraft(): CompressionDraft {
     format: "sevenZip",
     level: 5,
     password: "",
+    passwordConfirmation: "",
     encryptFileNames: false,
     openWhenDone: true,
     useAiRename: false,
   }
+}
+
+export function compressionPasswordError(
+  password: string,
+  confirmation: string
+): string | null {
+  return password && password !== confirmation
+    ? "两次输入的密码不一致，请重新确认。"
+    : null
 }
 
 export function forgetCompletedArchiveBaseName<

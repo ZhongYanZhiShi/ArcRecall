@@ -22,6 +22,7 @@ import {
   type CompressionTaskStatus,
 } from "@/lib/compression"
 import {
+  compressionPasswordError,
   forgetCompletedArchiveBaseName,
   shouldAutoOpenCompletedTask,
   shouldForgetArchiveBaseName,
@@ -52,11 +53,15 @@ export function CompressPage({
     format,
     level,
     password,
+    passwordConfirmation,
     encryptFileNames,
     openWhenDone,
     useAiRename,
   } = draft
   const [showPassword, setShowPassword] = React.useState(false)
+  const [passwordValidationRequested, setPasswordValidationRequested] =
+    React.useState(false)
+  const passwordError = compressionPasswordError(password, passwordConfirmation)
   const [hasPermanentPassword, setHasPermanentPassword] = React.useState(false)
   const [usePermanentPassword, setUsePermanentPassword] = React.useState(false)
   const [permanentPasswordReady, setPermanentPasswordReady] =
@@ -105,7 +110,15 @@ export function CompressPage({
     ) => {
       if (isDraftLocked()) return
       onDraftChange((current) =>
-        Object.is(current[key], value) ? current : { ...current, [key]: value }
+        Object.is(current[key], value)
+          ? current
+          : {
+              ...current,
+              [key]: value,
+              ...(key === "password" && !value
+                ? { passwordConfirmation: "" }
+                : {}),
+            }
       )
     },
     [isDraftLocked, onDraftChange]
@@ -142,6 +155,8 @@ export function CompressPage({
       setError("请先输入要永久保存的密码。")
       return
     }
+    setPasswordValidationRequested(true)
+    if (passwordError) return
     operationBusy.current = true
     operationVersion.current += 1
     setPasswordCredentialBusy(true)
@@ -150,7 +165,12 @@ export function CompressPage({
       const status = await savePermanentCompressionPassword(password)
       setHasPermanentPassword(status.hasPassword)
       setUsePermanentPassword(status.hasPassword)
-      onDraftChange((current) => ({ ...current, password: "" }))
+      onDraftChange((current) => ({
+        ...current,
+        password: "",
+        passwordConfirmation: "",
+      }))
+      setPasswordValidationRequested(false)
       setShowPassword(false)
     } catch (reason) {
       setError(toErrorMessage(reason))
@@ -158,7 +178,7 @@ export function CompressPage({
       operationBusy.current = false
       setPasswordCredentialBusy(false)
     }
-  }, [isDraftLocked, onDraftChange, password])
+  }, [isDraftLocked, onDraftChange, password, passwordError])
 
   const handleDeletePermanentPassword = React.useCallback(async () => {
     if (isDraftLocked()) return
@@ -333,6 +353,8 @@ export function CompressPage({
   const handleStart = React.useCallback(
     async (skipAiRename = false) => {
       if (isDraftLocked() || !permanentPasswordReady) return
+      setPasswordValidationRequested(true)
+      if (passwordError) return
       if (sources.length === 0) {
         setError("请先添加至少一个文件或文件夹。")
         return
@@ -408,6 +430,7 @@ export function CompressPage({
       outputDirectory,
       outputMode,
       password,
+      passwordError,
       permanentPasswordReady,
       onDraftChange,
       setTask,
@@ -459,6 +482,11 @@ export function CompressPage({
       task={task}
       running={running}
       showPassword={showPassword}
+      passwordError={
+        passwordValidationRequested || passwordConfirmation
+          ? passwordError
+          : null
+      }
       setShowPassword={setShowPassword}
       hasPermanentPassword={hasPermanentPassword}
       usePermanentPassword={usePermanentPassword}
