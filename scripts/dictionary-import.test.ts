@@ -3,10 +3,116 @@ import test from "node:test"
 
 import {
   detectDictionaryEncoding,
+  DictionaryImportError,
   importDictionaryFile,
   listDictionary,
   MAX_DICTIONARY_CANDIDATE_BYTES,
 } from "../src/lib/dictionary.ts"
+
+test("编码预检可取消，且不会提交任何候选", async () => {
+  const controller = new AbortController()
+  const file = new File(["cancel-preflight-only\n".repeat(10000)], "cancel.txt")
+  await assert.rejects(
+    importDictionaryFile(file, {
+      signal: controller.signal,
+      onProgress(progress) {
+        assert.equal(progress.phase, "validating")
+        assert.equal(progress.summary.addedCount, 0)
+        if (progress.processedBytes > 0) controller.abort()
+      },
+    }),
+    (error: unknown) =>
+      error instanceof DictionaryImportError &&
+      error.cancelled &&
+      error.summary.addedCount === 0
+  )
+  assert.equal(
+    (await listDictionary({ searchText: "cancel-preflight-only" }))
+      .matchedCount,
+    0
+  )
+})
+
+test("导入中取消保留已提交批次并报告准确数量", async () => {
+  const controller = new AbortController()
+  const rows = Array.from(
+    { length: 10000 },
+    (_, index) => `cancel-after-commit-${index}`
+  )
+  let committed = 0
+  await assert.rejects(
+    importDictionaryFile(new File([rows.join("\n")], "cancel.txt"), {
+      signal: controller.signal,
+      onProgress(progress) {
+        if (progress.phase === "importing" && progress.summary.addedCount > 0) {
+          committed = progress.summary.addedCount
+          controller.abort()
+        }
+      },
+    }),
+    (error: unknown) =>
+      error instanceof DictionaryImportError &&
+      error.cancelled &&
+      error.summary.addedCount === committed
+  )
+  assert.equal(committed, 4096)
+  assert.equal(
+    (await listDictionary({ searchText: "cancel-after-commit-" })).matchedCount,
+    committed
+  )
+  assert.equal(
+    (await listDictionary({ searchText: "cancel-after-commit-9999" }))
+      .matchedCount,
+    0
+  )
+})
+
+test("大字典逐片读取，后续读取失败仍返回已提交数量", async () => {
+  const file = new File(
+    [
+      Array.from(
+        { length: 12000 },
+        (_, index) => `read-failure-after-commit-${index}`
+      ).join("\n"),
+    ],
+    "partial.txt"
+  )
+  const slice = file.slice.bind(file)
+  let failRead = false
+  let committed = 0
+  file.arrayBuffer = async () => {
+    throw new Error("不得全量读取")
+  }
+  file.slice = (start, end, type) => {
+    const blob = slice(start, end, type)
+    if (failRead)
+      blob.arrayBuffer = async () => {
+        throw new Error("模拟读取失败")
+      }
+    return blob
+  }
+  await assert.rejects(
+    importDictionaryFile(file, {
+      onProgress(progress) {
+        if (progress.summary.addedCount > 0) {
+          committed = progress.summary.addedCount
+          failRead = true
+        }
+      },
+    }),
+    (error: unknown) =>
+      error instanceof DictionaryImportError &&
+      !error.cancelled &&
+      error.message === "模拟读取失败" &&
+      error.summary.addedCount === committed
+  )
+  assert.ok(committed > 0 && committed < 12000)
+  assert.equal(
+    (await listDictionary({ searchText: "read-failure-after-commit-" }))
+      .matchedCount,
+    committed
+  )
+})
 
 test("字典导入丢弃超大单行并继续处理后续候选", async () => {
   const file = new File(

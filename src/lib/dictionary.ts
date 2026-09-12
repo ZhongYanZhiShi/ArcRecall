@@ -35,6 +35,42 @@ export type DictionaryListResult = {
   matchedCount: number
 }
 
+export type DictionaryImportProgress = {
+  phase: "validating" | "importing"
+  processedBytes: number
+  totalBytes: number
+  encoding: DictionaryTextEncoding
+  summary: DictionaryCandidateAddSummary
+}
+
+type DictionaryImportOptions = {
+  signal?: AbortSignal
+  onProgress?: (progress: DictionaryImportProgress) => void
+}
+
+export class DictionaryImportError extends Error {
+  readonly summary: DictionaryCandidateAddSummary
+  readonly cancelled: boolean
+
+  constructor(
+    reason: unknown,
+    summary: DictionaryCandidateAddSummary,
+    cancelled: boolean
+  ) {
+    super(
+      cancelled
+        ? "字典导入已取消。"
+        : reason instanceof Error
+          ? reason.message
+          : String(reason),
+      { cause: reason }
+    )
+    this.name = "DictionaryImportError"
+    this.summary = summary
+    this.cancelled = cancelled
+  }
+}
+
 const EMPTY_SUMMARY: DictionaryCandidateAddSummary = {
   submittedCount: 0,
   addedCount: 0,
@@ -133,30 +169,38 @@ export async function deleteDictionaryCandidates(
  * Lines are streamed in batches; source path is never persisted.
  */
 export async function importDictionaryFile(
-  file: File
+  file: File,
+  options: DictionaryImportOptions = {}
 ): Promise<DictionaryCandidateAddSummary> {
   let summary = EMPTY_SUMMARY
   let batch: string[] = []
   const encoder = new TextEncoder()
+  let processedBytes = 0
+  let batchBytes = 0
+  activeDictionaryImports += 1
 
-  const flush = async () => {
-    if (batch.length === 0) {
-      return
+  try {
+    const encoding = await detectDictionaryEncoding(file, options)
+    const report = () =>
+      options.onProgress?.({
+        phase: "importing",
+        processedBytes,
+        totalBytes: file.size,
+        encoding,
+        summary,
+      })
+    const flush = async () => {
+      options.signal?.throwIfAborted()
+      if (batch.length === 0) return
+      const part = await addDictionaryCandidates(batch)
+      summary = mergeSummary(summary, part)
+      batch = []
+      batchBytes = 0
+      report()
+      // An in-flight IPC batch is allowed to commit; report it before stopping.
+      options.signal?.throwIfAborted()
     }
-    const part = await addDictionaryCandidates(batch)
-    summary = mergeSummary(summary, part)
-    batch = []
-  }
 
-  const encoding = await detectDictionaryEncoding(file)
-
-  // Prefer streaming for large files; fall back to full text for runtimes
-  // without Blob streams.
-  if (typeof file.stream === "function") {
-    const reader = file
-      .stream()
-      .pipeThrough(new TextDecoderStream(encoding, { fatal: true }))
-      .getReader()
     let pendingParts: string[] = []
     let pendingBytes = 0
     let discardingOversizedLine = false
@@ -179,27 +223,24 @@ export async function importDictionaryFile(
       pendingParts = []
       pendingBytes = 0
 
-      if (encoder.encode(line).byteLength > MAX_DICTIONARY_CANDIDATE_BYTES) {
+      const byteCount = encoder.encode(line).byteLength
+      if (byteCount > MAX_DICTIONARY_CANDIDATE_BYTES) {
         recordInvalidLine()
         return
       }
       batch.push(line)
-      if (batch.length >= DICTIONARY_BATCH_SIZE) {
+      batchBytes += byteCount
+      if (batch.length >= DICTIONARY_BATCH_SIZE || batchBytes >= 1024 * 1024) {
         await flush()
       }
     }
 
-    while (true) {
-      const { done, value: decodedChunk } = await reader.read()
-      if (done) {
-        break
-      }
-
+    const consume = async (decodedChunk: string) => {
       let value = decodedChunk
       if (discardingOversizedLine) {
         const newline = value.indexOf("\n")
         if (newline === -1) {
-          continue
+          return
         }
         discardingOversizedLine = false
         value = value.slice(newline + 1)
@@ -207,6 +248,7 @@ export async function importDictionaryFile(
 
       let cursor = 0
       while (cursor < value.length) {
+        options.signal?.throwIfAborted()
         const newline = value.indexOf("\n", cursor)
         const segment = value.slice(
           cursor,
@@ -235,6 +277,22 @@ export async function importDictionaryFile(
       }
     }
 
+    report()
+    const decoder = new TextDecoder(encoding, { fatal: true })
+    const chunkBytes = 64 * 1024
+    for (let offset = 0; offset < file.size; offset += chunkBytes) {
+      options.signal?.throwIfAborted()
+      const bytes = await file.slice(offset, offset + chunkBytes).arrayBuffer()
+      options.signal?.throwIfAborted()
+      processedBytes = Math.min(offset + chunkBytes, file.size)
+      await consume(decoder.decode(bytes, { stream: true }))
+      report()
+      if ((offset / chunkBytes + 1) % 16 === 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      }
+    }
+    await consume(decoder.decode())
+    options.signal?.throwIfAborted()
     if (!discardingOversizedLine && pendingParts.length > 0) {
       if (pendingBytes > MAX_DICTIONARY_CANDIDATE_BYTES) {
         recordInvalidLine()
@@ -243,16 +301,22 @@ export async function importDictionaryFile(
       }
     }
     await flush()
+    report()
     return summary
+  } catch (reason) {
+    throw new DictionaryImportError(
+      reason,
+      summary,
+      options.signal?.aborted === true
+    )
+  } finally {
+    activeDictionaryImports -= 1
   }
+}
 
-  const text = new TextDecoder(encoding, { fatal: true }).decode(
-    await file.arrayBuffer()
-  )
-  const lines = text.split(/\r?\n/)
-  // split keeps a trailing empty string when file ends with newline — treat
-  // empty lines as invalid candidates (same as Rust store).
-  return addDictionaryCandidates(lines)
+let activeDictionaryImports = 0
+export function isDictionaryImportRunning(): boolean {
+  return activeDictionaryImports > 0
 }
 
 export type DictionaryTextEncoding =
@@ -262,8 +326,10 @@ export type DictionaryTextEncoding =
   | "gb18030"
 
 export async function detectDictionaryEncoding(
-  file: Blob
+  file: Blob,
+  options: DictionaryImportOptions = {}
 ): Promise<DictionaryTextEncoding> {
+  options.signal?.throwIfAborted()
   const sample = new Uint8Array(await file.slice(0, 3).arrayBuffer())
   let declaredEncoding: DictionaryTextEncoding | undefined
   if (sample[0] === 0xef && sample[1] === 0xbb && sample[2] === 0xbf) {
@@ -281,7 +347,7 @@ export async function detectDictionaryEncoding(
     ? [declaredEncoding]
     : ["utf-8", "gb18030"]
   for (const encoding of encodings) {
-    if (await canDecodeDictionary(file, encoding)) return encoding
+    if (await canDecodeDictionary(file, encoding, options)) return encoding
   }
   throw new Error(
     "字典包含无效的文本编码，请转换为 UTF-8 后重试；尚未导入任何候选。"
@@ -290,18 +356,39 @@ export async function detectDictionaryEncoding(
 
 async function canDecodeDictionary(
   file: Blob,
-  encoding: DictionaryTextEncoding
+  encoding: DictionaryTextEncoding,
+  options: DictionaryImportOptions
 ): Promise<boolean> {
   const decoder = new TextDecoder(encoding, { fatal: true })
   const chunkBytes = 64 * 1024
+  options.onProgress?.({
+    phase: "validating",
+    processedBytes: 0,
+    totalBytes: file.size,
+    encoding,
+    summary: EMPTY_SUMMARY,
+  })
   for (let offset = 0; offset < file.size; offset += chunkBytes) {
+    options.signal?.throwIfAborted()
     const bytes = await file.slice(offset, offset + chunkBytes).arrayBuffer()
+    options.signal?.throwIfAborted()
     try {
       decoder.decode(bytes, { stream: true })
     } catch {
       return false
     }
+    options.onProgress?.({
+      phase: "validating",
+      processedBytes: Math.min(offset + chunkBytes, file.size),
+      totalBytes: file.size,
+      encoding,
+      summary: EMPTY_SUMMARY,
+    })
+    if ((offset / chunkBytes + 1) % 16 === 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    }
   }
+  options.signal?.throwIfAborted()
   try {
     decoder.decode()
     return true
@@ -320,7 +407,7 @@ const memoryStore = (() => {
   const byId = new Map<number, MemoryRow>()
   const order: number[] = []
 
-  const maxBytes = 64 * 1024
+  const encoder = new TextEncoder()
 
   function add(candidates: string[]): DictionaryCandidateAddSummary {
     let submitted = 0
@@ -328,8 +415,8 @@ const memoryStore = (() => {
     let invalid = 0
     for (const text of candidates) {
       submitted += 1
-      const byteCount = new TextEncoder().encode(text).length
-      if (text.length === 0 || byteCount > maxBytes) {
+      const byteCount = encoder.encode(text).length
+      if (text.length === 0 || byteCount > MAX_DICTIONARY_CANDIDATE_BYTES) {
         invalid += 1
         continue
       }

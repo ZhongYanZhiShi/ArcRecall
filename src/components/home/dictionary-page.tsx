@@ -8,6 +8,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Square,
   Trash2,
 } from "lucide-react"
 import * as React from "react"
@@ -57,6 +58,7 @@ import {
   PaginationItem,
 } from "@/components/ui/pagination"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Progress } from "@/components/ui/progress"
 import { Separator } from "@/components/ui/separator"
 import {
   Sheet,
@@ -77,6 +79,8 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import {
   DICTIONARY_PAGE_SIZE,
+  DictionaryImportError,
+  type DictionaryImportProgress,
   type DictionaryCandidateEntry,
   addDictionaryCandidates,
   deleteDictionaryCandidates,
@@ -109,6 +113,15 @@ export function DictionaryPage() {
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const initialLoadStarted = React.useRef(false)
+  const operationBusy = React.useRef(false)
+  const importController = React.useRef<AbortController | null>(null)
+  const [importProgress, setImportProgress] =
+    React.useState<DictionaryImportProgress | null>(null)
+  const [importCancelling, setImportCancelling] = React.useState(false)
+  const importPercent = importProgress
+    ? (importProgress.processedBytes / Math.max(1, importProgress.totalBytes)) *
+      100
+    : 0
 
   const loadEntries = React.useCallback(
     async (searchText: string, requestedPageIndex = 0) => {
@@ -157,9 +170,10 @@ export function DictionaryPage() {
 
   const runBusy = React.useCallback(
     async (workingMessage: string, operation: () => Promise<void>) => {
-      if (isBusy) {
+      if (isBusy || operationBusy.current) {
         return
       }
+      operationBusy.current = true
       setIsBusy(true)
       setStatusTone("busy")
       setStatus(workingMessage)
@@ -171,6 +185,7 @@ export function DictionaryPage() {
         setStatusTone("error")
         setStatus(`操作失败：${message}`)
       } finally {
+        operationBusy.current = false
         setIsBusy(false)
       }
     },
@@ -263,19 +278,58 @@ export function DictionaryPage() {
       return
     }
     void runBusy("正在导入候选…", async () => {
+      const controller = new AbortController()
+      importController.current = controller
+      setImportCancelling(false)
+      setAddPanelOpen(false)
+      let lastProgressAt = 0
+      let lastPhase = ""
+      let lastEncoding = ""
+      let message: string
+      let tone: StatusTone
       try {
-        const summary = await importDictionaryFile(file)
-        const result = await loadEntries(appliedSearch, pageIndex)
-        setStatusTone("ok")
-        setStatus(
-          `${formatAddStatus("导入完成", summary)} 全局共 ${result.totalCount} 条。`
-        )
+        const summary = await importDictionaryFile(file, {
+          signal: controller.signal,
+          onProgress: (progress) => {
+            const now = Date.now()
+            if (
+              now - lastProgressAt >= 100 ||
+              progress.phase !== lastPhase ||
+              progress.encoding !== lastEncoding ||
+              progress.processedBytes === progress.totalBytes
+            ) {
+              lastProgressAt = now
+              lastPhase = progress.phase
+              lastEncoding = progress.encoding
+              setImportProgress(progress)
+            }
+          },
+        })
+        message = formatAddStatus("导入完成", summary)
+        tone = "ok"
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : String(error ?? "未知错误")
-        setStatusTone("error")
-        setStatus(`导入失败：${message}`)
+        if (error instanceof DictionaryImportError) {
+          tone = error.cancelled ? "neutral" : "error"
+          message = `${error.message} ${formatAddStatus("本次已处理", error.summary)}`
+        } else {
+          tone = "error"
+          message = `导入失败：${error instanceof Error ? error.message : String(error)}`
+        }
+      } finally {
+        importController.current = null
+        setImportProgress(null)
+        setImportCancelling(false)
       }
+      // Cancellation or a later IPC error may leave committed batches.
+      try {
+        const result = await loadEntries(appliedSearch, pageIndex)
+        message += ` 全局共 ${result.totalCount} 条。`
+      } catch {
+        message += " 列表刷新失败，请点击刷新查看已导入的候选。"
+        tone = "error"
+      }
+      setStatusTone(tone)
+      setStatus(message)
     })
   }
 
@@ -410,6 +464,47 @@ export function DictionaryPage() {
             </>
           }
         />
+
+        {importProgress ? (
+          <Card size="sm" className="shrink-0 gap-2">
+            <CardContent className="flex items-center gap-3">
+              <div className="min-w-0 flex-1 space-y-2">
+                <p className="text-xs" role="status">
+                  {importProgress.phase === "validating"
+                    ? `正在预检编码（${importProgress.encoding}）`
+                    : "正在导入候选"}
+                  {" · "}
+                  {Math.round(importPercent)}%{" · "}新增{" "}
+                  {importProgress.summary.addedCount} 条，重复{" "}
+                  {importProgress.summary.duplicateCount} 条
+                </p>
+                <Progress
+                  value={importPercent}
+                  aria-label={
+                    importProgress.phase === "validating"
+                      ? "字典编码预检进度"
+                      : "字典读取进度"
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  取消后保留已完成批次，尚未提交的候选不会写入。
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={importCancelling}
+                onClick={() => {
+                  setImportCancelling(true)
+                  importController.current?.abort()
+                }}
+              >
+                <Square data-icon="inline-start" />
+                {importCancelling ? "正在取消" : "取消导入"}
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <Card
           size="sm"
