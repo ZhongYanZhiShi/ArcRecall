@@ -411,7 +411,10 @@ fn resolve_compression_password(
     if supplied_password.is_some() || !use_permanent_password {
         return Ok(supplied_password);
     }
-    load_permanent_password()
+    load_permanent_password()?
+        .filter(|password| !password.is_empty())
+        .map(Some)
+        .ok_or_else(|| "已保存的永久密码不存在，请重新保存密码或关闭本次使用后重试。".into())
 }
 
 fn validate_permanent_compression_password(password: &str) -> Result<&str, String> {
@@ -454,5 +457,33 @@ mod tests {
         let error = validate_permanent_compression_password("").expect_err("empty password");
 
         assert_eq!(error, "永久密码不能为空。");
+    }
+
+    #[test]
+    fn selected_permanent_password_must_still_exist() {
+        for password in [None, Some(String::new())] {
+            assert!(resolve_compression_password(None, true, || Ok(password)).is_err());
+        }
+        assert_eq!(
+            resolve_compression_password(None, true, || Err("unavailable".into())),
+            Err("unavailable".into())
+        );
+        assert_eq!(
+            resolve_compression_password(None, true, || Ok(Some(" ".into()))).unwrap(),
+            Some(" ".into())
+        );
+    }
+
+    #[test]
+    fn explicit_or_unencrypted_jobs_do_not_load_saved_credentials() {
+        assert_eq!(
+            resolve_compression_password(Some("temporary".into()), true, || panic!("unused"))
+                .unwrap(),
+            Some("temporary".into())
+        );
+        assert_eq!(
+            resolve_compression_password(None, false, || panic!("unused")).unwrap(),
+            None
+        );
     }
 }
