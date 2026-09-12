@@ -244,6 +244,12 @@ fn read_bounded_response(response: reqwest::blocking::Response) -> Result<String
 fn build_client() -> Result<Client, AiError> {
     Client::builder()
         .timeout(AI_REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if let Err(error) = validate_ai_base_url(attempt.url().as_str()) {
+                return attempt.error(error);
+            }
+            reqwest::redirect::Policy::default().redirect(attempt)
+        }))
         .build()
         .map_err(AiError::Client)
 }
@@ -493,6 +499,96 @@ fn concise_body(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn redirect_server(
+        target: &str,
+        status: u16,
+        requests: usize,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let target = target.to_owned();
+        let worker = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            for index in 0..requests {
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "redirect request timed out"
+                            );
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                let response = if target == "/ok" && index == 1 {
+                    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_owned()
+                } else {
+                    format!(
+                        "HTTP/1.1 {status} Redirect\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                };
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (url, worker)
+    }
+
+    #[test]
+    fn redirects_revalidate_remote_transport_and_credentials() {
+        for status in [307, 308] {
+            for target in [
+                "http://remote.invalid/v1",
+                "https://user:secret@example.invalid/v1",
+            ] {
+                let (url, server) = redirect_server(target, status, 1);
+                let error = build_client().unwrap().post(url).send().unwrap_err();
+                assert!(error.is_redirect(), "{error:?}");
+                server.join().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn redirects_preserve_local_services_and_the_default_hop_limit() {
+        let (url, server) = redirect_server("/ok", 307, 2);
+        assert_eq!(
+            build_client()
+                .unwrap()
+                .get(url)
+                .send()
+                .unwrap()
+                .text()
+                .unwrap(),
+            "ok"
+        );
+        server.join().unwrap();
+        let (url, server) = redirect_server("/loop", 308, 11);
+        assert!(
+            build_client()
+                .unwrap()
+                .get(url)
+                .send()
+                .unwrap_err()
+                .is_redirect()
+        );
+        server.join().unwrap();
+    }
 
     #[test]
     fn builds_openai_compatible_endpoints() {
