@@ -119,7 +119,8 @@ pub struct LogStore {
     max_total_bytes: AtomicU64,
     sequence: AtomicU64,
     max_level: AtomicU8,
-    file_lock: Mutex<()>,
+    // Known retained bytes; invalidated before any operation that can fail mid-write.
+    file_lock: Mutex<Option<u64>>,
     summary_cache: Mutex<HashMap<PathBuf, CachedLogFileSummary>>,
     cache_epoch: AtomicU64,
 }
@@ -162,7 +163,7 @@ impl LogStore {
             max_total_bytes: AtomicU64::new(max_total_bytes.max(max_file_bytes)),
             sequence: AtomicU64::new(1),
             max_level: AtomicU8::new(LogLevel::Info.rank()),
-            file_lock: Mutex::new(()),
+            file_lock: Mutex::new(None),
             summary_cache: Mutex::new(HashMap::new()),
             cache_epoch: AtomicU64::new(0),
         })
@@ -173,7 +174,8 @@ impl LogStore {
     }
 
     pub fn set_max_total_bytes(&self, max_total_bytes: u64) -> Result<(), String> {
-        let _guard = self.file_lock.lock().map_err(|error| error.to_string())?;
+        let mut retained = self.file_lock.lock().map_err(|error| error.to_string())?;
+        *retained = None;
         self.max_total_bytes
             .store(max_total_bytes.max(self.max_file_bytes), Ordering::Relaxed);
         self.cache_epoch.fetch_add(1, Ordering::Relaxed);
@@ -181,7 +183,7 @@ impl LogStore {
             .lock()
             .map_err(|error| error.to_string())?
             .clear();
-        self.trim_to_capacity_locked()?;
+        *retained = Some(self.trim_to_capacity_locked(0)?);
         Ok(())
     }
 
@@ -217,23 +219,34 @@ impl LogStore {
         let mut line = serde_json::to_vec(&entry).map_err(|error| error.to_string())?;
         line.push(b'\n');
 
-        let _guard = self.file_lock.lock().map_err(|error| error.to_string())?;
+        let mut retained = self.file_lock.lock().map_err(|error| error.to_string())?;
+        let line_bytes = line.len() as u64;
+        let max_total = self.max_total_bytes.load(Ordering::Relaxed);
+        if line_bytes > max_total {
+            return Err("单条日志超过日志总容量限制。".into());
+        }
+        let mut disk_bytes = match retained.take() {
+            Some(bytes) => bytes,
+            None => self.disk_bytes_locked()?,
+        };
         fs::create_dir_all(&self.directory).map_err(|error| error.to_string())?;
         let active = self.active_path();
         let current_metadata = fs::metadata(&active).ok();
         let current_bytes = current_metadata
             .as_ref()
             .map_or(0, |metadata| metadata.len());
-        if current_bytes > 0
-            && current_bytes.saturating_add(line.len() as u64) > self.max_file_bytes
-        {
+        let rotate = current_bytes > 0
+            && current_bytes.saturating_add(line.len() as u64) > self.max_file_bytes;
+        if rotate || disk_bytes.saturating_add(line_bytes) > max_total {
             self.cache_epoch.fetch_add(1, Ordering::Relaxed);
             self.summary_cache
                 .lock()
                 .map_err(|error| error.to_string())?
                 .clear();
-            self.rotate_locked()?;
-            self.trim_to_capacity_locked()?;
+            if rotate {
+                self.rotate_locked()?;
+            }
+            disk_bytes = self.trim_to_capacity_locked(line_bytes)?;
         }
 
         let mut file = OpenOptions::new()
@@ -243,6 +256,7 @@ impl LogStore {
             .map_err(|error| error.to_string())?;
         file.write_all(&line).map_err(|error| error.to_string())?;
         let metadata = file.metadata().map_err(|error| error.to_string())?;
+        *retained = Some(disk_bytes.saturating_add(line_bytes));
         if let Some(cached) = self
             .summary_cache
             .lock()
@@ -350,7 +364,8 @@ impl LogStore {
     }
 
     pub fn clear(&self) -> Result<usize, String> {
-        let _guard = self.file_lock.lock().map_err(|error| error.to_string())?;
+        let mut retained = self.file_lock.lock().map_err(|error| error.to_string())?;
+        *retained = None;
         self.summary_cache
             .lock()
             .map_err(|error| error.to_string())?
@@ -363,6 +378,7 @@ impl LogStore {
                 .map_err(|error| format!("无法删除日志文件 {}：{error}", path.display()))?;
             removed += 1;
         }
+        *retained = Some(0);
         Ok(removed)
     }
 
@@ -486,7 +502,17 @@ impl LogStore {
         Ok(())
     }
 
-    fn trim_to_capacity_locked(&self) -> Result<(), String> {
+    fn disk_bytes_locked(&self) -> Result<u64, String> {
+        self.existing_paths_locked()
+            .iter()
+            .try_fold(0u64, |bytes, path| {
+                fs::metadata(path)
+                    .map(|metadata| bytes.saturating_add(metadata.len()))
+                    .map_err(|error| error.to_string())
+            })
+    }
+
+    fn trim_to_capacity_locked(&self, reserve_bytes: u64) -> Result<u64, String> {
         let max_file_count = self.max_file_count();
         for index in (max_file_count..MAX_MANAGED_LOG_FILES).rev() {
             let path = self.archive_path(index);
@@ -495,13 +521,11 @@ impl LogStore {
             }
         }
 
-        let max_total_bytes = self.max_total_bytes.load(Ordering::Relaxed);
-        let mut disk_bytes = self
-            .existing_paths_locked()
-            .iter()
-            .filter_map(|path| fs::metadata(path).ok())
-            .map(|metadata| metadata.len())
-            .sum::<u64>();
+        let max_total_bytes = self
+            .max_total_bytes
+            .load(Ordering::Relaxed)
+            .saturating_sub(reserve_bytes);
+        let mut disk_bytes = self.disk_bytes_locked()?;
         for index in (1..max_file_count).rev() {
             if disk_bytes <= max_total_bytes {
                 break;
@@ -516,7 +540,14 @@ impl LogStore {
             fs::remove_file(&path).map_err(|error| error.to_string())?;
             disk_bytes = disk_bytes.saturating_sub(bytes);
         }
-        Ok(())
+        if disk_bytes > max_total_bytes {
+            let active = self.active_path();
+            if active.is_file() {
+                fs::remove_file(active).map_err(|error| error.to_string())?;
+                disk_bytes = 0;
+            }
+        }
+        Ok(disk_bytes)
     }
 
     fn max_file_count(&self) -> usize {
@@ -1057,9 +1088,38 @@ mod tests {
         }
         assert!(store.existing_paths_locked().len() > 1);
 
-        store.set_max_total_bytes(220).unwrap();
+        store.set_max_total_bytes(400).unwrap();
 
         assert_eq!(store.existing_paths_locked(), vec![store.active_path()]);
+    }
+
+    #[test]
+    fn non_multiple_capacity_bounds_disk_usage_after_every_append() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = LogStore::with_limits(directory.path(), 1000, 1200).unwrap();
+        for index in 0..80 {
+            store
+                .write(
+                    LogLevel::Info,
+                    "test",
+                    &format!("entry-{index}"),
+                    &"x".repeat(80),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            assert!(store.disk_bytes_locked().unwrap() <= 1200);
+            assert_eq!(
+                store.list(&LogQuery::default()).unwrap().entries[0].event,
+                format!("entry-{index}")
+            );
+        }
+        store.set_max_total_bytes(1000).unwrap();
+        assert!(store.disk_bytes_locked().unwrap() <= 1000);
+        store.clear().unwrap();
+        store
+            .write(LogLevel::Info, "test", "after-clear", "ok", BTreeMap::new())
+            .unwrap();
+        assert_eq!(store.list(&LogQuery::default()).unwrap().total_count, 1);
     }
 
     #[test]
