@@ -250,6 +250,7 @@ export function EngineSettingsPanel() {
     runEngineAction("正在保存 John / Perl 路径…", async () => {
       const status = await setJohnPerl(johnDirectory.trim(), perlPath.trim())
       applyJohnStatus(status)
+      await refreshEngine()
       return { message: status.message, error: !status.ready }
     })
 

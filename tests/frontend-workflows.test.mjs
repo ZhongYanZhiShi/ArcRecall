@@ -254,6 +254,70 @@ test("恢复启动期间拒绝拖放、粘贴、重复启动和过期选择器",
   )
 })
 
+test("保存 John / Perl 后刷新界面和共享能力缓存", async (t) => {
+  let available = false
+  let probes = 0
+  const john = () => ({
+    ready: available,
+    johnCpuReady: available,
+    johnToolsDirectory: "C:\\John",
+    perlPath: "C:\\Perl\\perl.exe",
+  })
+  const harness = sourceHarness({
+    "@tauri-apps/api/core": {
+      invoke: async (command) => {
+        assert.equal(command, "recovery_capabilities")
+        probes += 1
+        return { cpuAvailable: available, gpuAvailable: false, methods: [] }
+      },
+    },
+    "@tauri-apps/plugin-dialog": {},
+    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/settings": {
+      getFullEngineBundleStatus: async () => ({}),
+      getHashcatStatus: async () => ({}),
+      getJohnPerlStatus: async () => john(),
+      getSettings: async () => ({}),
+      setJohnPerl: async () => {
+        available = !available
+        return john()
+      },
+    },
+  })
+  t.after(() => harness.hide())
+  const { EngineSettingsPanel } = harness.load(
+    "src/components/home/engine-settings-panel.tsx"
+  )
+  const recovery = harness.load("src/lib/recovery.ts")
+  harness.render(EngineSettingsPanel)
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await settle()
+  assert.equal((await recovery.getRecoveryCapabilities()).cpuAvailable, false)
+  for (const expected of [true, false]) {
+    find(
+      harness.render(EngineSettingsPanel),
+      (node) => node.type === "JohnPerlCard"
+    ).props.onSave()
+    await settle()
+    await settle()
+    const tree = harness.render(EngineSettingsPanel)
+    assert.equal(
+      find(tree, (node) => node.type === "JohnPerlCard").props.status.ready,
+      expected
+    )
+    assert.equal(
+      find(tree, (node) => node.type === "DefaultRecoveryCard").props
+        .capabilities.cpuAvailable,
+      expected
+    )
+    assert.equal(
+      (await recovery.getRecoveryCapabilities()).cpuAvailable,
+      expected
+    )
+  }
+  assert.equal(probes, 3)
+})
+
 test("AI 准备阶段锁住实际输入、拖放和异步文件选择结果", async () => {
   const ai = deferred()
   const files = deferred()
