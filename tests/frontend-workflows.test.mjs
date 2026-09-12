@@ -142,6 +142,118 @@ const button = (tree, text) =>
       node.type === "Button" && [node.props.children].flat().includes(text)
   )
 
+test("恢复启动期间拒绝拖放、粘贴、重复启动和过期选择器", async (t) => {
+  const previousWindow = globalThis.window
+  const previousElement = globalThis.Element
+  let paste
+  globalThis.Element = class {}
+  globalThis.window = {
+    addEventListener: (name, callback) => {
+      if (name === "paste") paste = callback
+    },
+    removeEventListener: () => {},
+  }
+  let drop
+  let task = null
+  let starts = 0
+  const runningRef = { current: false }
+  const setTask = (next) => {
+    task = typeof next === "function" ? next(task) : next
+    runningRef.current = Boolean(task?.running)
+  }
+  const starting = deferred()
+  const archivePicker = deferred()
+  const outputPicker = deferred()
+  const analyzed = []
+  const harness = sourceHarness({
+    "@tauri-apps/api/webview": {
+      getCurrentWebview: () => ({
+        onDragDropEvent: async (fn) => {
+          drop = fn
+          return () => {}
+        },
+      }),
+    },
+    "@/lib/dictionary": {
+      isDesktopRuntime: () => true,
+      countDictionary: async () => 0,
+    },
+    "@/lib/recovery": {
+      getRecoveryCapabilities: async () => ({ methods: [] }),
+      pickArchivePath: () => archivePicker.promise,
+      pickOutputDirectory: () => outputPicker.promise,
+      analyzeArchive: async (path) => {
+        analyzed.push(path)
+        return { archivePath: path, suggestedOutputDirectory: path + ".out" }
+      },
+      startRecovery: () => {
+        starts += 1
+        return starts === 1
+          ? starting.promise
+          : Promise.reject(new Error("synthetic failure"))
+      },
+    },
+    "@/lib/settings": { getSettings: async () => ({}) },
+    "@/lib/sensitive-clipboard": {},
+    "@/hooks/use-desktop-task": {
+      useDesktopTask: () => ({
+        task,
+        running: runningRef.current,
+        runningRef,
+        setTask,
+      }),
+    },
+  })
+  t.after(() => {
+    harness.hide()
+    globalThis.window = previousWindow
+    globalThis.Element = previousElement
+  })
+  const { ExtractPage } = harness.load("src/components/home/extract-page.tsx")
+  const props = { onOpenEngineSettings: () => {} }
+  harness.render(ExtractPage, props)
+  await settle()
+  drop({ payload: { type: "drop", paths: ["C:\\A.7z"] } })
+  await settle()
+  let view = harness.render(ExtractPage, props)
+  const oldArchive = view.props.handlePickArchive()
+  const oldOutput = view.props.handlePickOutputDir()
+  const launch = view.props.handleStart()
+  await view.props.handleStart()
+  drop({ payload: { type: "drop", paths: ["C:\\B.7z"] } })
+  paste({
+    target: null,
+    clipboardData: { getData: () => "C:\\C.7z" },
+    preventDefault: () => {},
+  })
+  await settle()
+  view = harness.render(ExtractPage, props)
+  assert.equal(view.props.busy, true)
+  assert.deepEqual(analyzed, ["C:\\A.7z"])
+  assert.equal(starts, 1)
+  starting.resolve({ taskId: "A", archivePath: "C:\\A.7z", running: true })
+  await launch
+  view = harness.render(ExtractPage, props)
+  assert.equal(view.props.analysis.archivePath, view.props.task.archivePath)
+  setTask({ ...task, running: false })
+  archivePicker.resolve("C:\\stale.7z")
+  outputPicker.resolve("C:\\stale-output")
+  await Promise.all([oldArchive, oldOutput])
+  view = harness.render(ExtractPage, props)
+  assert.equal(view.props.analysis.archivePath, "C:\\A.7z")
+  assert.equal(view.props.outputDir, null)
+  await view.props.handleStart()
+  view = harness.render(ExtractPage, props)
+  assert.equal(view.props.busy, false)
+  assert.match(view.props.error, /synthetic failure/)
+  drop({ payload: { type: "drop", paths: ["C:\\D.7z"] } })
+  await settle()
+  assert.equal(
+    harness.render(ExtractPage, props).props.analysis.archivePath,
+    "C:\\D.7z"
+  )
+})
+
 test("AI 准备阶段锁住实际输入、拖放和异步文件选择结果", async () => {
   const ai = deferred()
   const files = deferred()

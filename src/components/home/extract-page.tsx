@@ -83,6 +83,11 @@ export function ExtractPage({
   const openedTasks = React.useRef(new Set<string>())
   const autoOpenTasks = React.useRef(new Set<string>())
   const analysisRequestId = React.useRef(0)
+  const operationBusy = React.useRef(false)
+  const isInputLocked = React.useCallback(
+    () => operationBusy.current || runningRef.current,
+    [runningRef]
+  )
   const taskResultRef = React.useRef<HTMLDivElement>(null)
   const revealedTaskId = React.useRef<string | null>(null)
 
@@ -120,11 +125,12 @@ export function ExtractPage({
       if (!normalizedPath) {
         return
       }
-      if (runningRef.current) {
-        setError("当前恢复任务仍在运行，请先取消或等待任务完成。")
+      if (isInputLocked()) {
         return
       }
+      operationBusy.current = true
       const requestId = ++analysisRequestId.current
+      setDragOver(false)
       setAnalyzingPath(normalizedPath)
       setBusy(true)
       setError(null)
@@ -149,12 +155,13 @@ export function ExtractPage({
         setError(toErrorMessage(reason))
       } finally {
         if (requestId === analysisRequestId.current) {
+          operationBusy.current = false
           setAnalyzingPath(null)
           setBusy(false)
         }
       }
     },
-    [runningRef, setTask]
+    [isInputLocked, setTask]
   )
 
   React.useEffect(() => {
@@ -168,7 +175,7 @@ export function ExtractPage({
         if (disposed) {
           return
         }
-        if (runningRef.current) {
+        if (isInputLocked()) {
           setDragOver(false)
           return
         }
@@ -198,7 +205,7 @@ export function ExtractPage({
       disposed = true
       unlisten?.()
     }
-  }, [runningRef, selectArchivePath])
+  }, [isInputLocked, selectArchivePath])
 
   React.useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
@@ -256,32 +263,42 @@ export function ExtractPage({
   }, [openWhenDone, task])
 
   const handlePickArchive = React.useCallback(async () => {
+    if (isInputLocked()) return
+    const version = analysisRequestId.current
     setError(null)
     try {
       const path = await pickArchivePath()
+      if (isInputLocked() || version !== analysisRequestId.current) return
       if (path) {
         await selectArchivePath(path)
       }
     } catch (reason) {
-      setError(toErrorMessage(reason))
+      if (!isInputLocked() && version === analysisRequestId.current) {
+        setError(toErrorMessage(reason))
+      }
     }
-  }, [selectArchivePath])
+  }, [isInputLocked, selectArchivePath])
 
   const handlePickOutputDir = React.useCallback(async () => {
+    if (isInputLocked()) return
+    const version = analysisRequestId.current
     setError(null)
     try {
       const path = await pickOutputDirectory()
+      if (isInputLocked() || version !== analysisRequestId.current) return
       if (path) {
         setOutputDir(path)
         setOutputMode("custom")
       }
     } catch (reason) {
-      setError(toErrorMessage(reason))
+      if (!isInputLocked() && version === analysisRequestId.current) {
+        setError(toErrorMessage(reason))
+      }
     }
-  }, [])
+  }, [isInputLocked])
 
   const handleStart = React.useCallback(async () => {
-    if (!analysis) {
+    if (!analysis || isInputLocked()) {
       return
     }
     if (outputMode === "custom" && !outputDir) {
@@ -289,7 +306,10 @@ export function ExtractPage({
       setOptionsOpen(true)
       return
     }
+    operationBusy.current = true
+    analysisRequestId.current += 1
     setBusy(true)
+    setDragOver(false)
     setError(null)
     try {
       const started = await startRecovery({
@@ -311,12 +331,14 @@ export function ExtractPage({
     } catch (reason) {
       setError(toErrorMessage(reason))
     } finally {
+      operationBusy.current = false
       setBusy(false)
     }
   }, [
     analysis,
     computeMode,
     knownPassword,
+    isInputLocked,
     outputDir,
     outputMode,
     recursive,
@@ -325,7 +347,7 @@ export function ExtractPage({
 
   const handleComputeModeChange = React.useCallback(
     async (nextMode: RecoveryComputeMode) => {
-      if (running || computeModeBusy || nextMode === computeMode) {
+      if (isInputLocked() || computeModeBusy || nextMode === computeMode) {
         return
       }
       const previousMode = computeMode
@@ -346,7 +368,7 @@ export function ExtractPage({
         setComputeModeBusy(false)
       }
     },
-    [computeMode, computeModeBusy, running]
+    [computeMode, computeModeBusy, isInputLocked]
   )
 
   const handleCancel = React.useCallback(async () => {

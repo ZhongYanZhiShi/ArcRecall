@@ -425,7 +425,7 @@ export function ExtractPageView({
                 }
                 onPick={handlePickOutputDir}
                 onClear={() => setOutputDir(null)}
-                disabled={running}
+                disabled={busy || running}
               />
 
               <div className="grid gap-3">
@@ -453,7 +453,7 @@ export function ExtractPageView({
                 </Field>
                 <Field
                   orientation="horizontal"
-                  data-disabled={running || undefined}
+                  data-disabled={busy || running || undefined}
                   className="min-w-0 rounded-xl border border-border/70 bg-muted/20 p-3"
                 >
                   <FieldContent className="min-w-0">
@@ -468,7 +468,7 @@ export function ExtractPageView({
                     id="extract-recursive"
                     size="sm"
                     checked={recursive}
-                    disabled={running}
+                    disabled={busy || running}
                     onCheckedChange={setRecursive}
                   />
                 </Field>
@@ -484,7 +484,7 @@ export function ExtractPageView({
                   size="sm"
                   spacing={0}
                   value={[computeMode]}
-                  disabled={running || computeModeBusy}
+                  disabled={busy || running || computeModeBusy}
                   onValueChange={(values) => {
                     const next = values[0] as RecoveryComputeMode | undefined
                     if (next) {
@@ -564,7 +564,7 @@ export function ExtractPageView({
                     value={knownPassword}
                     onChange={(event) => setKnownPassword(event.target.value)}
                     placeholder="输入后优先复验；留空则后台查找历史密码"
-                    disabled={running}
+                    disabled={busy || running}
                     autoComplete="off"
                     aria-describedby="recovery-route"
                   />
