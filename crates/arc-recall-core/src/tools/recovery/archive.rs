@@ -631,6 +631,10 @@ fn detect_archive_format_with_limit(
     let prefix_length = file.read(&mut prefix)?;
     let prefix = &prefix[..prefix_length];
     let scan_limit = scan_limit(prefix);
+    if prefix.starts_with(b"MZ") {
+        // Initial analysis and recursive recovery must use the same PE overlay boundary.
+        return detect_nested_archive_format(path);
+    }
     if prefix.starts_with(LZ4_FRAME_SIGNATURE) {
         return detect_lz4_inner_format(path, file);
     }

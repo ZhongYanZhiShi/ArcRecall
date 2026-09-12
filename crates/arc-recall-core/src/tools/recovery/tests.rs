@@ -983,6 +983,67 @@ fn recursively_extracts_misleading_suffix_archive_with_inherited_password() {
 }
 
 #[test]
+fn real_seven_zip_recovers_a_large_pe_overlay_recursively() {
+    let Some(seven_zip) = locate_seven_zip() else {
+        eprintln!("skip: 7z.exe not found");
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let payload = directory.path().join("payload.txt");
+    fs::write(&payload, b"large-sfx-payload").unwrap();
+    let inner = directory.path().join("inner.7z");
+    let password = "synthetic-sfx-password";
+    create_encrypted_archive(&seven_zip, "-t7z", password, &inner, &payload);
+    let mut bytes = minimal_pe_fixture();
+    let raw_size = 5 * 1024 * 1024u32;
+    let section_table = 0x80 + 24 + 0xf0;
+    bytes[section_table + 16..section_table + 20].copy_from_slice(&raw_size.to_le_bytes());
+    bytes.resize(0x400 + raw_size as usize, 0);
+    bytes.extend_from_slice(&fs::read(inner).unwrap());
+    let sfx = directory.path().join("large-sfx.exe");
+    fs::write(&sfx, bytes).unwrap();
+    let outer = directory.path().join("outer.7z");
+    create_encrypted_archive(&seven_zip, "-t7z", password, &outer, &sfx);
+    let tools = RecoveryToolPaths {
+        seven_zip,
+        hashcat: directory.path().join("unused-hashcat"),
+        john_tools_directory: directory.path().join("unused-john"),
+        perl: directory.path().join("unused-perl"),
+    };
+    for (name, archive, nested) in [("direct", sfx, 0), ("recursive", outer, 1)] {
+        let job = RecoveryJob {
+            archive_path: archive,
+            output_directory: directory.path().join(name),
+            dictionary_path: directory.path().join("unused.dict"),
+            dictionary_count: 0,
+            known_password: Some(password.into()),
+            work_directory: directory.path().join(format!("{name}-work")),
+        };
+        let result = recover_and_extract_recursive_lazy(
+            &job,
+            &tools,
+            &CancellationToken::default(),
+            RecursiveRecoveryOptions::default(),
+            None,
+            || panic!("known password must avoid dictionary preparation"),
+            |_| {},
+        )
+        .unwrap();
+        assert!(result.root.success, "{}", result.root.message);
+        assert_eq!(result.extracted_nested_archives, nested);
+        let output = if nested == 0 {
+            job.output_directory
+        } else {
+            job.output_directory.join("large-sfx")
+        };
+        assert_eq!(
+            fs::read(output.join("payload.txt")).unwrap(),
+            b"large-sfx-payload"
+        );
+    }
+}
+
+#[test]
 fn recursively_uses_dictionary_once_for_different_nested_password() {
     let Some(seven_zip) = locate_seven_zip() else {
         eprintln!("skip: 7z.exe not found");
@@ -1731,6 +1792,32 @@ fn write_lz4_frame(source: &Path, destination: &Path) {
     let (mut output, result) = encoder.finish();
     result.unwrap();
     output.flush().unwrap();
+}
+
+#[test]
+fn large_pe_overlay_is_detected_identically_on_reanalysis() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("large-sfx.exe");
+    let mut bytes = minimal_pe_fixture();
+    let raw_size = 5 * 1024 * 1024u32;
+    let section_table = 0x80 + 24 + 0xf0;
+    bytes[section_table + 16..section_table + 20].copy_from_slice(&raw_size.to_le_bytes());
+    bytes.resize(0x400 + raw_size as usize, 0);
+    bytes[4096..4096 + ZIP_SIGNATURES[0].len()].copy_from_slice(ZIP_SIGNATURES[0]);
+    bytes.extend_from_slice(SEVEN_ZIP_SIGNATURE);
+    fs::write(&path, bytes).unwrap();
+    assert_eq!(
+        detect_nested_archive_format(&path).unwrap(),
+        ArchiveFormat::SevenZip
+    );
+    assert_eq!(
+        detect_archive_format(&path).unwrap(),
+        ArchiveFormat::SevenZip
+    );
+    assert_eq!(
+        analyze_archive(&path).unwrap().format,
+        ArchiveFormat::SevenZip
+    );
 }
 
 fn minimal_pe_fixture() -> Vec<u8> {
