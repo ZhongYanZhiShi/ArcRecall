@@ -155,7 +155,7 @@ export async function importDictionaryFile(
   if (typeof file.stream === "function") {
     const reader = file
       .stream()
-      .pipeThrough(new TextDecoderStream(encoding))
+      .pipeThrough(new TextDecoderStream(encoding, { fatal: true }))
       .getReader()
     let pendingParts: string[] = []
     let pendingBytes = 0
@@ -246,7 +246,9 @@ export async function importDictionaryFile(
     return summary
   }
 
-  const text = new TextDecoder(encoding).decode(await file.arrayBuffer())
+  const text = new TextDecoder(encoding, { fatal: true }).decode(
+    await file.arrayBuffer()
+  )
   const lines = text.split(/\r?\n/)
   // split keeps a trailing empty string when file ends with newline — treat
   // empty lines as invalid candidates (same as Rust store).
@@ -262,31 +264,49 @@ export type DictionaryTextEncoding =
 export async function detectDictionaryEncoding(
   file: Blob
 ): Promise<DictionaryTextEncoding> {
-  const sample = new Uint8Array(
-    await file.slice(0, Math.min(file.size, 64 * 1024)).arrayBuffer()
-  )
+  const sample = new Uint8Array(await file.slice(0, 3).arrayBuffer())
+  let declaredEncoding: DictionaryTextEncoding | undefined
   if (sample[0] === 0xef && sample[1] === 0xbb && sample[2] === 0xbf) {
-    return "utf-8"
+    declaredEncoding = "utf-8"
   }
   if (sample[0] === 0xff && sample[1] === 0xfe) {
-    return "utf-16le"
+    declaredEncoding = "utf-16le"
   }
   if (sample[0] === 0xfe && sample[1] === 0xff) {
-    return "utf-16be"
+    declaredEncoding = "utf-16be"
+  }
+  // Validate before the first IPC batch so a late encoding error cannot leave
+  // a partially imported dictionary. Blob slices keep the preflight bounded.
+  const encodings: DictionaryTextEncoding[] = declaredEncoding
+    ? [declaredEncoding]
+    : ["utf-8", "gb18030"]
+  for (const encoding of encodings) {
+    if (await canDecodeDictionary(file, encoding)) return encoding
+  }
+  throw new Error(
+    "字典包含无效的文本编码，请转换为 UTF-8 后重试；尚未导入任何候选。"
+  )
+}
+
+async function canDecodeDictionary(
+  file: Blob,
+  encoding: DictionaryTextEncoding
+): Promise<boolean> {
+  const decoder = new TextDecoder(encoding, { fatal: true })
+  const chunkBytes = 64 * 1024
+  for (let offset = 0; offset < file.size; offset += chunkBytes) {
+    const bytes = await file.slice(offset, offset + chunkBytes).arrayBuffer()
+    try {
+      decoder.decode(bytes, { stream: true })
+    } catch {
+      return false
+    }
   }
   try {
-    new TextDecoder("utf-8", { fatal: true }).decode(sample, {
-      // The fixed-size probe may end in the middle of a valid multibyte
-      // character. Streaming mode validates everything complete in the probe
-      // while preserving that trailing prefix for a hypothetical next chunk.
-      stream: sample.byteLength < file.size,
-    })
-    return "utf-8"
+    decoder.decode()
+    return true
   } catch {
-    // GB18030 is a superset of GBK and is implemented by Chromium/WebView2.
-    // Invalid UTF-8 is therefore decoded using the common Windows Chinese
-    // dictionary encoding instead of silently inserting replacement chars.
-    return "gb18030"
+    return false
   }
 }
 

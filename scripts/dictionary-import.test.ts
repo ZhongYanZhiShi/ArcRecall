@@ -68,3 +68,55 @@ test("无换行结尾的 CRLF 字典不会把回车写入候选", async () => {
 
   assert.equal(result.entries[0]?.value, "final-candidate")
 })
+
+test("超过 64 KiB 的 ASCII 前缀后仍能正确导入 GB18030", async () => {
+  const file = new File(
+    [
+      "prefix\n".repeat(12000),
+      new Uint8Array([0xd6, 0xd0, 0xce, 0xc4, 0x90, 0x30, 0x81, 0x30]),
+    ],
+    "late-gb18030.txt"
+  )
+  assert.equal(await detectDictionaryEncoding(file), "gb18030")
+  await importDictionaryFile(file)
+  const result = await listDictionary({ searchText: "中文", skip: 0, take: 10 })
+  assert.equal(result.entries[0]?.value, "中文𐀀")
+})
+
+test("BOM 字典保留 UTF-16 字符且拒绝损坏文件的所有批次", async () => {
+  for (const [encoding, bytes] of [
+    ["utf-16le", [0xff, 0xfe, 0x2d, 0x4e]],
+    ["utf-16be", [0xfe, 0xff, 0x4e, 0x2d]],
+  ] as const) {
+    const file = new File([new Uint8Array(bytes)], `${encoding}.txt`)
+    assert.equal(await detectDictionaryEncoding(file), encoding)
+    await importDictionaryFile(file)
+  }
+  assert.equal(
+    (
+      await listDictionary({ searchText: "中", skip: 0, take: 10 })
+    ).entries.some((row) => row.value === "中"),
+    true
+  )
+  for (const bom of [[], [0xef, 0xbb, 0xbf]]) {
+    const file = new File(
+      [
+        new Uint8Array(bom),
+        "must-not-import\n".repeat(12000),
+        new Uint8Array([0xff]),
+      ],
+      "invalid.txt"
+    )
+    await assert.rejects(importDictionaryFile(file), /尚未导入任何候选/)
+    assert.equal(
+      (
+        await listDictionary({
+          searchText: "must-not-import",
+          skip: 0,
+          take: 10,
+        })
+      ).matchedCount,
+      0
+    )
+  }
+})
