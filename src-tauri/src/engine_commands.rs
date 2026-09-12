@@ -131,6 +131,7 @@ pub(crate) async fn recovery_capabilities(
 pub(crate) async fn tool_full_bundle_install(
     state: State<'_, AppState>,
 ) -> Result<FullEngineBundleInstallResult, String> {
+    let task_lease = state.lifecycle.begin()?;
     let _operation_reservation = TaskStartReservation::acquire(
         &state.archive_task_starting,
         "另一个归档或引擎任务正在进行，请稍后重试。",
@@ -145,11 +146,15 @@ pub(crate) async fn tool_full_bundle_install(
         std::iter::empty(),
     );
     let manager = full_bundle_manager(&state)?;
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        manager.install().map_err(|error| error.to_string())
+    let (result, _task_lease) = tauri::async_runtime::spawn_blocking(move || {
+        (
+            manager.install().map_err(|error| error.to_string()),
+            task_lease,
+        )
     })
     .await
-    .map_err(|error| format!("完整引擎安装任务失败：{error}"))??;
+    .map_err(|error| format!("完整引擎安装任务失败：{error}"))?;
+    let result = result?;
 
     if result.success {
         let store = state.settings.lock().map_err(|error| error.to_string())?;
@@ -199,6 +204,7 @@ pub(crate) fn tool_hashcat_status(state: State<'_, AppState>) -> Result<HashcatS
 pub(crate) async fn tool_hashcat_download(
     state: State<'_, AppState>,
 ) -> Result<HashcatInstallResult, String> {
+    let task_lease = state.lifecycle.begin()?;
     let _operation_reservation = TaskStartReservation::acquire(
         &state.archive_task_starting,
         "另一个归档或引擎任务正在进行，请稍后重试。",
@@ -213,11 +219,15 @@ pub(crate) async fn tool_hashcat_download(
         std::iter::empty(),
     );
     let downloader = hashcat_downloader(&state)?;
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        downloader.install().map_err(|error| error.to_string())
+    let (result, _task_lease) = tauri::async_runtime::spawn_blocking(move || {
+        (
+            downloader.install().map_err(|error| error.to_string()),
+            task_lease,
+        )
     })
     .await
-    .map_err(|error| format!("Hashcat 安装任务失败：{error}"))??;
+    .map_err(|error| format!("Hashcat 安装任务失败：{error}"))?;
+    let result = result?;
     if result.success && !result.executable_path.is_empty() {
         let settings = state.settings.lock().map_err(|error| error.to_string())?;
         settings

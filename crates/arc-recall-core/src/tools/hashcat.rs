@@ -98,7 +98,7 @@ impl HashcatToolDownloader {
 
     pub fn status(&self, configured_path: &str) -> HashcatStatus {
         let exe = self.expected_executable();
-        let installed = exe.is_file();
+        let installed = complete_hashcat_directory(&self.install_directory());
         let configured = configured_path.trim();
         let configured_exists = !configured.is_empty() && Path::new(configured).is_file();
         HashcatStatus {
@@ -126,7 +126,7 @@ impl HashcatToolDownloader {
         fs::create_dir_all(&self.temp_dir)?;
 
         let expected = self.expected_executable();
-        if expected.is_file() {
+        if complete_hashcat_directory(&self.install_directory()) {
             return Ok(HashcatInstallResult {
                 success: true,
                 message: format!("hashcat {HASHCAT_MANIFEST_VERSION} 已安装。"),
@@ -134,92 +134,16 @@ impl HashcatToolDownloader {
             });
         }
 
-        let install_dir = self.install_directory();
-        if install_dir.exists() {
-            return Err(HashcatToolError::Message(format!(
-                "安装目录不完整：{}。请手动清理后重试。",
-                install_dir.display()
-            )));
+        let download = tempfile::Builder::new()
+            .prefix("hashcat-download-")
+            .tempdir_in(&self.temp_dir)?;
+        let archive_path = download.path().join("hashcat.7z");
+        download_file(HASHCAT_DOWNLOAD_URL, &archive_path, MAX_DOWNLOAD_BYTES)?;
+        if !sha256_file(&archive_path)?.eq_ignore_ascii_case(HASHCAT_SHA256) {
+            return Err(HashcatToolError::ChecksumMismatch);
         }
 
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let temp_root = self
-            .temp_dir
-            .join("tool-downloads")
-            .join(format!("hashcat-{stamp}"));
-        let archive_path = temp_root.join("hashcat.7z");
-        let extract_dir = temp_root.join("extract");
-
-        let cleanup = || {
-            let _ = fs::remove_dir_all(&temp_root);
-        };
-
-        if let Err(e) = fs::create_dir_all(&temp_root) {
-            cleanup();
-            return Err(e.into());
-        }
-
-        if let Err(e) = download_file(HASHCAT_DOWNLOAD_URL, &archive_path, MAX_DOWNLOAD_BYTES) {
-            cleanup();
-            return Err(e);
-        }
-
-        match sha256_file(&archive_path) {
-            Ok(actual) if actual.eq_ignore_ascii_case(HASHCAT_SHA256) => {}
-            Ok(_) => {
-                cleanup();
-                return Err(HashcatToolError::ChecksumMismatch);
-            }
-            Err(e) => {
-                cleanup();
-                return Err(e);
-            }
-        }
-
-        if let Err(e) = extract_7z(&archive_path, &extract_dir) {
-            cleanup();
-            return Err(e);
-        }
-
-        let found = find_hashcat_exe(&extract_dir);
-        let Some(extracted_exe) = found else {
-            cleanup();
-            return Err(HashcatToolError::Message(
-                "下载包中未找到 hashcat 可执行文件，未安装。".into(),
-            ));
-        };
-
-        let extracted_root = extracted_exe
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or(extract_dir.clone());
-
-        if let Some(parent) = install_dir.parent()
-            && let Err(e) = fs::create_dir_all(parent)
-        {
-            cleanup();
-            return Err(e.into());
-        }
-
-        if let Err(e) = fs::rename(&extracted_root, &install_dir) {
-            // Cross-device rename may fail; fall back to copy.
-            if let Err(copy_err) = copy_dir_all(&extracted_root, &install_dir) {
-                cleanup();
-                return Err(HashcatToolError::Io(copy_err));
-            }
-            let _ = e;
-        }
-
-        cleanup();
-
-        if !expected.is_file() {
-            return Err(HashcatToolError::Message(
-                "安装后未找到 hashcat 可执行文件。".into(),
-            ));
-        }
+        self.install_archive(&archive_path)?;
 
         Ok(HashcatInstallResult {
             success: true,
@@ -227,6 +151,62 @@ impl HashcatToolDownloader {
             executable_path: expected.display().to_string(),
         })
     }
+
+    fn install_archive(&self, archive: &Path) -> Result<(), HashcatToolError> {
+        let install_dir = self.install_directory();
+        let parent = install_dir
+            .parent()
+            .expect("versioned install has a parent");
+        fs::create_dir_all(parent)?;
+        // Extract on the destination volume. A failed extraction never exposes a
+        // partially copied executable in the published installation directory.
+        let staging = tempfile::Builder::new()
+            .prefix(".hashcat-staging-")
+            .tempdir_in(parent)?;
+        let extract_dir = staging.path().join("extract");
+        extract_7z(archive, &extract_dir)?;
+        let extracted_exe = find_hashcat_exe(&extract_dir).ok_or_else(|| {
+            HashcatToolError::Message("下载包中未找到 hashcat 可执行文件，未安装。".into())
+        })?;
+        let extracted_root = extracted_exe
+            .parent()
+            .expect("extracted executable has a parent");
+        if !complete_hashcat_directory(extracted_root) {
+            return Err(HashcatToolError::Message(
+                "下载包缺少 Hashcat 运行资源，未安装。".into(),
+            ));
+        }
+        if complete_hashcat_directory(&install_dir) {
+            return Ok(());
+        }
+        // Preserve an old incomplete installation so retry can repair it without
+        // deleting files that may have been placed there by the user.
+        let backup = if install_dir.symlink_metadata().is_ok() {
+            let backup = tempfile::Builder::new()
+                .prefix("hashcat-incomplete-")
+                .tempdir_in(parent)?;
+            fs::rename(&install_dir, backup.path().join("previous"))?;
+            Some(backup.keep())
+        } else {
+            None
+        };
+        if let Err(error) = fs::rename(extracted_root, &install_dir) {
+            if let Some(backup) = backup {
+                let _ = fs::rename(backup.join("previous"), &install_dir);
+            }
+            return Err(error.into());
+        }
+        Ok(())
+    }
+}
+
+fn complete_hashcat_directory(root: &Path) -> bool {
+    root.join(hashcat_exe_name()).is_file()
+        && root.join("hashcat.hctune").is_file()
+        && ["OpenCL", "modules"].iter().all(|directory| {
+            fs::read_dir(root.join(directory))
+                .is_ok_and(|entries| entries.flatten().any(|entry| entry.path().is_file()))
+        })
 }
 
 fn hashcat_exe_name() -> &'static str {
@@ -318,24 +298,71 @@ fn walk_find(dir: &Path, file_name: &str) -> Option<PathBuf> {
     None
 }
 
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let to = dst.join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_all(&entry.path(), &to)?;
-        } else {
-            fs::copy(entry.path(), to)?;
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installation_stages_all_resources_and_can_retry_after_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let tools = directory.path().join("tools");
+        let downloader =
+            HashcatToolDownloader::new(&tools, &tools, "", directory.path().join("downloads"));
+        let package = directory.path().join("package");
+        fs::create_dir(&package).unwrap();
+        fs::write(package.join(hashcat_exe_name()), b"synthetic executable").unwrap();
+        let archive = directory.path().join("hashcat.7z");
+        sevenz_rust::compress_to_path(&package, &archive).unwrap();
+        assert!(downloader.install_archive(&archive).is_err());
+        assert!(!downloader.status("").installed);
+        assert!(!downloader.install_directory().exists());
+        assert_eq!(fs::read_dir(tools.join("hashcat")).unwrap().count(), 0);
+
+        fs::create_dir_all(downloader.install_directory()).unwrap();
+        fs::write(downloader.expected_executable(), b"incomplete old install").unwrap();
+        assert!(!downloader.status("").installed);
+        for resource in ["OpenCL/kernel.cl", "modules/module.dll", "hashcat.hctune"] {
+            let path = package.join(resource);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"resource").unwrap();
+        }
+        sevenz_rust::compress_to_path(&package, &archive).unwrap();
+        downloader.install_archive(&archive).unwrap();
+        assert!(downloader.status("").installed);
+        assert_eq!(
+            fs::read(downloader.expected_executable()).unwrap(),
+            b"synthetic executable"
+        );
+        assert!(
+            downloader
+                .install_directory()
+                .join("OpenCL/kernel.cl")
+                .is_file()
+        );
+        let backup = fs::read_dir(tools.join("hashcat"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("hashcat-incomplete-")
+            })
+            .unwrap();
+        assert_eq!(
+            fs::read(backup.path().join("previous").join(hashcat_exe_name())).unwrap(),
+            b"incomplete old install"
+        );
+        assert!(
+            fs::read_dir(tools.join("hashcat"))
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".hashcat-staging-"))
+        );
+    }
 
     #[test]
     fn status_reports_not_installed_by_default() {
