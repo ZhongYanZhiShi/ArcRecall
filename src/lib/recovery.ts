@@ -245,3 +245,8 @@ export async function openOutputDirectory(path: string): Promise<void> {
   requireDesktopRuntime()
   await invoke("open_output_directory", { path })
 }
+
+export async function createRepairedArchiveCopy(path: string): Promise<string> {
+  requireDesktopRuntime()
+  return invoke<string>("archive_repair_copy", { path })
+}

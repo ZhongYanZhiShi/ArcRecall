@@ -45,7 +45,8 @@ use history_commands::{history_clear, history_delete, history_list, history_reve
 use history_support::migrate_legacy_history_passwords;
 use logging::{LogExportResult, LogLevel, LogListResult, LogQuery, LogStore};
 use recovery_commands::{
-    RecoveryTaskHandle, archive_analyze, recovery_cancel, recovery_start, recovery_status,
+    RecoveryTaskHandle, archive_analyze, archive_repair_copy, recovery_cancel, recovery_start,
+    recovery_status,
 };
 use serde::{Deserialize, Serialize};
 use task_lifecycle::{RecoverySession, TaskLifecycle};
@@ -457,6 +458,7 @@ pub fn run() {
             tool_john_perl_status,
             tool_set_john_perl,
             archive_analyze,
+            archive_repair_copy,
             compression_password_status,
             compression_password_save,
             compression_password_delete,

@@ -25,10 +25,10 @@ pub use recovery::{
     HashcatProgress, RecoveredArchive, RecoveryCapabilities, RecoveryComputeDevice,
     RecoveryComputeMode, RecoveryDictionary, RecoveryError, RecoveryJob, RecoveryMethodCapability,
     RecoveryPhase, RecoveryResult, RecoveryToolPaths, RecoveryUpdate, RecursiveRecoveryOptions,
-    RecursiveRecoveryResult, analyze_archive, detect_archive_format, fingerprint_archive_sha256,
-    fingerprint_archive_sha256_with_cancellation, fingerprint_file_sha256, path_for_display,
-    probe_recovery_capabilities, recover_and_extract, recover_and_extract_lazy,
-    recover_and_extract_recursive_lazy,
+    RecursiveRecoveryResult, analyze_archive, create_repaired_archive_copy, detect_archive_format,
+    fingerprint_archive_sha256, fingerprint_archive_sha256_with_cancellation,
+    fingerprint_file_sha256, path_for_display, probe_recovery_capabilities, recover_and_extract,
+    recover_and_extract_lazy, recover_and_extract_recursive_lazy,
 };
 pub use runner::{
     CancellationToken, ProcessOutput, ProcessRequest, ProcessRunnerError, run_process,

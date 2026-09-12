@@ -85,6 +85,8 @@ const EMPTY_RECOVERY_STEPS = [
 ]
 
 type ExtractPageViewProps = {
+  handleRepairCopy?: () => void
+  repairMessage?: string | null
   outputMode: OutputMode
   setOutputMode: React.Dispatch<React.SetStateAction<OutputMode>>
   outputDir: string | null
@@ -128,6 +130,8 @@ type ExtractPageViewProps = {
 }
 
 export function ExtractPageView({
+  handleRepairCopy,
+  repairMessage,
   outputMode,
   setOutputMode,
   outputDir,
@@ -339,6 +343,26 @@ export function ExtractPageView({
           )}
         </Card>
 
+        <div className="mt-2 flex shrink-0 flex-wrap items-center gap-2">
+          {analysis ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy || running}
+              onClick={handleRepairCopy}
+            >
+              生成正确后缀副本
+            </Button>
+          ) : null}
+        </div>
+        {repairMessage ? (
+          <p
+            role="status"
+            className="mt-2 text-xs break-all text-muted-foreground"
+          >
+            {repairMessage}
+          </p>
+        ) : null}
         <button
           type="button"
           onClick={() => setOptionsOpen(true)}

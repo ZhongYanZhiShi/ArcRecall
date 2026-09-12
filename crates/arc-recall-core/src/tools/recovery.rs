@@ -12,6 +12,8 @@ mod cracking;
 mod disk_budget;
 use disk_budget::TaskDiskBudget;
 mod recursive;
+mod repair;
+pub use repair::create_repaired_archive_copy;
 mod seven_zip;
 
 #[cfg(test)]

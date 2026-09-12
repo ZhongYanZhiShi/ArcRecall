@@ -187,6 +187,30 @@ fn standard_numbered_split_does_not_need_materialization() {
 }
 
 #[test]
+fn repaired_split_copy_preserves_every_volume_and_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("disguised.jpg");
+    let second = dir.path().join("disguised.png");
+    write_two_part_seven_zip_fixture(&first, &second);
+    let repaired = create_repaired_archive_copy(&first, &CancellationToken::default()).unwrap();
+    assert!(repaired.is_dir());
+    assert_eq!(
+        fs::read(repaired.join("archive.7z.001")).unwrap(),
+        fs::read(&first).unwrap()
+    );
+    assert_eq!(
+        fs::read(repaired.join("archive.7z.002")).unwrap(),
+        fs::read(&second).unwrap()
+    );
+    assert_eq!(
+        analyze_archive(repaired.join("archive.7z.001"))
+            .unwrap()
+            .volume_count,
+        2
+    );
+}
+
+#[test]
 fn split_materialization_copies_when_hard_links_are_unavailable() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.bin");

@@ -770,3 +770,26 @@ mod tests {
         assert_eq!(resolved_fingerprint.as_deref(), Some(fingerprint.as_str()));
     }
 }
+
+#[tauri::command]
+pub(crate) async fn archive_repair_copy(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
+    let _reservation = TaskStartReservation::acquire(
+        &state.archive_task_starting,
+        "当前有归档操作，请稍后创建副本。",
+    )?;
+    ensure_no_active_archive_task(&state)?;
+    let lease = state.lifecycle.begin()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let result =
+            arc_recall_core::create_repaired_archive_copy(Path::new(&path), &lease.cancellation)
+                .map(|path| path_for_display(&path))
+                .map_err(|error| error.to_string());
+        drop(lease);
+        result
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}

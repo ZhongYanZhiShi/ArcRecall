@@ -15,6 +15,7 @@ import {
   getRecoveryStatus,
   openOutputDirectory,
   pickArchivePath,
+  createRepairedArchiveCopy,
   pickOutputDirectory,
   startRecovery,
   type ArchiveAnalysis,
@@ -33,6 +34,7 @@ export function ExtractPage({
 }: {
   onOpenEngineSettings: () => void
 }) {
+  const [repairMessage, setRepairMessage] = React.useState<string | null>(null)
   const [outputMode, setOutputMode] = React.useState<OutputMode>("sibling")
   const [outputDir, setOutputDir] = React.useState<string | null>(null)
   const [openWhenDone, setOpenWhenDone] = React.useState(true)
@@ -131,6 +133,7 @@ export function ExtractPage({
       operationBusy.current = true
       const requestId = ++analysisRequestId.current
       setDragOver(false)
+      setRepairMessage(null)
       setAnalyzingPath(normalizedPath)
       setBusy(true)
       setError(null)
@@ -414,6 +417,23 @@ export function ExtractPage({
     )
   }, [task])
 
+  const handleRepairCopy = async () => {
+    if (!analysis || isInputLocked()) return
+    operationBusy.current = true
+    setBusy(true)
+    setError(null)
+    setRepairMessage(null)
+    try {
+      const destination = await createRepairedArchiveCopy(analysis.archivePath)
+      setRepairMessage(`已创建独立副本：${destination}`)
+    } catch (reason) {
+      setError(toErrorMessage(reason))
+    } finally {
+      operationBusy.current = false
+      setBusy(false)
+    }
+  }
+
   return (
     <ExtractPageView
       outputMode={outputMode}
@@ -449,6 +469,8 @@ export function ExtractPage({
       running={running}
       taskResultRef={taskResultRef}
       handlePickArchive={handlePickArchive}
+      handleRepairCopy={handleRepairCopy}
+      repairMessage={repairMessage}
       handlePickOutputDir={handlePickOutputDir}
       handleComputeModeChange={handleComputeModeChange}
       handleStart={handleStart}
