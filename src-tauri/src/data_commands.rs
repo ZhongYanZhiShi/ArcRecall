@@ -14,6 +14,165 @@ use crate::{AppState, apply_logging_settings, current_time_ms, write_log};
 
 static DATABASE_BACKUP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+pub(crate) struct PreparedDatabaseRestore {
+    token: String,
+    directory: tempfile::TempDir,
+    unreadable_password_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DatabaseRestorePreview {
+    token: String,
+    #[serde(flatten)]
+    info: arc_recall_core::DatabaseRestoreInfo,
+    unreadable_password_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DatabaseRestoreResult {
+    safety_backup_path: String,
+    #[serde(flatten)]
+    info: arc_recall_core::DatabaseRestoreInfo,
+}
+
+#[tauri::command]
+pub(crate) async fn database_restore_preview(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<DatabaseRestorePreview, String> {
+    let lease = state.lifecycle.begin()?;
+    let (prepared, preview) = tauri::async_runtime::spawn_blocking(move || {
+        let _lease = lease;
+        let directory = tempfile::Builder::new()
+            .prefix("arcrecall-restore-")
+            .tempdir()
+            .map_err(|error| error.to_string())?;
+        let snapshot = directory.path().join("snapshot.db");
+        let info = arc_recall_core::snapshot_database_restore(Path::new(&path), &snapshot)?;
+        let history = arc_recall_core::RecoveryHistoryStore::open(&snapshot)
+            .map_err(|error| error.to_string())?;
+        let migration = crate::history_support::migrate_legacy_history_passwords(&history)?;
+        if migration.failed_count > 0 {
+            return Err("备份中的旧密码无法安全迁移。".to_string());
+        }
+        let unreadable_password_count = history
+            .stored_passwords()
+            .map_err(|error| error.to_string())?
+            .iter()
+            .filter(|record| {
+                crate::credential_protection::unprotect_history_password(&record.protected_password)
+                    .is_err()
+            })
+            .count();
+        let token = format!(
+            "{}-{}",
+            current_time_ms(),
+            DATABASE_BACKUP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
+        Ok::<_, String>((
+            PreparedDatabaseRestore {
+                token: token.clone(),
+                directory,
+                unreadable_password_count,
+            },
+            DatabaseRestorePreview {
+                token,
+                info,
+                unreadable_password_count,
+            },
+        ))
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    *state
+        .prepared_restore
+        .lock()
+        .map_err(|error| error.to_string())? = Some(prepared);
+    Ok(preview)
+}
+
+#[tauri::command]
+pub(crate) fn database_restore_discard(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<(), String> {
+    let mut prepared = state
+        .prepared_restore
+        .lock()
+        .map_err(|error| error.to_string())?;
+    if prepared.as_ref().is_some_and(|item| item.token == token) {
+        *prepared = None;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn database_restore_apply(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<DatabaseRestoreResult, String> {
+    let lease = state.lifecycle.begin()?;
+    let _reservation = crate::task_coordination::TaskStartReservation::acquire(
+        &state.archive_task_starting,
+        "当前有归档或数据维护操作，请稍后恢复。",
+    )?;
+    crate::ensure_no_active_archive_task(&state)?;
+    let prepared = {
+        let mut slot = state
+            .prepared_restore
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let candidate = slot.as_ref().ok_or("请重新选择并校验备份。")?;
+        if candidate.token != token {
+            return Err("备份预览已过期，请重新选择。".into());
+        }
+        if candidate.unreadable_password_count > 0 {
+            return Err(
+                "备份包含当前 Windows 账户无法解密的密码，请使用创建备份的账户恢复。".into(),
+            );
+        }
+        slot.take().expect("checked prepared restore")
+    };
+    let dictionary = Arc::clone(&state.dictionary);
+    let history = Arc::clone(&state.history);
+    let exports = state.paths.exports.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _lease = lease;
+        let dictionary = dictionary.lock().map_err(|error| error.to_string())?;
+        let _history = history.lock().map_err(|error| error.to_string())?;
+        let safety_backup = unique_database_backup_path(&exports, current_time_ms())?;
+        let info = dictionary.restore_snapshot(
+            &prepared.directory.path().join("snapshot.db"),
+            &safety_backup,
+        )?;
+        Ok::<_, String>(DatabaseRestoreResult {
+            info,
+            safety_backup_path: safety_backup.display().to_string(),
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    write_log(
+        &state.logger,
+        if result.is_ok() {
+            LogLevel::Info
+        } else {
+            LogLevel::Error
+        },
+        "database",
+        "database.restore_finished",
+        if result.is_ok() {
+            "数据库已从备份恢复。"
+        } else {
+            "数据库恢复失败，原有数据保留。"
+        },
+        std::iter::empty(),
+    );
+    result
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DatabaseBackupResult {
@@ -257,4 +416,62 @@ fn unique_database_backup_path(
         }
     }
     Err("无法创建唯一的数据库备份文件。".into())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use crate::credential_protection::{protect_history_password, unprotect_history_password};
+    use arc_recall_core::{RecoveryHistoryRecord, RecoveryHistoryStore};
+
+    #[test]
+    fn sqlite_restore_round_trips_real_dpapi_history_and_preserves_old_data_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.db");
+        let source_dictionary = DictionaryCandidateStore::open(&source).unwrap();
+        source_dictionary.add_candidates(["candidate"]).unwrap();
+        let history = RecoveryHistoryStore::open(&source).unwrap();
+        history
+            .upsert_many(&[RecoveryHistoryRecord {
+                fingerprint_sha256: "a".repeat(64),
+                archive_format: "ZIP".into(),
+                file_size: 22,
+                volume_count: 1,
+                verified_at_ms: 100,
+                protected_password: Some(
+                    protect_history_password("restore-fixture-secret").unwrap(),
+                ),
+            }])
+            .unwrap();
+        let snapshot = dir.path().join("snapshot.db");
+        let info = arc_recall_core::snapshot_database_restore(&source, &snapshot).unwrap();
+        assert_eq!(info.password_count, 1);
+        let target = dir.path().join("target.db");
+        let dictionary = DictionaryCandidateStore::open(&target).unwrap();
+        dictionary.add_candidates(["original"]).unwrap();
+        let target_history = RecoveryHistoryStore::open(&target).unwrap();
+        let safety = dir.path().join("safety.db");
+        dictionary.restore_snapshot(&snapshot, &safety).unwrap();
+        let password = target_history
+            .stored_passwords()
+            .unwrap()
+            .remove(0)
+            .protected_password;
+        assert_eq!(
+            unprotect_history_password(&password).unwrap(),
+            "restore-fixture-secret"
+        );
+        assert_eq!(
+            DictionaryCandidateStore::open(safety)
+                .unwrap()
+                .get_value(1)
+                .unwrap()
+                .as_deref(),
+            Some("original")
+        );
+        assert!(
+            !String::from_utf8_lossy(&std::fs::read(target).unwrap())
+                .contains("restore-fixture-secret")
+        );
+    }
 }

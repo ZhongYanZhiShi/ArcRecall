@@ -33,8 +33,9 @@ use compression_commands::{
     compression_password_save, compression_password_status, compression_start, compression_status,
 };
 use data_commands::{
-    database_backup, database_info, dictionary_add, dictionary_count, dictionary_delete,
-    dictionary_list, settings_get, settings_set,
+    database_backup, database_info, database_restore_apply, database_restore_discard,
+    database_restore_preview, dictionary_add, dictionary_count, dictionary_delete, dictionary_list,
+    settings_get, settings_set,
 };
 use engine_commands::{
     recovery_capabilities, tool_full_bundle_install, tool_full_bundle_status,
@@ -58,6 +59,7 @@ struct AppState {
     paths: AppPaths,
     resource_dir: PathBuf,
     dictionary: Arc<Mutex<DictionaryCandidateStore>>,
+    prepared_restore: Mutex<Option<data_commands::PreparedDatabaseRestore>>,
     history: Arc<Mutex<RecoveryHistoryStore>>,
     settings: Mutex<SettingsStore>,
     logger: Arc<LogStore>,
@@ -407,6 +409,7 @@ pub fn run() {
             );
             app.manage(AppState {
                 paths,
+                prepared_restore: Mutex::new(None),
                 resource_dir,
                 dictionary: Arc::new(Mutex::new(dictionary)),
                 history: Arc::new(Mutex::new(history)),
@@ -431,6 +434,9 @@ pub fn run() {
             log_clear,
             log_open_directory,
             database_backup,
+            database_restore_preview,
+            database_restore_apply,
+            database_restore_discard,
             dictionary_list,
             dictionary_count,
             dictionary_add,

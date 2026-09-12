@@ -6,9 +6,9 @@ pub mod settings;
 pub mod tools;
 
 pub use dictionary::{
-    DEFAULT_PAGE_SIZE, DictionaryCandidateAddSummary, DictionaryCandidateEntry,
-    DictionaryCandidateQuery, DictionaryCandidateStore, DictionaryError, DictionaryListResult,
-    MAX_CANDIDATE_BYTES,
+    DEFAULT_PAGE_SIZE, DatabaseRestoreInfo, DictionaryCandidateAddSummary,
+    DictionaryCandidateEntry, DictionaryCandidateQuery, DictionaryCandidateStore, DictionaryError,
+    DictionaryListResult, MAX_CANDIDATE_BYTES, inspect_database_restore, snapshot_database_restore,
 };
 pub use history::{
     DEFAULT_HISTORY_PAGE_SIZE, RecoveryHistoryEntry, RecoveryHistoryError,

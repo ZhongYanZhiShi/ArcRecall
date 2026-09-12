@@ -4,6 +4,7 @@ import { CircleAlert, Database, HardDrive, RefreshCw } from "lucide-react"
 import * as React from "react"
 
 import { SettingsInfoRow } from "@/components/home/settings-info-row"
+import { DatabaseRestorePanel } from "@/components/home/database-restore-panel"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -112,6 +113,7 @@ export function DataSettingsPanel() {
             label="外部工具目录"
             value={dbInfo?.toolsPath ?? "—"}
           />
+          <DatabaseRestorePanel onRestored={() => void load()} />
         </CardContent>
       </Card>
     </div>

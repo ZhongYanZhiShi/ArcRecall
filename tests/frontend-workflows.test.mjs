@@ -273,6 +273,67 @@ test("批次接收全部拖入和粘贴路径，恢复启动期间拒绝并发�
   )
 })
 
+test("数据库恢复必须先预览确认，并阻止不可解密密码的恢复", async () => {
+  for (const unreadablePasswordCount of [0, 1]) {
+    const calls = []
+    let refreshed = false
+    const harness = sourceHarness({
+      "@tauri-apps/plugin-dialog": {
+        open: async () => "C:\\synthetic-backup.db",
+      },
+      "@tauri-apps/api/core": {
+        invoke: async (command, payload) => {
+          calls.push(command)
+          if (command === "database_restore_preview")
+            return {
+              token: "verified-snapshot",
+              candidateCount: 10,
+              historyCount: 2,
+              passwordCount: 1,
+              unreadablePasswordCount,
+            }
+          assert.equal(command, "database_restore_apply")
+          assert.equal(payload.token, "verified-snapshot")
+          return { safetyBackupPath: "C:\\safety.db" }
+        },
+      },
+      "@/lib/dictionary": {
+        isDesktopRuntime: () => true,
+        isDictionaryImportRunning: () => false,
+      },
+      "@/lib/recovery-queue-session": {
+        recoveryQueue: { getSnapshot: () => ({ running: false }) },
+      },
+      "@/lib/logging": {},
+    })
+    const { DatabaseRestorePanel } = harness.load(
+      "src/components/home/database-restore-panel.tsx"
+    )
+    const render = () =>
+      harness.render(DatabaseRestorePanel, {
+        onRestored: () => {
+          refreshed = true
+        },
+      })
+    button(render(), "从备份恢复").props.onClick()
+    await settle()
+    const confirm = find(render(), (node) => node.type === "AlertDialogAction")
+    assert.deepEqual(calls, ["database_restore_preview"])
+    assert.equal(confirm.props.disabled, unreadablePasswordCount > 0)
+    if (unreadablePasswordCount === 0) {
+      confirm.props.onClick()
+      await settle()
+      assert.equal(refreshed, true)
+      assert.deepEqual(calls, [
+        "database_restore_preview",
+        "database_restore_apply",
+      ])
+      assert.ok(find(render(), (node) => node.props?.role === "status"))
+    }
+    harness.hide()
+  }
+})
+
 test("保存 John / Perl 后刷新界面和共享能力缓存", async (t) => {
   let available = false
   let probes = 0
