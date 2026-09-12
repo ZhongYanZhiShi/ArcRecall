@@ -15,6 +15,7 @@ import {
   getRecoveryStatus,
   openOutputDirectory,
   pickArchivePath,
+  pickArchivePaths,
   createRepairedArchiveCopy,
   pickOutputDirectory,
   startRecovery,
@@ -23,7 +24,9 @@ import {
   type RecoveryComputeMode,
   type RecoveryTaskStatus,
 } from "@/lib/recovery"
-import { resolveDroppedArchivePath } from "@/lib/recovery-input"
+import { uniqueArchivePaths } from "@/lib/recovery-queue"
+import { recoveryQueue } from "@/lib/recovery-queue-session"
+import { RecoveryQueuePanel } from "@/components/home/recovery-queue-panel"
 import { recoveryTaskAttachmentId } from "@/lib/recovery-task-attachment"
 import { copySensitiveText } from "@/lib/sensitive-clipboard"
 import { getSettings, setSettings } from "@/lib/settings"
@@ -34,6 +37,11 @@ export function ExtractPage({
 }: {
   onOpenEngineSettings: () => void
 }) {
+  const queue = React.useSyncExternalStore(
+    recoveryQueue.subscribe,
+    recoveryQueue.getSnapshot,
+    recoveryQueue.getSnapshot
+  )
   const [repairMessage, setRepairMessage] = React.useState<string | null>(null)
   const [outputMode, setOutputMode] = React.useState<OutputMode>("sibling")
   const [outputDir, setOutputDir] = React.useState<string | null>(null)
@@ -71,7 +79,7 @@ export function ExtractPage({
   }, [])
   const { task, setTask, running, runningRef } =
     useDesktopTask<RecoveryTaskStatus>({
-      enabled: isDesktopRuntime(),
+      enabled: isDesktopRuntime() && !queue.running,
       getStatus: getRecoveryStatus,
       initialPollDelayMs: 350,
       pollIntervalMs: 700,
@@ -87,7 +95,10 @@ export function ExtractPage({
   const analysisRequestId = React.useRef(0)
   const operationBusy = React.useRef(false)
   const isInputLocked = React.useCallback(
-    () => operationBusy.current || runningRef.current,
+    () =>
+      operationBusy.current ||
+      runningRef.current ||
+      recoveryQueue.getSnapshot().running,
     [runningRef]
   )
   const taskResultRef = React.useRef<HTMLDivElement>(null)
@@ -133,10 +144,10 @@ export function ExtractPage({
       operationBusy.current = true
       const requestId = ++analysisRequestId.current
       setDragOver(false)
-      setRepairMessage(null)
       setAnalyzingPath(normalizedPath)
       setBusy(true)
       setError(null)
+      setRepairMessage(null)
       setTask(null)
       setReattachedTaskId(null)
       setAnalysis(null)
@@ -186,11 +197,15 @@ export function ExtractPage({
           setDragOver(true)
         } else if (event.payload.type === "drop") {
           setDragOver(false)
-          const selection = resolveDroppedArchivePath(event.payload.paths)
-          if (selection.error) {
-            setError(selection.error)
-          } else if (selection.path) {
-            void selectArchivePath(selection.path)
+          const paths = uniqueArchivePaths(event.payload.paths)
+          if (paths.length > 1) {
+            try {
+              recoveryQueue.enqueue(paths)
+            } catch (reason) {
+              setError(toErrorMessage(reason))
+            }
+          } else if (paths[0]) {
+            void selectArchivePath(paths[0])
           }
         } else {
           setDragOver(false)
@@ -215,9 +230,25 @@ export function ExtractPage({
       if (isEditablePasteTarget(event.target)) {
         return
       }
-      const path = normalizeArchivePath(
-        event.clipboardData?.getData("text/plain") ?? ""
+      const paths = uniqueArchivePaths(
+        (event.clipboardData?.getData("text/plain") ?? "").split(/\r?\n/)
       )
+      if (
+        paths.length > 1 &&
+        paths.every(looksLikeAbsolutePath) &&
+        isDesktopRuntime()
+      ) {
+        event.preventDefault()
+        if (!isInputLocked()) {
+          try {
+            recoveryQueue.enqueue(paths)
+          } catch (reason) {
+            setError(toErrorMessage(reason))
+          }
+        }
+        return
+      }
+      const path = paths[0] ?? ""
       if (path && looksLikeAbsolutePath(path) && isDesktopRuntime()) {
         event.preventDefault()
         void selectArchivePath(path)
@@ -225,7 +256,7 @@ export function ExtractPage({
     }
     window.addEventListener("paste", handlePaste)
     return () => window.removeEventListener("paste", handlePaste)
-  }, [selectArchivePath])
+  }, [isInputLocked, selectArchivePath])
 
   React.useEffect(() => {
     if (!task?.completed || revealedTaskId.current === task.taskId) {
@@ -417,6 +448,48 @@ export function ExtractPage({
     )
   }, [task])
 
+  React.useEffect(() => {
+    let previous: RecoveryTaskStatus | null | undefined
+    return recoveryQueue.subscribe(() => {
+      const current = recoveryQueue.getSnapshot()
+      const latest =
+        current.items.find((item) => item.id === current.currentItemId)?.task ??
+        current.items.findLast((item) => item.task)?.task
+      if (latest && latest !== previous) {
+        previous = latest
+        setTask(latest)
+        setReattachedTaskId(latest.taskId)
+      }
+    })
+  }, [setTask])
+
+  const handlePickBatch = async () => {
+    if (isInputLocked()) return
+    try {
+      const paths = await pickArchivePaths()
+      if (!isInputLocked()) recoveryQueue.enqueue(paths)
+    } catch (reason) {
+      setError(toErrorMessage(reason))
+    }
+  }
+  const handleStartBatch = () => {
+    if (isInputLocked()) return
+    if (outputMode === "custom" && !outputDir) {
+      setError("请先选择自定义输出目录。")
+      setOptionsOpen(true)
+      return
+    }
+    setAnalysis(null)
+    setShowRecoveredPassword(false)
+    setPasswordCopied(false)
+    void recoveryQueue.start({
+      outputDirectory: outputMode === "custom" ? outputDir : null,
+      recursive,
+      computeMode,
+      knownPassword: knownPassword || null,
+      openWhenDone,
+    })
+  }
   const handleRepairCopy = async () => {
     if (!analysis || isInputLocked()) return
     operationBusy.current = true
@@ -464,13 +537,42 @@ export function ExtractPage({
       reattachedTaskId={reattachedTaskId}
       dictionaryCount={dictionaryCount}
       analyzingPath={analyzingPath}
-      busy={busy}
+      busy={busy || queue.running}
       error={error}
       running={running}
       taskResultRef={taskResultRef}
       handlePickArchive={handlePickArchive}
+      handlePickBatch={handlePickBatch}
       handleRepairCopy={handleRepairCopy}
       repairMessage={repairMessage}
+      queueContent={
+        <RecoveryQueuePanel
+          queue={queue}
+          knownPassword={knownPassword}
+          onPasswordChange={setKnownPassword}
+          disabled={busy || (running && !queue.running)}
+          onStart={handleStartBatch}
+          onView={(id) => {
+            const item = queue.items.find((candidate) => candidate.id === id)
+            if (item?.task) {
+              setAnalysis(null)
+              setReattachedTaskId(item.task.taskId)
+              setTask(item.task)
+              setShowRecoveredPassword(false)
+              setPasswordCopied(false)
+              requestAnimationFrame(() => {
+                taskResultRef.current?.focus({ preventScroll: true })
+                taskResultRef.current?.scrollIntoView({ block: "nearest" })
+              })
+            }
+          }}
+          onOpenOutput={(path) => {
+            void openOutputDirectory(path).catch((reason) =>
+              setError(toErrorMessage(reason))
+            )
+          }}
+        />
+      }
       handlePickOutputDir={handlePickOutputDir}
       handleComputeModeChange={handleComputeModeChange}
       handleStart={handleStart}

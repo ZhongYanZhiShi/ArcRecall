@@ -85,8 +85,10 @@ const EMPTY_RECOVERY_STEPS = [
 ]
 
 type ExtractPageViewProps = {
+  handlePickBatch?: () => void
   handleRepairCopy?: () => void
   repairMessage?: string | null
+  queueContent?: React.ReactNode
   outputMode: OutputMode
   setOutputMode: React.Dispatch<React.SetStateAction<OutputMode>>
   outputDir: string | null
@@ -130,8 +132,10 @@ type ExtractPageViewProps = {
 }
 
 export function ExtractPageView({
+  handlePickBatch,
   handleRepairCopy,
   repairMessage,
+  queueContent,
   outputMode,
   setOutputMode,
   outputDir,
@@ -200,7 +204,7 @@ export function ExtractPageView({
 
   return (
     <WorkbenchPage>
-      <WorkbenchPageContent className="pb-4">
+      <WorkbenchPageContent className="overflow-y-auto pb-4">
         <WorkbenchPageHeader
           title="恢复并解压"
           description="按文件内容识别格式，尝试已知或本机候选密码，并安全解包。"
@@ -230,7 +234,7 @@ export function ExtractPageView({
           }}
           className={cn(
             "relative min-h-0 border-dashed shadow-none transition-[background-color,border-color] duration-200",
-            analysis || analyzingPath
+            analysis || analyzingPath || task
               ? "flex shrink-0 flex-row items-center gap-3 px-4 py-3"
               : "flex min-h-52 flex-1 flex-col justify-center gap-0 py-0",
             dragOver
@@ -238,7 +242,7 @@ export function ExtractPageView({
               : "border-border bg-card dark:border-foreground/20"
           )}
         >
-          {analysis || analyzingPath ? (
+          {analysis || analyzingPath || task ? (
             <>
               <div
                 aria-hidden
@@ -256,7 +260,9 @@ export function ExtractPageView({
                 className="min-w-0 flex-1"
               >
                 <CardTitle className="truncate text-sm font-semibold tracking-tight">
-                  {analyzingName ?? analysis?.fileName}
+                  {analyzingName ??
+                    analysis?.fileName ??
+                    (task ? archiveNameFromPath(task.archivePath) : "")}
                 </CardTitle>
                 <CardDescription className="mt-0.5 truncate text-xs leading-relaxed">
                   {analyzingName
@@ -344,6 +350,14 @@ export function ExtractPageView({
         </Card>
 
         <div className="mt-2 flex shrink-0 flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy || running}
+            onClick={handlePickBatch}
+          >
+            添加批次归档
+          </Button>
           {analysis ? (
             <Button
               variant="outline"
@@ -354,6 +368,9 @@ export function ExtractPageView({
               生成正确后缀副本
             </Button>
           ) : null}
+          <span className="text-xs text-muted-foreground">
+            支持多文件拖入或多行路径粘贴
+          </span>
         </div>
         {repairMessage ? (
           <p
@@ -363,6 +380,7 @@ export function ExtractPageView({
             {repairMessage}
           </p>
         ) : null}
+        {queueContent}
         <button
           type="button"
           onClick={() => setOptionsOpen(true)}
@@ -561,7 +579,7 @@ export function ExtractPageView({
         </Sheet>
 
         {analysis ? (
-          <section className="mt-3 flex min-h-0 flex-1 scroll-fade flex-col gap-2 overflow-y-auto pr-1 pb-1">
+          <section className="mt-3 flex shrink-0 flex-col gap-2 pr-1 pb-1">
             <div className="workbench-panel rounded-2xl border border-border/80 bg-card p-3">
               <div className="mb-1 flex items-center justify-between gap-2">
                 <FieldLabel htmlFor="known-password" className="text-xs">
@@ -642,14 +660,16 @@ export function ExtractPageView({
           </section>
         ) : null}
 
-        {task && task.taskId === reattachedTaskId && !analysis ? (
-          <section className="mt-3 flex min-h-0 flex-1 scroll-fade flex-col gap-2 overflow-y-auto pr-1 pb-1">
+        {task && !analysis ? (
+          <section className="mt-3 flex shrink-0 flex-col gap-2 pr-1 pb-1">
             <Alert variant="warning" className="shrink-0">
               <CircleAlert />
               <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
                 <span>
-                  已重新连接到“{archiveNameFromPath(task.archivePath)}
-                  ”的恢复任务。
+                  {task.taskId === reattachedTaskId
+                    ? "已连接到："
+                    : "当前任务："}
+                  {archiveNameFromPath(task.archivePath)}
                 </span>
                 {task.running ? (
                   <Button

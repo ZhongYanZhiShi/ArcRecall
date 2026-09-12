@@ -250,3 +250,18 @@ export async function createRepairedArchiveCopy(path: string): Promise<string> {
   requireDesktopRuntime()
   return invoke<string>("archive_repair_copy", { path })
 }
+
+export async function pickArchivePaths(): Promise<string[]> {
+  requireDesktopRuntime()
+  const selected = await open({
+    multiple: true,
+    directory: false,
+    title: "选择批次归档",
+    filters: [{ name: "所有文件（按内容识别）", extensions: ["*"] }],
+  })
+  return Array.isArray(selected)
+    ? selected
+    : typeof selected === "string"
+      ? [selected]
+      : []
+}

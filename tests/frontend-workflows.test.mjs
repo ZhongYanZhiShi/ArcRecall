@@ -42,6 +42,9 @@ function sourceHarness(overrides) {
     return slots[index].value
   }
   const React = {
+    useSyncExternalStore(_subscribe, getSnapshot) {
+      return getSnapshot()
+    },
     useState(initial) {
       const index = cursor++
       if (!(index in slots))
@@ -142,7 +145,7 @@ const button = (tree, text) =>
       node.type === "Button" && [node.props.children].flat().includes(text)
   )
 
-test("恢复启动期间拒绝拖放、粘贴、重复启动和过期选择器", async (t) => {
+test("批次接收全部拖入和粘贴路径，恢复启动期间拒绝并发操作", async (t) => {
   const previousWindow = globalThis.window
   const previousElement = globalThis.Element
   let paste
@@ -213,6 +216,22 @@ test("恢复启动期间拒绝拖放、粘贴、重复启动和过期选择器",
   const props = { onOpenEngineSettings: () => {} }
   harness.render(ExtractPage, props)
   await settle()
+  const { recoveryQueue } = harness.load("src/lib/recovery-queue-session.ts")
+  drop({
+    payload: { type: "drop", paths: ["C:\\batch-a.zip", "C:\\batch-b.zip"] },
+  })
+  assert.equal(recoveryQueue.getSnapshot().items.length, 2)
+  assert.equal(analyzed.length, 0)
+  recoveryQueue.clear()
+  paste({
+    target: null,
+    clipboardData: {
+      getData: () => '"C:\\batch-a.zip"\r\nC:\\batch-b.zip\r\nC:/batch-a.zip',
+    },
+    preventDefault: () => {},
+  })
+  assert.equal(recoveryQueue.getSnapshot().items.length, 2)
+  recoveryQueue.clear()
   drop({ payload: { type: "drop", paths: ["C:\\A.7z"] } })
   await settle()
   let view = harness.render(ExtractPage, props)
