@@ -141,6 +141,16 @@ impl Drop for RecoverySession {
 
 fn cleanup_abandoned_sessions(root: &Path) -> std::io::Result<()> {
     let root = root.canonicalize()?;
+    // Serialize directory enumeration and removal across starting processes.
+    // On Windows another deleter can leave an entry in delete-pending state,
+    // where canonicalize returns AccessDenied rather than NotFound.
+    let cleanup_lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.join("cleanup.lock"))?;
+    cleanup_lock.lock()?;
     for entry in fs::read_dir(&root)? {
         let entry = entry?;
         if !entry.file_name().to_string_lossy().starts_with("session-") {
@@ -257,6 +267,12 @@ mod tests {
                 worker.join().unwrap();
             }
         });
-        assert_eq!(fs::read_dir(root).unwrap().count(), 0);
+        assert_eq!(
+            fs::read_dir(root)
+                .unwrap()
+                .filter(|entry| entry.as_ref().unwrap().file_name() != "cleanup.lock")
+                .count(),
+            0
+        );
     }
 }
