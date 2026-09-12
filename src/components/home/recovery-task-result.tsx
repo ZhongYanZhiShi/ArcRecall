@@ -95,12 +95,39 @@ export function RecoveryTaskResult({
               : "border-border"
       )}
     >
-      {task.running ? (
+      {task.running && !(task.phase === "hashcat" && task.hashcatProgress) ? (
         <Progress
           value={progress}
           aria-label="恢复进度"
           className="[&_[data-slot=progress-indicator]]:progress-live [&_[data-slot=progress-track]]:h-0.5 [&_[data-slot=progress-track]]:rounded-none"
         />
+      ) : null}
+      {task.running && task.phase === "hashcat" && task.hashcatProgress ? (
+        <div className="px-3 pt-3 text-xs text-muted-foreground tabular-nums">
+          <p>
+            当前引擎进度{" "}
+            {(
+              (task.hashcatProgress.completed / task.hashcatProgress.total) *
+              100
+            ).toFixed(1)}
+            % · {formatCount(task.hashcatProgress.hashesPerSecond)} H/s
+            {task.hashcatProgress.remainingSeconds !== null
+              ? ` · 预计剩余 ${formatElapsed(task.hashcatProgress.remainingSeconds * 1000)}`
+              : " · 正在估算剩余时间"}
+            {task.hashcatProgress.temperatureCelsius !== null
+              ? ` · ${task.hashcatProgress.temperatureCelsius}°C`
+              : ""}
+          </p>
+          <Progress
+            className="mt-2"
+            value={Math.min(
+              100,
+              (task.hashcatProgress.completed / task.hashcatProgress.total) *
+                100
+            )}
+            aria-label="Hashcat 当前引擎进度"
+          />
+        </div>
       ) : null}
       <div className="flex items-start justify-between gap-3 p-3">
         <div className="min-w-0 flex-1">

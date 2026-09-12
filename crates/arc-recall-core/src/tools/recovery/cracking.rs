@@ -107,7 +107,15 @@ pub(super) fn recover_with_dictionary(
                             .with_compute_device(device.recovery_device()),
                         );
                         hashcat_attempted = true;
-                        match run_hashcat(job, tools, &hash_file, mode, device, cancellation) {
+                        match run_hashcat(
+                            job,
+                            tools,
+                            &hash_file,
+                            mode,
+                            device,
+                            cancellation,
+                            report,
+                        ) {
                             Ok(attempt) => {
                                 let completed = attempt == CrackAttempt::Exhausted;
                                 device_completed |= completed;
@@ -679,6 +687,7 @@ pub(super) fn fallback_hashcat_modes(hash: &str) -> Vec<u32> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_hashcat(
     job: &RecoveryJob,
     tools: &RecoveryToolPaths,
@@ -686,6 +695,7 @@ fn run_hashcat(
     mode: u32,
     device: HashcatComputeDevice,
     cancellation: &CancellationToken,
+    report: &mut impl FnMut(RecoveryUpdate),
 ) -> Result<CrackAttempt, RecoveryError> {
     let output_file = job
         .work_directory
@@ -716,7 +726,30 @@ fn run_hashcat(
     request.timeout = Duration::from_secs(7 * 24 * 60 * 60);
     request.max_output_bytes = 8 * 1024 * 1024;
 
-    let output = run_checked(&request, cancellation)?;
+    let output = super::super::runner::run_process_observed(
+        &request,
+        Some(cancellation),
+        |line| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            if let Some(progress) = parse_hashcat_progress(line, now) {
+                let mut update = RecoveryUpdate::stage(
+                    RecoveryPhase::Hashcat,
+                    Some(device.engine_label()),
+                    "Hashcat 正在尝试候选密码。",
+                );
+                update.hashcat_progress = Some(progress);
+                report(update);
+            }
+        },
+        || Ok(()),
+    )
+    .map_err(|error| match error {
+        super::super::runner::ProcessRunnerError::Cancelled => RecoveryError::Cancelled,
+        other => RecoveryError::Process(other.to_string()),
+    })?;
     if output_file.is_file()
         && let Some(password) = read_first_password(&output_file)?
     {
@@ -725,6 +758,39 @@ fn run_hashcat(
     Ok(match output.exit_code {
         Some(1) => CrackAttempt::Exhausted,
         _ => CrackAttempt::Failed,
+    })
+}
+
+// Read only numeric telemetry. Never forward target hashes, candidate text,
+// paths, or raw tool output into task events or application logs.
+fn parse_hashcat_progress(line: &str, now: u64) -> Option<super::HashcatProgress> {
+    let data: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    let progress = data.get("progress")?.as_array()?;
+    let total = progress.get(1)?.as_u64()?;
+    if total == 0 {
+        return None;
+    }
+    let completed = progress.first()?.as_u64()?.min(total);
+    let devices = data.get("devices")?.as_array()?;
+    let speed = devices
+        .iter()
+        .filter_map(|device| device.get("speed")?.as_u64())
+        .fold(0u64, u64::saturating_add);
+    let temperature = devices
+        .iter()
+        .filter_map(|device| device.get("temp")?.as_u64())
+        .filter(|&value| value <= 150)
+        .max();
+    Some(super::HashcatProgress {
+        completed,
+        total,
+        hashes_per_second: speed,
+        remaining_seconds: data
+            .get("estimated_stop")
+            .and_then(serde_json::Value::as_u64)
+            .filter(|&end| end >= now && speed > 0)
+            .map(|end| end - now),
+        temperature_celsius: temperature,
     })
 }
 
@@ -895,6 +961,27 @@ pub(super) fn decode_password(value: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::tools::probe_john_perl;
+
+    #[test]
+    fn hashcat_status_only_projects_numeric_telemetry() {
+        let status = parse_hashcat_progress(r#"{"progress":[20,100],"devices":[{"speed":123,"temp":61},{"speed":7,"temp":-1}],"estimated_stop":110,"target":"sensitive-hash","guess":{"candidate":"secret"}}"#, 100).unwrap();
+        assert_eq!(status.completed, 20);
+        assert_eq!(status.total, 100);
+        assert_eq!(status.hashes_per_second, 130);
+        assert_eq!(status.temperature_celsius, Some(61));
+        assert_eq!(status.remaining_seconds, Some(10));
+        let serialized = serde_json::to_string(&status).unwrap();
+        assert!(!serialized.contains("secret") && !serialized.contains("sensitive-hash"));
+        assert!(parse_hashcat_progress("starting Hashcat", 100).is_none());
+        assert!(parse_hashcat_progress(r#"{"progress":[0,0],"devices":[]}"#, 100).is_none());
+        let unknown = parse_hashcat_progress(
+            r#"{"progress":[120,100],"devices":[],"estimated_stop":0}"#,
+            100,
+        )
+        .unwrap();
+        assert_eq!(unknown.completed, 100);
+        assert_eq!(unknown.remaining_seconds, None);
+    }
 
     #[test]
     fn converter_readiness_matches_the_program_and_exact_volume_arguments() {

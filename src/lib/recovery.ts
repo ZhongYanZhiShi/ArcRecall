@@ -78,6 +78,13 @@ export type RecoveryTaskStatus = {
   cancelled: boolean
   failureKind: RecoveryFailureKind | null
   failurePhase: RecoveryPhase | null
+  hashcatProgress?: {
+    completed: number
+    total: number
+    hashesPerSecond: number
+    remainingSeconds: number | null
+    temperatureCelsius: number | null
+  } | null
   gpuStarted: boolean
   archivePath: string
   archiveFormat: ArchiveFormat

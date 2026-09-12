@@ -181,6 +181,7 @@ pub(crate) async fn recovery_start(
         failure_kind: None,
         failure_phase: None,
         gpu_started: false,
+        hashcat_progress: None,
         archive_path: analysis.archive_path.clone(),
         archive_format: analysis.format,
         archive_format_label: analysis.format_label.clone(),
@@ -343,6 +344,7 @@ pub(crate) async fn recovery_start(
                         if update.compute_device == Some(RecoveryComputeDevice::Gpu) {
                             task_status.gpu_started = true;
                         }
+                        task_status.hashcat_progress = update.hashcat_progress;
                         task_status.phase = update.phase;
                         task_status.engine = update.engine;
                         task_status.message = update.message;

@@ -152,6 +152,16 @@ pub struct ArchiveAnalysis {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct HashcatProgress {
+    pub completed: u64,
+    pub total: u64,
+    pub hashes_per_second: u64,
+    pub remaining_seconds: Option<u64>,
+    pub temperature_celsius: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RecoveryUpdate {
     pub phase: RecoveryPhase,
     pub engine: Option<String>,
@@ -166,6 +176,7 @@ pub struct RecoveryUpdate {
     pub skipped_nested_archive_count: Option<u32>,
     pub scanned_file_count: Option<u64>,
     pub root_extraction_completed: Option<bool>,
+    pub hashcat_progress: Option<HashcatProgress>,
 }
 
 impl RecoveryUpdate {
@@ -188,6 +199,7 @@ impl RecoveryUpdate {
             skipped_nested_archive_count: None,
             scanned_file_count: None,
             root_extraction_completed: None,
+            hashcat_progress: None,
         }
     }
 
@@ -212,6 +224,7 @@ impl RecoveryUpdate {
             skipped_nested_archive_count: None,
             scanned_file_count: None,
             root_extraction_completed: None,
+            hashcat_progress: None,
         }
     }
 

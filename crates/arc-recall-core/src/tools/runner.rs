@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -151,6 +152,27 @@ pub fn run_process(
     request: &ProcessRequest,
     cancellation: Option<&CancellationToken>,
 ) -> Result<ProcessOutput, ProcessRunnerError> {
+    run_process_impl(request, cancellation, false, |_| {}, || Ok(()))
+}
+
+/// Deliver bounded stdout lines while the child is alive. A slow consumer may
+/// miss intermediate lines, but never blocks pipe draining or cancellation.
+pub(crate) fn run_process_observed(
+    request: &ProcessRequest,
+    cancellation: Option<&CancellationToken>,
+    on_stdout: impl FnMut(&str),
+    check: impl FnMut() -> io::Result<()>,
+) -> Result<ProcessOutput, ProcessRunnerError> {
+    run_process_impl(request, cancellation, true, on_stdout, check)
+}
+
+fn run_process_impl(
+    request: &ProcessRequest,
+    cancellation: Option<&CancellationToken>,
+    observe_stdout: bool,
+    mut on_stdout: impl FnMut(&str),
+    mut check: impl FnMut() -> io::Result<()>,
+) -> Result<ProcessOutput, ProcessRunnerError> {
     if cancellation.is_some_and(CancellationToken::is_cancelled) {
         return Err(ProcessRunnerError::Cancelled);
     }
@@ -193,11 +215,23 @@ pub fn run_process(
         .take()
         .expect("stderr is piped before spawning the child");
     let output_limit = request.max_output_bytes;
-    let stdout_reader = thread::spawn(move || read_capped(stdout, output_limit));
+    let (sender, receiver) = mpsc::sync_channel(32);
+    let stdout_reader = thread::spawn(move || {
+        read_capped_observed(stdout, output_limit, observe_stdout.then_some(sender))
+    });
     let stderr_reader = thread::spawn(move || read_capped(stderr, output_limit));
     let started = Instant::now();
 
     let status = loop {
+        for line in receiver.try_iter() {
+            on_stdout(&line);
+        }
+        if let Err(error) = check() {
+            let _ = child.kill();
+            let _ = child.wait();
+            join_output(stdout_reader, stderr_reader)?;
+            return Err(ProcessRunnerError::Output(error));
+        }
         if cancellation.is_some_and(CancellationToken::is_cancelled) {
             let _ = child.kill();
             let _ = child.wait();
@@ -218,6 +252,9 @@ pub fn run_process(
 
     child.terminate_descendants();
     let (stdout, stderr) = join_output(stdout_reader, stderr_reader)?;
+    for line in receiver.try_iter() {
+        on_stdout(&line);
+    }
     Ok(ProcessOutput {
         exit_code: status.code(),
         success: status.success(),
@@ -228,10 +265,20 @@ pub fn run_process(
     })
 }
 
-fn read_capped(mut reader: impl Read, limit: usize) -> io::Result<CapturedOutput> {
+fn read_capped(reader: impl Read, limit: usize) -> io::Result<CapturedOutput> {
+    read_capped_observed(reader, limit, None)
+}
+
+fn read_capped_observed(
+    mut reader: impl Read,
+    limit: usize,
+    sender: Option<SyncSender<String>>,
+) -> io::Result<CapturedOutput> {
     let mut captured = Vec::with_capacity(limit.min(64 * 1024));
     let mut buffer = [0u8; 16 * 1024];
     let mut truncated = false;
+    let mut line = Vec::new();
+    let mut oversized = false;
     loop {
         let read = reader.read(&mut buffer)?;
         if read == 0 {
@@ -241,6 +288,27 @@ fn read_capped(mut reader: impl Read, limit: usize) -> io::Result<CapturedOutput
         let keep = remaining.min(read);
         captured.extend_from_slice(&buffer[..keep]);
         truncated |= keep < read;
+        if let Some(sender) = &sender {
+            for &byte in &buffer[..read] {
+                if byte == b'\n' {
+                    if !oversized {
+                        let _ = sender.try_send(String::from_utf8_lossy(&line).into_owned());
+                    }
+                    line.clear();
+                    oversized = false;
+                } else if line.len() < 64 * 1024 {
+                    line.push(byte);
+                } else {
+                    oversized = true;
+                }
+            }
+        }
+    }
+    if let Some(sender) = sender
+        && !line.is_empty()
+        && !oversized
+    {
+        let _ = sender.try_send(String::from_utf8_lossy(&line).into_owned());
     }
     Ok(CapturedOutput {
         bytes: captured,
@@ -302,6 +370,44 @@ pub fn strawberry_perl_path_entries(perl_executable: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_status_lines_are_discarded_and_capture_stays_bounded() {
+        let (sender, receiver) = mpsc::sync_channel(32);
+        let mut bytes = vec![b'x'; 70 * 1024];
+        bytes.extend_from_slice(b"\n{\"progress\":[1,2]}\nlast");
+        let captured = read_capped_observed(bytes.as_slice(), 12, Some(sender)).unwrap();
+        assert_eq!(captured.bytes.len(), 12);
+        assert!(captured.truncated);
+        assert_eq!(
+            receiver.try_iter().collect::<Vec<_>>(),
+            ["{\"progress\":[1,2]}", "last"]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn live_stdout_can_cancel_a_running_native_child() {
+        let mut request = ProcessRequest::new("powershell.exe");
+        request.args = ["-NoProfile", "-NonInteractive", "-Command", "[Console]::WriteLine('{\"progress\":[1,2]}'); [Console]::Out.Flush(); Start-Sleep -Seconds 30"].map(OsString::from).to_vec();
+        let cancellation = CancellationToken::default();
+        let mut received = false;
+        let start = Instant::now();
+        let result = run_process_observed(
+            &request,
+            Some(&cancellation),
+            |line| {
+                if line.contains("progress") {
+                    received = true;
+                    cancellation.cancel();
+                }
+            },
+            || Ok(()),
+        );
+        assert!(received);
+        assert!(matches!(result, Err(ProcessRunnerError::Cancelled)));
+        assert!(start.elapsed() < Duration::from_secs(15));
+    }
 
     #[test]
     fn cancellation_token_is_shared_between_clones() {
