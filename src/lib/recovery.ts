@@ -108,6 +108,11 @@ export type RecoveryTaskStatus = {
   rootExtractionCompleted: boolean
   depthLimitReached: boolean
   countLimitReached: boolean
+  completedArchivePaths?: string[]
+  skippedArchivePaths?: string[]
+  pendingArchivePaths?: string[]
+  scanInterrupted?: boolean
+  budgetLimitReached?: boolean
   events: RecoveryTaskEvent[]
 }
 

@@ -9,6 +9,8 @@ use super::runner::{
 
 mod archive;
 mod cracking;
+mod disk_budget;
+use disk_budget::TaskDiskBudget;
 mod recursive;
 mod seven_zip;
 
@@ -277,6 +279,7 @@ pub struct RecoveryJob {
 struct RecoveryInput<'a> {
     job: &'a RecoveryJob,
     archive_bytes: u64,
+    disk_budget: &'a TaskDiskBudget,
 }
 
 #[derive(Debug, Clone)]
@@ -291,6 +294,8 @@ pub struct RecursiveRecoveryOptions {
     pub max_depth: u32,
     pub max_nested_archives: u32,
     pub compute_mode: RecoveryComputeMode,
+    pub max_total_bytes: u64,
+    pub max_total_entries: u64,
 }
 
 impl Default for RecursiveRecoveryOptions {
@@ -300,6 +305,8 @@ impl Default for RecursiveRecoveryOptions {
             max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
             max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
             compute_mode: RecoveryComputeMode::default(),
+            max_total_bytes: disk_budget::DEFAULT_TASK_MAX_BYTES,
+            max_total_entries: disk_budget::DEFAULT_TASK_MAX_ENTRIES,
         }
     }
 }
@@ -326,6 +333,8 @@ pub struct RecoveryResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecursiveRecoveryResult {
+    /// Root success means its output was published, even when a later recursive
+    /// step was cancelled. Consumers must check `root.cancelled` for task status.
     pub root: RecoveryResult,
     pub discovered_nested_archives: u32,
     pub extracted_nested_archives: u32,
@@ -335,6 +344,11 @@ pub struct RecursiveRecoveryResult {
     pub recovered_passwords: Vec<String>,
     pub recovered_archives: Vec<RecoveredArchive>,
     pub scanned_files: u64,
+    pub completed_archive_paths: Vec<PathBuf>,
+    pub skipped_archive_paths: Vec<PathBuf>,
+    pub pending_archive_paths: Vec<PathBuf>,
+    pub scan_interrupted: bool,
+    pub budget_limit_reached: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -351,6 +365,8 @@ pub enum RecoveryError {
     Cancelled,
     #[error("归档无法继续验密：{0}")]
     InvalidArchive(String),
+    #[error("{0}")]
+    BudgetExceeded(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
@@ -383,11 +399,13 @@ pub fn recover_and_extract_lazy(
     mut report: impl FnMut(RecoveryUpdate),
 ) -> Result<RecoveryResult, RecoveryError> {
     let mut prepare_dictionary = Some(prepare_dictionary);
+    let disk_budget = TaskDiskBudget::default();
     recover_single_archive(
         job,
         tools,
         cancellation,
         RecoveryComputeMode::default(),
+        &disk_budget,
         None,
         &mut || {
             let prepare = prepare_dictionary
@@ -399,11 +417,13 @@ pub fn recover_and_extract_lazy(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn recover_single_archive(
     job: &RecoveryJob,
     tools: &RecoveryToolPaths,
     cancellation: &CancellationToken,
     compute_mode: RecoveryComputeMode,
+    disk_budget: &TaskDiskBudget,
     precomputed_fingerprint_sha256: Option<&str>,
     prepare_dictionary: &mut impl FnMut() -> Result<RecoveryDictionary, RecoveryError>,
     report: &mut impl FnMut(RecoveryUpdate),
@@ -415,7 +435,7 @@ fn recover_single_archive(
     let mut archive_bytes = analysis.file_size;
     let mut converter_archive_paths = analysis.volume_paths.clone();
     let split_materialization =
-        materialize_split_archive(&analysis, &job.work_directory, cancellation)?;
+        materialize_split_archive(&analysis, &job.work_directory, cancellation, disk_budget)?;
 
     if let Some(materialization) = &split_materialization {
         report(RecoveryUpdate::stage(
@@ -444,6 +464,7 @@ fn recover_single_archive(
             analysis.format,
             &job.work_directory,
             cancellation,
+            disk_budget,
         )?
         .ok_or_else(|| RecoveryError::Message("LZ4 临时归档准备失败。".into()))?;
         converter_archive_paths = vec![processing_job.archive_path.clone()];
@@ -453,6 +474,7 @@ fn recover_single_archive(
     let processing_input = RecoveryInput {
         job: &processing_job,
         archive_bytes,
+        disk_budget,
     };
     validate_archive_container(
         &processing_job.archive_path,
@@ -538,6 +560,7 @@ fn recover_single_archive(
         &RecoveryInput {
             job: &dictionary_job,
             archive_bytes,
+            disk_budget,
         },
         tools,
         analysis.format,

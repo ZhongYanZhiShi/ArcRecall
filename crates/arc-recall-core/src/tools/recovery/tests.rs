@@ -174,9 +174,13 @@ fn standard_numbered_split_does_not_need_materialization() {
     let work_directory = dir.path().join("work");
     fs::create_dir_all(&work_directory).unwrap();
 
-    let materialization =
-        materialize_split_archive(&analysis, &work_directory, &CancellationToken::default())
-            .unwrap();
+    let materialization = materialize_split_archive(
+        &analysis,
+        &work_directory,
+        &CancellationToken::default(),
+        &TaskDiskBudget::default(),
+    )
+    .unwrap();
 
     assert!(materialization.is_none());
     assert!(fs::read_dir(&work_directory).unwrap().next().is_none());
@@ -226,6 +230,7 @@ fn detects_and_materializes_lz4_wrapped_archive() {
         ArchiveFormat::Rar5,
         &work_directory,
         &CancellationToken::default(),
+        &TaskDiskBudget::default(),
     )
     .unwrap()
     .expect("LZ4 wrapper should be materialized");
@@ -255,6 +260,7 @@ fn cancelled_lz4_materialization_removes_partial_output() {
             ArchiveFormat::Rar5,
             &work_directory,
             &cancellation,
+            &TaskDiskBudget::default(),
         ),
         Err(RecoveryError::Cancelled)
     ));
@@ -925,6 +931,185 @@ fn seven_zip_container_validation_rejects_pe_with_zip_bytes() {
 }
 
 #[test]
+fn recursive_cancellation_preserves_published_outputs_and_history_records() {
+    let Some(seven_zip) = locate_seven_zip() else {
+        eprintln!("skip: 7z.exe not found");
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let inputs = directory.path().join("inputs");
+    fs::create_dir(&inputs).unwrap();
+    let password = "partial-results-fixture";
+    for index in 0..3 {
+        let payload = directory.path().join(format!("payload-{index}.txt"));
+        fs::write(&payload, format!("payload {index}")).unwrap();
+        create_encrypted_archive(
+            &seven_zip,
+            "-t7z",
+            password,
+            &inputs.join(format!("inner-{index}.7z")),
+            &payload,
+        );
+    }
+    let archive = directory.path().join("outer.7z");
+    create_encrypted_archive(&seven_zip, "-t7z", password, &archive, &inputs);
+    let tools = RecoveryToolPaths {
+        seven_zip,
+        hashcat: directory.path().join("missing-hashcat"),
+        john_tools_directory: directory.path().join("missing-john"),
+        perl: directory.path().join("missing-perl"),
+    };
+    // Exercise cancellation during the initial scan, a child scan, and the next
+    // child verification. Every published archive must survive each boundary.
+    for boundary in ["root-scan", "child-scan", "child-verification"] {
+        let job = RecoveryJob {
+            archive_path: archive.clone(),
+            output_directory: directory.path().join(boundary),
+            dictionary_path: directory.path().join("unused.dict"),
+            dictionary_count: 0,
+            known_password: Some(password.into()),
+            work_directory: directory.path().join(format!("work-{boundary}")),
+        };
+        let cancellation = CancellationToken::default();
+        let result = recover_and_extract_recursive_lazy(
+            &job,
+            &tools,
+            &cancellation,
+            RecursiveRecoveryOptions::default(),
+            None,
+            || panic!("known password must avoid dictionary preparation"),
+            |update| {
+                let cancel = match boundary {
+                    "root-scan" => update.root_extraction_completed == Some(true),
+                    "child-scan" => {
+                        update.extracted_nested_archive_count == Some(2)
+                            && update.phase == RecoveryPhase::Recursive
+                    }
+                    _ => {
+                        update.extracted_nested_archive_count == Some(2)
+                            && update.phase == RecoveryPhase::Verifying
+                    }
+                };
+                if cancel {
+                    cancellation.cancel();
+                }
+            },
+        )
+        .unwrap();
+        assert!(result.root.success, "root output was already published");
+        assert!(result.root.cancelled, "{boundary}");
+        let completed_children = if boundary == "root-scan" { 0 } else { 2 };
+        assert_eq!(result.extracted_nested_archives, completed_children);
+        assert_eq!(
+            result.completed_archive_paths.len(),
+            completed_children as usize + 1
+        );
+        assert_eq!(
+            result.recovered_archives.len(),
+            completed_children as usize + 1
+        );
+        assert!(
+            result
+                .recovered_archives
+                .iter()
+                .all(|record| record.password.as_deref() == Some(password))
+        );
+        assert_eq!(result.scan_interrupted, boundary != "child-verification");
+        if completed_children > 0 {
+            assert_eq!(result.pending_archive_paths.len(), 1);
+            for path in &result.completed_archive_paths[1..] {
+                let output = path.with_extension("");
+                assert!(output.is_dir(), "published output {}", output.display());
+                assert_eq!(fs::read_dir(output).unwrap().count(), 1);
+            }
+        }
+        assert!(
+            fs::read_dir(job.output_directory.join("inputs"))
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".partial"))
+        );
+    }
+}
+
+#[test]
+fn recursive_cumulative_budget_preserves_completed_archives_and_stops_siblings() {
+    let Some(seven_zip) = locate_seven_zip() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let inputs = dir.path().join("inputs");
+    fs::create_dir(&inputs).unwrap();
+    let payload = dir.path().join("payload.txt");
+    fs::write(&payload, [b'x'; 1024]).unwrap();
+    for index in 0..3 {
+        create_plain_archive(
+            &seven_zip,
+            &inputs.join(format!("inner-{index}.7z")),
+            &payload,
+        );
+    }
+    let root_bytes: u64 = fs::read_dir(&inputs)
+        .unwrap()
+        .map(|entry| entry.unwrap().metadata().unwrap().len())
+        .sum();
+    let archive = dir.path().join("outer.7z");
+    create_plain_archive(&seven_zip, &archive, &inputs);
+    let tools = RecoveryToolPaths {
+        seven_zip,
+        hashcat: dir.path().join("missing"),
+        john_tools_directory: dir.path().join("missing"),
+        perl: dir.path().join("missing"),
+    };
+    for (name, bytes, entries) in [("bytes", root_bytes + 1024, 1000), ("entries", u64::MAX, 5)] {
+        let job = RecoveryJob {
+            archive_path: archive.clone(),
+            output_directory: dir.path().join(name),
+            dictionary_path: dir.path().join("unused"),
+            dictionary_count: 0,
+            known_password: None,
+            work_directory: dir.path().join(format!("work-{name}")),
+        };
+        let result = recover_and_extract_recursive_lazy(
+            &job,
+            &tools,
+            &CancellationToken::default(),
+            RecursiveRecoveryOptions {
+                max_total_bytes: bytes,
+                max_total_entries: entries,
+                ..RecursiveRecoveryOptions::default()
+            },
+            None,
+            || panic!("plain archive"),
+            |_| {},
+        )
+        .unwrap();
+        assert!(result.root.success);
+        assert!(
+            result.budget_limit_reached,
+            "{name}: {}",
+            result.root.message
+        );
+        assert_eq!(result.extracted_nested_archives, 1, "{name}");
+        assert_eq!(result.pending_archive_paths.len(), 2);
+        assert_eq!(result.recovered_archives.len(), 2);
+        assert!(job.output_directory.join("inputs").is_dir());
+        assert!(
+            !fs::read_dir(job.output_directory.join("inputs"))
+                .unwrap()
+                .any(|entry| entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".partial"))
+        );
+    }
+}
+
+#[test]
 fn recursively_extracts_misleading_suffix_archive_with_inherited_password() {
     let Some(seven_zip) = locate_seven_zip() else {
         eprintln!("skip: 7z.exe not found");
@@ -1272,6 +1457,7 @@ fn recursive_extraction_enforces_depth_limit() {
             max_depth: 1,
             max_nested_archives: 100,
             compute_mode: RecoveryComputeMode::GpuPreferred,
+            ..RecursiveRecoveryOptions::default()
         },
         None,
         || panic!("plain archives must avoid dictionary preparation"),

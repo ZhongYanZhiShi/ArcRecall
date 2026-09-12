@@ -189,7 +189,9 @@ export function RecoveryTaskResult({
                   {archiveNameFromPath(task.currentArchivePath)}
                 </p>
               ) : null}
-              {task.depthLimitReached || task.countLimitReached ? (
+              {task.depthLimitReached ||
+              task.countLimitReached ||
+              task.budgetLimitReached ? (
                 <p className="text-warning-foreground">
                   已达到递归安全限制，剩余嵌套归档未继续处理。
                 </p>
@@ -278,6 +280,9 @@ function taskRecoveryHint(task: RecoveryTaskStatus): string | null {
     return null
   }
   if (task.cancelled) {
+    if (task.rootExtractionCompleted) {
+      return "已完成的输出已保留。可在详细过程中查看完成、跳过和待处理清单，再选择未完成的归档继续处理。"
+    }
     return "任务已取消，所选归档和当前设置仍然保留，可调整后重新开始。"
   }
   if (task.phase === "exhausted") {
@@ -296,20 +301,25 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
   const [open, setOpen] = React.useState(false)
   const events = task.events ?? []
 
-  if (events.length === 0) {
+  if (
+    events.length === 0 &&
+    !task.completedArchivePaths?.length &&
+    !task.pendingArchivePaths?.length &&
+    !task.skippedArchivePaths?.length
+  ) {
     return null
   }
 
-  const latest = events[0]!
+  const latest = events[0]
 
   return (
     <>
       <div className="mt-2 flex min-w-0 items-center gap-2 rounded-lg border border-border/70 bg-muted/20 px-2.5 py-1.5">
         <ListTree className="size-3.5 shrink-0 text-muted-foreground" />
         <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-          最近：{RECOVERY_PHASE_LABELS[latest.phase]}
-          {latest.engine ? ` · ${latest.engine}` : ""} ·{" "}
-          {formatCompactElapsed(latest.elapsedMs)}
+          {latest
+            ? `最近：${RECOVERY_PHASE_LABELS[latest.phase]}${latest.engine ? ` · ${latest.engine}` : ""} · ${formatCompactElapsed(latest.elapsedMs)}`
+            : "查看已完成和待处理归档"}
         </p>
         <Button
           type="button"
@@ -355,6 +365,44 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
           </SheetHeader>
 
           <ScrollArea className="min-h-0 flex-1 px-5 py-2">
+            {task.completed && (task.completedArchivePaths?.length ?? 0) > 0 ? (
+              <div className="space-y-3 border-b border-border py-3">
+                {[
+                  { label: "已完成", paths: task.completedArchivePaths ?? [] },
+                  {
+                    label: "已跳过",
+                    paths: task.skippedArchivePaths ?? [],
+                  },
+                  {
+                    label: "待处理（已发现）",
+                    paths: task.pendingArchivePaths ?? [],
+                  },
+                ].map(({ label, paths }) =>
+                  paths.length > 0 ? (
+                    <div key={label}>
+                      <p className="text-xs font-medium">
+                        {label} · {paths.length}
+                      </p>
+                      <ul
+                        aria-label={`${label}归档`}
+                        className="mt-1 space-y-1 text-xs text-muted-foreground"
+                      >
+                        {paths.map((path) => (
+                          <li key={path} className="break-all">
+                            {pathForDisplay(path)}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null
+                )}
+                {task.scanInterrupted ? (
+                  <p className="text-xs text-warning-foreground">
+                    扫描已中断，输出目录中可能还有尚未发现的嵌套归档。
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             <ol aria-label="解密事件时间线">
               {events.map((event, index) => {
                 const current = task.running && index === 0

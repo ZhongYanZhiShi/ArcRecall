@@ -471,6 +471,7 @@ pub(super) fn materialize_split_archive(
     analysis: &ArchiveAnalysis,
     work_directory: &Path,
     cancellation: &CancellationToken,
+    disk_budget: &super::TaskDiskBudget,
 ) -> Result<Option<SplitArchiveMaterialization>, RecoveryError> {
     if analysis.volume_paths.len() <= 1
         || is_standard_numbered_volume_sequence(&analysis.volume_paths)
@@ -504,7 +505,7 @@ pub(super) fn materialize_split_archive(
         .zip(&materialization.volume_paths)
     {
         ensure_not_cancelled(cancellation)?;
-        materialize_volume(source, destination, cancellation)?;
+        materialize_volume(source, destination, cancellation, disk_budget)?;
     }
     Ok(Some(materialization))
 }
@@ -533,16 +534,32 @@ fn materialize_volume(
     source: &Path,
     destination: &Path,
     cancellation: &CancellationToken,
+    disk_budget: &super::TaskDiskBudget,
 ) -> Result<(), RecoveryError> {
-    materialize_volume_with(source, destination, cancellation, |source, destination| {
-        fs::hard_link(source, destination)
-    })
+    materialize_volume_with_budget(
+        source,
+        destination,
+        cancellation,
+        Some(disk_budget),
+        |source, destination| fs::hard_link(source, destination),
+    )
 }
 
+#[cfg(test)]
 pub(super) fn materialize_volume_with(
     source: &Path,
     destination: &Path,
     cancellation: &CancellationToken,
+    create_hard_link: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), RecoveryError> {
+    materialize_volume_with_budget(source, destination, cancellation, None, create_hard_link)
+}
+
+fn materialize_volume_with_budget(
+    source: &Path,
+    destination: &Path,
+    cancellation: &CancellationToken,
+    disk_budget: Option<&super::TaskDiskBudget>,
     create_hard_link: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<(), RecoveryError> {
     ensure_not_cancelled(cancellation)?;
@@ -564,6 +581,10 @@ pub(super) fn materialize_volume_with(
             if count == 0 {
                 break;
             }
+            if let Some(budget) = disk_budget {
+                budget.consume(count as u64, 0)?;
+            }
+            super::disk_budget::check_free_space(destination, count as u64)?;
             output.write_all(&buffer[..count])?;
         }
         output.flush()?;
@@ -747,6 +768,7 @@ pub(super) fn materialize_lz4_archive(
     format: ArchiveFormat,
     work_directory: &Path,
     cancellation: &CancellationToken,
+    disk_budget: &super::TaskDiskBudget,
 ) -> Result<Option<PathBuf>, RecoveryError> {
     if !is_lz4_frame(source)? {
         return Ok(None);
@@ -779,6 +801,8 @@ pub(super) fn materialize_lz4_archive(
                     decoded_limit / (1024 * 1024)
                 )));
             }
+            disk_budget.consume(length as u64, 0)?;
+            super::disk_budget::check_free_space(work_directory, length as u64)?;
             output.write_all(&buffer[..length])?;
         }
         ensure_not_cancelled(cancellation)?;

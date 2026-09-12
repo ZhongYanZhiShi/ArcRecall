@@ -181,11 +181,14 @@ pub fn recover_and_extract_recursive_lazy(
         }
     };
 
+    let disk_budget =
+        super::TaskDiskBudget::new(options.max_total_bytes, options.max_total_entries);
     let mut root = recover_single_archive(
         job,
         tools,
         cancellation,
         options.compute_mode,
+        &disk_budget,
         precomputed_root_fingerprint_sha256.as_deref(),
         &mut dictionary_provider,
         &mut report,
@@ -199,6 +202,15 @@ pub fn recover_and_extract_recursive_lazy(
         .clone()
         .into_iter()
         .collect::<Vec<_>>();
+    let mut completed_archive_paths = if root.success {
+        vec![job.archive_path.clone()]
+    } else {
+        Vec::new()
+    };
+    let mut skipped_archive_paths = Vec::new();
+    let mut pending_archive_paths = Vec::new();
+    let mut scan_interrupted = false;
+    let mut budget_limit_reached = false;
     if !root.success || !options.enabled {
         return Ok(RecursiveRecoveryResult {
             root,
@@ -210,244 +222,297 @@ pub fn recover_and_extract_recursive_lazy(
             recovered_passwords,
             recovered_archives,
             scanned_files: 0,
+            completed_archive_paths,
+            skipped_archive_paths,
+            pending_archive_paths,
+            scan_interrupted,
+            budget_limit_reached,
         });
     }
 
     let mut state = RecursiveRecoveryState::new(options);
-    report(
-        state
-            .update(
-                "外层解压已完成，正在扫描第 1 层输出。",
-                1,
-                &job.output_directory,
-            )
-            .with_root_extraction_completed(),
-    );
-    let initial_limit = state.collection_limit();
-    let initial_scan_base = state.scanned_files;
-    let nested_archives = find_new_or_changed_archives(
-        &job.output_directory,
-        &before_root_extraction,
-        initial_limit,
-        cancellation,
-        |scanned_files, found_archives| {
-            state.scanned_files = initial_scan_base.saturating_add(scanned_files);
-            report(state.update(
+    // Keep published outputs and their credentials outside the cancellable work.
+    let recursive_outcome = (|| -> Result<(), RecoveryError> {
+        report(
+            state
+                .update(
+                    "外层解压已完成，正在扫描第 1 层输出。",
+                    1,
+                    &job.output_directory,
+                )
+                .with_root_extraction_completed(),
+        );
+        let initial_limit = state.collection_limit();
+        let initial_scan_base = state.scanned_files;
+        let initial_scan = find_new_or_changed_archives(
+            &job.output_directory,
+            &before_root_extraction,
+            initial_limit,
+            cancellation,
+            |scanned_files, found_archives| {
+                state.scanned_files = initial_scan_base.saturating_add(scanned_files);
+                report(state.update(
                 format!(
                     "正在扫描第 1 层输出：已检查 {scanned_files} 个文件，发现 {found_archives} 个归档。"
                 ),
                 1,
                 &job.output_directory,
             ));
-        },
-    )?;
-    let inherited_password = root
-        .password
-        .clone()
-        .or_else(|| job.known_password.clone())
-        .filter(|password| !password.is_empty());
-    let mut pending = nested_archives
-        .into_iter()
-        .map(|archive_path| NestedArchiveTask {
-            archive_path,
-            depth: 1,
-            inherited_password: inherited_password.clone(),
-        })
-        .collect::<VecDeque<_>>();
+            },
+        )?;
+        pending_archive_paths.extend(initial_scan.archives.iter().cloned());
+        if initial_scan.cancelled {
+            scan_interrupted = true;
+            return Err(RecoveryError::Cancelled);
+        }
+        let inherited_password = root
+            .password
+            .clone()
+            .or_else(|| job.known_password.clone())
+            .filter(|password| !password.is_empty());
+        let mut pending = initial_scan
+            .archives
+            .into_iter()
+            .map(|archive_path| NestedArchiveTask {
+                archive_path,
+                depth: 1,
+                inherited_password: inherited_password.clone(),
+            })
+            .collect::<VecDeque<_>>();
 
-    while let Some(nested) = pending.pop_front() {
-        ensure_not_cancelled(cancellation)?;
-        if !nested.archive_path.is_file() {
-            state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
-            report(state.update(
-                "嵌套压缩包已不存在，已跳过。",
-                nested.depth,
-                &nested.archive_path,
-            ));
-            continue;
-        }
-        if !state.processed_archives.insert(nested.archive_path.clone()) {
-            continue;
-        }
-        if state.discovered_nested_archives >= state.options.max_nested_archives {
-            state.count_limit_reached = true;
-            state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
-            report(state.update(
-                format!(
-                    "已达到 {} 个嵌套压缩包的安全上限，剩余项目不再处理。",
-                    state.options.max_nested_archives
-                ),
-                nested.depth,
-                &nested.archive_path,
-            ));
-            break;
-        }
-
-        state.discovered_nested_archives = state.discovered_nested_archives.saturating_add(1);
-        if nested.depth > state.options.max_depth {
-            state.depth_limit_reached = true;
-            state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
-            report(state.update(
-                format!(
-                    "已超过 {} 层递归安全上限，当前嵌套压缩包已跳过。",
-                    state.options.max_depth
-                ),
-                nested.depth,
-                &nested.archive_path,
-            ));
-            continue;
-        }
-
-        report(state.update(
-            format!(
-                "正在处理第 {} 层嵌套压缩包：{}。",
-                nested.depth,
-                archive_display_name(&nested.archive_path)
-            ),
-            nested.depth,
-            &nested.archive_path,
-        ));
-        let nested_output = resolve_nested_output_directory(&nested.archive_path);
-        let before_nested_extraction = capture_file_snapshot(&nested_output, cancellation)?;
-        let mut output_transaction = NestedOutputTransaction::new(nested_output.clone());
-        let nested_job = RecoveryJob {
-            archive_path: nested.archive_path.clone(),
-            output_directory: output_transaction.staging_directory().to_path_buf(),
-            dictionary_path: job.dictionary_path.clone(),
-            dictionary_count: job.dictionary_count,
-            known_password: nested.inherited_password.clone(),
-            work_directory: job
-                .work_directory
-                .join(format!("nested-{}", state.discovered_nested_archives)),
-        };
-        let context_state = state.progress_snapshot();
-        let nested_result = recover_single_archive(
-            &nested_job,
-            tools,
-            cancellation,
-            state.options.compute_mode,
-            None,
-            &mut dictionary_provider,
-            &mut |update| {
-                let mut update = update.with_recursive_context(
+        while let Some(nested) = pending.pop_front() {
+            ensure_not_cancelled(cancellation)?;
+            if !nested.archive_path.is_file() {
+                pending_archive_paths.retain(|path| path != &nested.archive_path);
+                skipped_archive_paths.push(nested.archive_path.clone());
+                state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
+                report(state.update(
+                    "嵌套压缩包已不存在，已跳过。",
                     nested.depth,
                     &nested.archive_path,
-                    &context_state,
-                );
-                if update.phase == RecoveryPhase::Extracting {
-                    update.message = format!(
-                        "正在安全解压嵌套归档到 {}。",
-                        path_for_display(&nested_output)
-                    );
-                }
-                report(update)
-            },
-        );
-
-        match nested_result {
-            Ok(mut result) if result.success => {
-                if let Err(error) = output_transaction.commit() {
-                    state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
-                    report(state.update(
-                        format!(
-                            "嵌套压缩包 {} 的临时输出无法发布，已自动清理：{error}",
-                            archive_display_name(&nested.archive_path)
-                        ),
-                        nested.depth,
-                        &nested.archive_path,
-                    ));
-                    continue;
-                }
-                result.output_directory = nested_output.clone();
-                state.extracted_nested_archives = state.extracted_nested_archives.saturating_add(1);
-                if let Some(record) = result.recovered_archive.clone() {
-                    recovered_archives.push(record);
-                }
-                if let Some(password) = result.password.as_ref()
-                    && !recovered_passwords.contains(password)
-                {
-                    recovered_passwords.push(password.clone());
-                }
-                let child_password = result
-                    .password
-                    .or(nested.inherited_password)
-                    .filter(|password| !password.is_empty());
-                let next_depth = nested.depth.saturating_add(1);
+                ));
+                continue;
+            }
+            if !state.processed_archives.insert(nested.archive_path.clone()) {
+                continue;
+            }
+            if state.discovered_nested_archives >= state.options.max_nested_archives {
+                pending_archive_paths.retain(|path| path != &nested.archive_path);
+                skipped_archive_paths.push(nested.archive_path.clone());
+                state.count_limit_reached = true;
+                state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
                 report(state.update(
                     format!(
-                        "{} 已完成解压，正在扫描第 {} 层输出。",
-                        archive_display_name(&nested.archive_path),
-                        next_depth
+                        "已达到 {} 个嵌套压缩包的安全上限，剩余项目不再处理。",
+                        state.options.max_nested_archives
                     ),
-                    next_depth,
-                    &nested_output,
+                    nested.depth,
+                    &nested.archive_path,
                 ));
-                let child_limit = state.collection_limit();
-                let child_scan_base = state.scanned_files;
-                let child_archives = find_new_or_changed_archives(
-                    &nested_output,
-                    &before_nested_extraction,
-                    child_limit,
-                    cancellation,
-                    |scanned_files, found_archives| {
-                        state.scanned_files = child_scan_base.saturating_add(scanned_files);
+                break;
+            }
+
+            state.discovered_nested_archives = state.discovered_nested_archives.saturating_add(1);
+            if nested.depth > state.options.max_depth {
+                pending_archive_paths.retain(|path| path != &nested.archive_path);
+                skipped_archive_paths.push(nested.archive_path.clone());
+                state.depth_limit_reached = true;
+                state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
+                report(state.update(
+                    format!(
+                        "已超过 {} 层递归安全上限，当前嵌套压缩包已跳过。",
+                        state.options.max_depth
+                    ),
+                    nested.depth,
+                    &nested.archive_path,
+                ));
+                continue;
+            }
+
+            report(state.update(
+                format!(
+                    "正在处理第 {} 层嵌套压缩包：{}。",
+                    nested.depth,
+                    archive_display_name(&nested.archive_path)
+                ),
+                nested.depth,
+                &nested.archive_path,
+            ));
+            let nested_output = resolve_nested_output_directory(&nested.archive_path);
+            let before_nested_extraction = capture_file_snapshot(&nested_output, cancellation)?;
+            let mut output_transaction = NestedOutputTransaction::new(nested_output.clone());
+            let nested_job = RecoveryJob {
+                archive_path: nested.archive_path.clone(),
+                output_directory: output_transaction.staging_directory().to_path_buf(),
+                dictionary_path: job.dictionary_path.clone(),
+                dictionary_count: job.dictionary_count,
+                known_password: nested.inherited_password.clone(),
+                work_directory: job
+                    .work_directory
+                    .join(format!("nested-{}", state.discovered_nested_archives)),
+            };
+            let context_state = state.progress_snapshot();
+            let nested_result = recover_single_archive(
+                &nested_job,
+                tools,
+                cancellation,
+                state.options.compute_mode,
+                &disk_budget,
+                None,
+                &mut dictionary_provider,
+                &mut |update| {
+                    let mut update = update.with_recursive_context(
+                        nested.depth,
+                        &nested.archive_path,
+                        &context_state,
+                    );
+                    if update.phase == RecoveryPhase::Extracting {
+                        update.message = format!(
+                            "正在安全解压嵌套归档到 {}。",
+                            path_for_display(&nested_output)
+                        );
+                    }
+                    report(update)
+                },
+            );
+
+            match nested_result {
+                Ok(mut result) if result.success => {
+                    if let Err(error) = output_transaction.commit() {
+                        pending_archive_paths.retain(|path| path != &nested.archive_path);
+                        skipped_archive_paths.push(nested.archive_path.clone());
+                        state.skipped_nested_archives =
+                            state.skipped_nested_archives.saturating_add(1);
                         report(state.update(
+                            format!(
+                                "嵌套压缩包 {} 的临时输出无法发布，已自动清理：{error}",
+                                archive_display_name(&nested.archive_path)
+                            ),
+                            nested.depth,
+                            &nested.archive_path,
+                        ));
+                        continue;
+                    }
+                    result.output_directory = nested_output.clone();
+                    pending_archive_paths.retain(|path| path != &nested.archive_path);
+                    completed_archive_paths.push(nested.archive_path.clone());
+                    state.extracted_nested_archives =
+                        state.extracted_nested_archives.saturating_add(1);
+                    if let Some(record) = result.recovered_archive.clone() {
+                        recovered_archives.push(record);
+                    }
+                    if let Some(password) = result.password.as_ref()
+                        && !recovered_passwords.contains(password)
+                    {
+                        recovered_passwords.push(password.clone());
+                    }
+                    let child_password = result
+                        .password
+                        .or(nested.inherited_password)
+                        .filter(|password| !password.is_empty());
+                    let next_depth = nested.depth.saturating_add(1);
+                    report(state.update(
+                        format!(
+                            "{} 已完成解压，正在扫描第 {} 层输出。",
+                            archive_display_name(&nested.archive_path),
+                            next_depth
+                        ),
+                        next_depth,
+                        &nested_output,
+                    ));
+                    let child_limit = state.collection_limit();
+                    let child_scan_base = state.scanned_files;
+                    let child_scan = find_new_or_changed_archives(
+                        &nested_output,
+                        &before_nested_extraction,
+                        child_limit,
+                        cancellation,
+                        |scanned_files, found_archives| {
+                            state.scanned_files = child_scan_base.saturating_add(scanned_files);
+                            report(state.update(
                             format!(
                                 "正在扫描第 {next_depth} 层输出：已检查 {scanned_files} 个文件，发现 {found_archives} 个归档。"
                             ),
                             next_depth,
                             &nested_output,
                         ));
-                    },
-                )?;
-                pending.extend(
-                    child_archives
-                        .into_iter()
-                        .map(|archive_path| NestedArchiveTask {
+                        },
+                    )?;
+                    pending_archive_paths.extend(child_scan.archives.iter().cloned());
+                    if child_scan.cancelled {
+                        scan_interrupted = true;
+                        return Err(RecoveryError::Cancelled);
+                    }
+                    pending.extend(child_scan.archives.into_iter().map(|archive_path| {
+                        NestedArchiveTask {
                             archive_path,
                             depth: next_depth,
                             inherited_password: child_password.clone(),
-                        }),
-                );
-                report(state.update(
-                    format!(
-                        "已解开第 {} 层嵌套压缩包：{}。",
+                        }
+                    }));
+                    report(state.update(
+                        format!(
+                            "已解开第 {} 层嵌套压缩包：{}。",
+                            nested.depth,
+                            archive_display_name(&nested.archive_path)
+                        ),
                         nested.depth,
-                        archive_display_name(&nested.archive_path)
-                    ),
-                    nested.depth,
-                    &nested.archive_path,
-                ));
-            }
-            Ok(_) => {
-                state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
-                report(state.update(
-                    format!(
-                        "未找到嵌套压缩包 {} 的密码，已跳过。",
-                        archive_display_name(&nested.archive_path)
-                    ),
-                    nested.depth,
-                    &nested.archive_path,
-                ));
-            }
-            Err(RecoveryError::Cancelled) => return Err(RecoveryError::Cancelled),
-            Err(error) => {
-                state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
-                report(state.update(
-                    format!(
-                        "嵌套压缩包 {} 无法继续处理，已跳过：{error}",
-                        archive_display_name(&nested.archive_path)
-                    ),
-                    nested.depth,
-                    &nested.archive_path,
-                ));
+                        &nested.archive_path,
+                    ));
+                }
+                Ok(_) => {
+                    pending_archive_paths.retain(|path| path != &nested.archive_path);
+                    skipped_archive_paths.push(nested.archive_path.clone());
+                    state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
+                    report(state.update(
+                        format!(
+                            "未找到嵌套压缩包 {} 的密码，已跳过。",
+                            archive_display_name(&nested.archive_path)
+                        ),
+                        nested.depth,
+                        &nested.archive_path,
+                    ));
+                }
+                Err(RecoveryError::Cancelled) => return Err(RecoveryError::Cancelled),
+                Err(error @ RecoveryError::BudgetExceeded(_)) => return Err(error),
+                Err(error) => {
+                    pending_archive_paths.retain(|path| path != &nested.archive_path);
+                    skipped_archive_paths.push(nested.archive_path.clone());
+                    state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
+                    report(state.update(
+                        format!(
+                            "嵌套压缩包 {} 无法继续处理，已跳过：{error}",
+                            archive_display_name(&nested.archive_path)
+                        ),
+                        nested.depth,
+                        &nested.archive_path,
+                    ));
+                }
             }
         }
+        ensure_not_cancelled(cancellation)
+    })();
+    match recursive_outcome {
+        Err(RecoveryError::Cancelled) => root.cancelled = true,
+        Err(RecoveryError::BudgetExceeded(message)) => {
+            budget_limit_reached = true;
+            root.message.push_str(&format!(" {message}"));
+        }
+        Err(error) => return Err(error),
+        Ok(()) => {}
     }
 
     let mut summary = format!(
-        "递归扫描完成，共检查 {} 个文件，已自动解开 {} 个嵌套压缩包",
-        state.scanned_files, state.extracted_nested_archives
+        "{}，共检查 {} 个文件，已自动解开 {} 个嵌套压缩包",
+        if budget_limit_reached {
+            "达到累计磁盘预算，已停止递归；已完成输出保留"
+        } else if root.cancelled {
+            "递归处理已取消；主归档及已完成的输出已保留"
+        } else {
+            "递归扫描完成"
+        },
+        state.scanned_files,
+        state.extracted_nested_archives
     );
     if state.skipped_nested_archives > 0 {
         summary.push_str(&format!("，跳过 {} 个", state.skipped_nested_archives));
@@ -468,6 +533,11 @@ pub fn recover_and_extract_recursive_lazy(
         recovered_passwords,
         recovered_archives,
         scanned_files: state.scanned_files,
+        completed_archive_paths,
+        skipped_archive_paths,
+        pending_archive_paths,
+        scan_interrupted,
+        budget_limit_reached,
     })
 }
 
@@ -485,21 +555,29 @@ fn capture_file_snapshot(
     Ok(snapshot)
 }
 
+struct ArchiveScanResult {
+    archives: Vec<PathBuf>,
+    cancelled: bool,
+}
+
 fn find_new_or_changed_archives(
     directory: &Path,
     before: &HashMap<PathBuf, FileSnapshot>,
     max_archives: usize,
     cancellation: &CancellationToken,
     mut report_progress: impl FnMut(u64, usize),
-) -> Result<Vec<PathBuf>, RecoveryError> {
+) -> Result<ArchiveScanResult, RecoveryError> {
     if max_archives == 0 {
-        return Ok(Vec::new());
+        return Ok(ArchiveScanResult {
+            archives: Vec::new(),
+            cancelled: false,
+        });
     }
     let mut archives = Vec::with_capacity(max_archives.min(16));
     let mut scanned_files = 0u64;
     let mut last_reported = 0u64;
     let mut last_report_at = Instant::now();
-    visit_files(directory, cancellation, |path| {
+    let scan_result = visit_files(directory, cancellation, |path| {
         scanned_files = scanned_files.saturating_add(1);
         if let Some(current) = capture_file_state(&path)
             && before
@@ -518,11 +596,19 @@ fn find_new_or_changed_archives(
             last_report_at = Instant::now();
         }
         archives.len() < max_archives
-    })?;
+    });
+    let cancelled = match scan_result {
+        Err(RecoveryError::Cancelled) => true,
+        Err(error) => return Err(error),
+        Ok(()) => cancellation.is_cancelled(),
+    };
     if scanned_files != last_reported {
         report_progress(scanned_files, archives.len());
     }
-    Ok(archives)
+    Ok(ArchiveScanResult {
+        archives,
+        cancelled,
+    })
 }
 
 fn visit_files(

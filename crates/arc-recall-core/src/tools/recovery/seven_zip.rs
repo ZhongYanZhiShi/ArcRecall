@@ -140,13 +140,20 @@ pub(super) fn extract_with_password(
 ) -> Result<(), RecoveryError> {
     let job = input.job;
     ensure_not_cancelled(cancellation)?;
-    validate_extraction_budget(
+    let declared = validate_extraction_budget(
         &job.archive_path,
         input.archive_bytes,
         password,
         tools,
         cancellation,
     )?;
+    let (remaining_bytes, remaining_entries) = input.disk_budget.remaining();
+    super::disk_budget::check_free_space(&job.output_directory, declared.total_bytes)?;
+    let baseline = super::disk_budget::directory_usage(&job.output_directory, u64::MAX, u64::MAX)?;
+    // Reserve before spawning. Failed extractions still count conservatively.
+    input
+        .disk_budget
+        .consume(declared.total_bytes, declared.entry_count)?;
     report(RecoveryUpdate::stage(
         RecoveryPhase::Extracting,
         Some("7-Zip"),
@@ -170,10 +177,61 @@ pub(super) fn extract_with_password(
         job.archive_path.as_os_str().to_owned(),
     ];
     request.max_output_bytes = 4 * 1024 * 1024;
-    let output = run_checked(&request, cancellation)?;
+    let mut last_check = std::time::Instant::now();
+    let mut limit_error = None;
+    let output = super::super::runner::run_process_observed(
+        &request,
+        Some(cancellation),
+        |_| {},
+        || {
+            if last_check.elapsed() < Duration::from_millis(500) {
+                return Ok(());
+            }
+            last_check = std::time::Instant::now();
+            let result =
+                super::disk_budget::check_free_space(&job.output_directory, 0).and_then(|_| {
+                    super::disk_budget::directory_usage(
+                        &job.output_directory,
+                        baseline.0.saturating_add(remaining_bytes),
+                        baseline.1.saturating_add(remaining_entries),
+                    )
+                    .map(|_| ())
+                    .map_err(RecoveryError::Io)
+                });
+            if let Err(error) = result {
+                let message = error.to_string();
+                limit_error = Some(message.clone());
+                return Err(std::io::Error::other(message));
+            }
+            Ok(())
+        },
+    );
+    if let Some(message) = limit_error {
+        return Err(RecoveryError::BudgetExceeded(message));
+    }
+    let output = output.map_err(|error| match error {
+        super::super::runner::ProcessRunnerError::Cancelled => RecoveryError::Cancelled,
+        other => RecoveryError::Process(other.to_string()),
+    })?;
     if !output.success {
         return Err(process_failure("7-Zip 解压", &output));
     }
+    let actual = super::disk_budget::directory_usage(
+        &job.output_directory,
+        baseline.0.saturating_add(remaining_bytes),
+        baseline.1.saturating_add(remaining_entries),
+    )
+    .map_err(|error| RecoveryError::BudgetExceeded(error.to_string()))?;
+    input.disk_budget.consume(
+        actual
+            .0
+            .saturating_sub(baseline.0)
+            .saturating_sub(declared.total_bytes),
+        actual
+            .1
+            .saturating_sub(baseline.1)
+            .saturating_sub(declared.entry_count),
+    )?;
     Ok(())
 }
 
@@ -189,7 +247,7 @@ fn validate_extraction_budget(
     password: &str,
     tools: &RecoveryToolPaths,
     cancellation: &CancellationToken,
-) -> Result<(), RecoveryError> {
+) -> Result<ArchiveExtractionBudget, RecoveryError> {
     let mut request = ProcessRequest::new(&tools.seven_zip);
     request.args = vec![
         OsString::from("l"),
@@ -207,7 +265,8 @@ fn validate_extraction_budget(
         return Err(process_failure("7-Zip 安全预检", &output));
     }
     let budget = parse_seven_zip_extraction_budget(&output)?;
-    check_extraction_budget(budget, archive_bytes)
+    check_extraction_budget(budget, archive_bytes)?;
+    Ok(budget)
 }
 
 fn check_extraction_budget(

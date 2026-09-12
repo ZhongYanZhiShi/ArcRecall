@@ -90,6 +90,11 @@ pub(crate) struct RecoveryTaskStatus {
     pub(super) root_extraction_completed: bool,
     pub(super) depth_limit_reached: bool,
     pub(super) count_limit_reached: bool,
+    pub(super) completed_archive_paths: Vec<String>,
+    pub(super) skipped_archive_paths: Vec<String>,
+    pub(super) pending_archive_paths: Vec<String>,
+    pub(super) scan_interrupted: bool,
+    pub(super) budget_limit_reached: bool,
     pub(super) events: VecDeque<RecoveryTaskEvent>,
 }
 
@@ -262,7 +267,9 @@ pub(super) fn recovery_failure_kind(error: &RecoveryError) -> RecoveryFailureKin
         RecoveryError::NotFound(_) => RecoveryFailureKind::NotFound,
         RecoveryError::Io(_) => RecoveryFailureKind::Io,
         RecoveryError::Process(_) => RecoveryFailureKind::Process,
-        RecoveryError::Cancelled | RecoveryError::Message(_) => RecoveryFailureKind::Other,
+        RecoveryError::BudgetExceeded(_) | RecoveryError::Cancelled | RecoveryError::Message(_) => {
+            RecoveryFailureKind::Other
+        }
     }
 }
 
@@ -318,6 +325,11 @@ mod tests {
             depth_limit_reached: false,
             count_limit_reached: false,
             events: VecDeque::new(),
+            completed_archive_paths: Vec::new(),
+            skipped_archive_paths: Vec::new(),
+            pending_archive_paths: Vec::new(),
+            scan_interrupted: false,
+            budget_limit_reached: false,
         }
     }
 

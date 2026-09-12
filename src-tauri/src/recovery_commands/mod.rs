@@ -205,6 +205,11 @@ pub(crate) async fn recovery_start(
         depth_limit_reached: false,
         count_limit_reached: false,
         events: initial_events,
+        completed_archive_paths: Vec::new(),
+        skipped_archive_paths: Vec::new(),
+        pending_archive_paths: Vec::new(),
+        scan_interrupted: false,
+        budget_limit_reached: false,
     }));
     {
         let mut current = state
@@ -297,6 +302,7 @@ pub(crate) async fn recovery_start(
                     max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
                     max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
                     compute_mode: initial.compute_mode,
+                    ..RecursiveRecoveryOptions::default()
                 },
                 precomputed_fingerprint_sha256,
                 move || {
@@ -385,7 +391,7 @@ pub(crate) async fn recovery_start(
         let (history_save, dictionary_update_failed_count) = match &outcome {
             Ok(result) if result.root.success => {
                 if let Ok(mut status) = status_for_worker.lock() {
-                    status.message = "恢复完成，正在保存本机历史记录。".into();
+                    status.message = "正在保存已完成归档的本机历史记录。".into();
                 }
                 let history_save = save_recovered_history(
                     &success_database_path,
@@ -410,10 +416,15 @@ pub(crate) async fn recovery_start(
             task_status.elapsed_ms = current_time_ms().saturating_sub(task_status.started_at_ms);
             match outcome {
                 Ok(result) => {
-                    task_status.success = result.root.success;
+                    task_status.success = result.root.success
+                        && !result.root.cancelled
+                        && !result.budget_limit_reached;
+                    task_status.budget_limit_reached = result.budget_limit_reached;
                     task_status.cancelled = result.root.cancelled;
                     task_status.phase = if result.root.cancelled {
                         RecoveryPhase::Cancelled
+                    } else if result.budget_limit_reached {
+                        RecoveryPhase::Failed
                     } else if result.root.success {
                         RecoveryPhase::Completed
                     } else {
@@ -445,6 +456,22 @@ pub(crate) async fn recovery_start(
                     task_status.root_extraction_completed = result.root.success;
                     task_status.depth_limit_reached = result.depth_limit_reached;
                     task_status.count_limit_reached = result.count_limit_reached;
+                    task_status.completed_archive_paths = result
+                        .completed_archive_paths
+                        .iter()
+                        .map(|path| path_for_display(path))
+                        .collect();
+                    task_status.skipped_archive_paths = result
+                        .skipped_archive_paths
+                        .iter()
+                        .map(|path| path_for_display(path))
+                        .collect();
+                    task_status.pending_archive_paths = result
+                        .pending_archive_paths
+                        .iter()
+                        .map(|path| path_for_display(path))
+                        .collect();
+                    task_status.scan_interrupted = result.scan_interrupted;
                     task_status.current_archive_path = None;
                     task_status.recursive_depth = 0;
                     append_current_recovery_event(&mut task_status);
@@ -457,17 +484,21 @@ pub(crate) async fn recovery_start(
                             LogLevel::Warn
                         },
                         "recovery",
-                        if result.root.success {
-                            "recovery.completed"
-                        } else if result.root.cancelled {
+                        if result.root.cancelled {
                             "recovery.cancelled"
+                        } else if result.budget_limit_reached {
+                            "recovery.budget_exceeded"
+                        } else if result.root.success {
+                            "recovery.completed"
                         } else {
                             "recovery.unsuccessful"
                         },
-                        if result.root.success {
+                        if result.root.cancelled {
+                            "恢复任务已取消，已保留完成部分。"
+                        } else if result.budget_limit_reached {
+                            "已达到累计磁盘预算，保留完成部分。"
+                        } else if result.root.success {
                             "恢复任务已完成。"
-                        } else if result.root.cancelled {
-                            "恢复任务已取消。"
                         } else {
                             "恢复任务已结束，但当前候选未找到可用密码。"
                         },
