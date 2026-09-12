@@ -202,7 +202,8 @@ pub fn compress_archive(
         return Err(CompressionError::Cancelled);
     }
 
-    let partial = PartialArchive::new(job.temporary_path.clone());
+    let partial = tempfile::TempPath::try_from_path(job.temporary_path.clone())
+        .map_err(CompressionError::OutputIo)?;
     let total = job.source_count;
     on_update(CompressionUpdate {
         phase: CompressionPhase::Preparing,
@@ -255,8 +256,7 @@ pub fn compress_archive(
             "7-Zip 未生成预期的临时归档。".into(),
         ));
     }
-    fs::rename(&job.temporary_path, &job.output_path).map_err(CompressionError::OutputIo)?;
-    partial.keep();
+    let output_path = publish_archive(partial, &job.output_path)?;
     on_update(CompressionUpdate {
         phase: CompressionPhase::Completed,
         message: "压缩完成。".into(),
@@ -264,7 +264,7 @@ pub fn compress_archive(
         total_source_count: total,
     });
     Ok(CompressionResult {
-        output_path: job.output_path,
+        output_path,
         source_count: total,
     })
 }
@@ -312,7 +312,7 @@ pub fn sanitize_archive_base_name(value: &str) -> Result<String, CompressionErro
 }
 
 pub fn resolve_available_archive_path(preferred: &Path) -> PathBuf {
-    if !preferred.exists() {
+    if preferred.symlink_metadata().is_err() {
         return preferred.to_path_buf();
     }
     let parent = preferred.parent().unwrap_or_else(|| Path::new(""));
@@ -327,7 +327,7 @@ pub fn resolve_available_archive_path(preferred: &Path) -> PathBuf {
             None => format!("{stem} ({index})"),
         };
         let candidate = parent.join(file_name);
-        if !candidate.exists() {
+        if candidate.symlink_metadata().is_err() {
             return candidate;
         }
     }
@@ -513,28 +513,23 @@ fn is_windows_reserved_name(value: &str) -> bool {
     )
 }
 
-struct PartialArchive {
-    path: PathBuf,
-    keep: std::cell::Cell<bool>,
-}
-
-impl PartialArchive {
-    fn new(path: PathBuf) -> Self {
-        Self {
-            path,
-            keep: std::cell::Cell::new(false),
-        }
-    }
-
-    fn keep(&self) {
-        self.keep.set(true);
-    }
-}
-
-impl Drop for PartialArchive {
-    fn drop(&mut self) {
-        if !self.keep.get() {
-            let _ = fs::remove_file(&self.path);
+fn publish_archive(
+    mut partial: tempfile::TempPath,
+    preferred: &Path,
+) -> Result<PathBuf, CompressionError> {
+    let mut candidate = preferred.to_path_buf();
+    loop {
+        match partial.persist_noclobber(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) => {
+                // The OS publication operation, rather than an earlier existence check,
+                // guarantees that a concurrently created archive is never replaced.
+                if error.error.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(CompressionError::OutputIo(error.error));
+                }
+                partial = error.path;
+                candidate = resolve_available_archive_path(preferred);
+            }
         }
     }
 }
@@ -572,6 +567,36 @@ mod tests {
             resolve_available_archive_path(&preferred),
             directory.path().join("backup (2).7z")
         );
+    }
+
+    #[test]
+    fn publication_preserves_late_collisions_and_cleans_up_on_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let preferred = directory.path().join("backup.7z");
+        assert_eq!(resolve_available_archive_path(&preferred), preferred);
+        fs::write(&preferred, b"other task").unwrap();
+        fs::create_dir(directory.path().join("backup (1).7z")).unwrap();
+        let temporary = directory.path().join("partial");
+        fs::write(&temporary, b"new archive").unwrap();
+        let published = publish_archive(
+            tempfile::TempPath::try_from_path(&temporary).unwrap(),
+            &preferred,
+        )
+        .unwrap();
+        assert_eq!(published, directory.path().join("backup (2).7z"));
+        assert_eq!(fs::read(&preferred).unwrap(), b"other task");
+        assert_eq!(fs::read(published).unwrap(), b"new archive");
+        assert!(!temporary.exists());
+
+        fs::write(&temporary, b"failed archive").unwrap();
+        assert!(
+            publish_archive(
+                tempfile::TempPath::try_from_path(&temporary).unwrap(),
+                &directory.path().join("missing/archive.7z")
+            )
+            .is_err()
+        );
+        assert!(!temporary.exists());
     }
 
     #[test]
