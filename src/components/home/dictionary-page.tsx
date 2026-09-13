@@ -112,6 +112,7 @@ export function DictionaryPage() {
   const [pastedCandidates, setPastedCandidates] = React.useState("")
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
+  const selectAllRef = React.useRef<HTMLElement>(null)
   const initialLoadStarted = React.useRef(false)
   const operationBusy = React.useRef(false)
   const importController = React.useRef<AbortController | null>(null)
@@ -452,15 +453,6 @@ export function DictionaryPage() {
                 <RefreshCw data-icon="inline-start" />
                 刷新
               </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={isBusy || selectedIds.size === 0}
-                onClick={() => setDeleteDialogOpen(true)}
-              >
-                <Trash2 data-icon="inline-start" />
-                删除
-              </Button>
             </>
           }
         />
@@ -547,6 +539,39 @@ export function DictionaryPage() {
           size="sm"
           className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden rounded-xl py-0 shadow-sm ring-border/60"
         >
+          {selectedIds.size > 0 ? (
+            <div
+              role="group"
+              aria-label="所选候选操作"
+              className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-3 py-2"
+            >
+              <span role="status" className="text-xs font-medium tabular-nums">
+                已选 {selectedIds.size} 项
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={isBusy}
+                  onClick={() => setDeleteDialogOpen(true)}
+                >
+                  <Trash2 data-icon="inline-start" />
+                  删除所选
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={isBusy}
+                  onClick={() => {
+                    setSelectedIds(new Set())
+                    selectAllRef.current?.focus()
+                  }}
+                >
+                  取消选择
+                </Button>
+              </div>
+            </div>
+          ) : null}
           <CardContent className="min-h-0 flex-1 p-0">
             <ScrollArea
               ref={scrollAreaRef}
@@ -557,6 +582,7 @@ export function DictionaryPage() {
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="h-9 w-10 px-3">
                       <Checkbox
+                        ref={selectAllRef}
                         checked={allVisibleSelected}
                         indeterminate={someVisibleSelected}
                         disabled={isEmpty || isBusy}

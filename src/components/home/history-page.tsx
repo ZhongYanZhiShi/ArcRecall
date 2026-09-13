@@ -11,6 +11,7 @@ import {
   Fingerprint,
   History,
   KeyRound,
+  MoreHorizontal,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -37,6 +38,13 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Empty,
   EmptyDescription,
@@ -323,15 +331,28 @@ export function HistoryPage() {
                 />
                 刷新
               </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                disabled={busy || (result?.totalCount ?? 0) === 0}
-                onClick={() => setClearDialogOpen(true)}
-              >
-                <Trash2 data-icon="inline-start" />
-                清空
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button size="sm" variant="outline" disabled={busy} />
+                  }
+                >
+                  <MoreHorizontal data-icon="inline-start" />
+                  历史工具
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" sideOffset={8}>
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem
+                      variant="destructive"
+                      disabled={busy || (result?.totalCount ?? 0) === 0}
+                      onClick={() => setClearDialogOpen(true)}
+                    >
+                      <Trash2 />
+                      清空历史记录
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </>
           }
         />

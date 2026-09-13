@@ -56,13 +56,13 @@ const CATEGORIES: {
     id: "app",
     label: "应用",
     icon: Settings2,
-    description: "日志级别、容量与 7-Zip 运行诊断",
+    description: "本机日志级别与磁盘占用上限",
   },
   {
     id: "data",
     label: "数据",
     icon: Database,
-    description: "本机 SQLite 与设置文件位置",
+    description: "数据库备份与恢复、本机数据和设置文件位置",
   },
 ]
 
@@ -208,14 +208,14 @@ export const SettingsPage = React.forwardRef<
           }}
           className="flex min-h-0 flex-1 flex-col gap-2"
         >
-          <TabsList className="h-auto min-h-9 w-full shrink-0 flex-wrap justify-start gap-0.5">
+          <TabsList className="min-h-9 w-full shrink-0 flex-wrap justify-start gap-0.5 rounded-2xl group-data-horizontal/tabs:h-auto sm:rounded-full">
             {CATEGORIES.map((item) => {
               const Icon = item.icon
               return (
                 <TabsTrigger
                   key={item.id}
                   value={item.id}
-                  className="flex-none"
+                  className="h-8 flex-none"
                 >
                   <Icon data-icon="inline-start" />
                   {item.label}

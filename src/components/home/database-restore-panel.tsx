@@ -61,7 +61,7 @@ export function DatabaseRestorePanel({
     setPreview(null)
   }
   return (
-    <div className="flex flex-col gap-3 border-t pt-3">
+    <div className="flex flex-col gap-3">
       <p className="text-sm font-medium">数据库备份与恢复</p>
       <p className="text-xs leading-relaxed text-muted-foreground">
         包含候选字典和恢复历史；不包含应用设置、AI

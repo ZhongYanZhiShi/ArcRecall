@@ -10,6 +10,7 @@ import {
   FolderPlus,
   KeyRound,
   PackagePlus,
+  Settings2,
   Square,
   Trash2,
   WandSparkles,
@@ -522,6 +523,17 @@ export function CompressPageView({
                             未配置
                           </Badge>
                         )}
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          disabled={draftLocked}
+                          onClick={onOpenAiSettings}
+                          aria-label="配置 AI 模型与重命名提示词"
+                        >
+                          <Settings2 data-icon="inline-start" />
+                          配置
+                        </Button>
                       </div>
                       <FieldDescription className="text-xs leading-relaxed">
                         只发送你填写的基础名称与提示词，不读取来源文件、路径或内容。
@@ -552,39 +564,28 @@ export function CompressPageView({
                       <AlertDescription className="min-w-0 flex-1 text-xs">
                         {aiError ?? "尚未配置可用的 AI 模型，请先前往设置。"}
                       </AlertDescription>
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        {activeAiProfile && aiError ? (
-                          <>
-                            <Button
-                              type="button"
-                              size="xs"
-                              variant="outline"
-                              disabled={busy}
-                              onClick={() => void handleStart(false)}
-                            >
-                              重试
-                            </Button>
-                            <Button
-                              type="button"
-                              size="xs"
-                              variant="outline"
-                              disabled={busy}
-                              onClick={() => void handleStart(true)}
-                            >
-                              使用原名称
-                            </Button>
-                          </>
-                        ) : null}
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="outline"
-                          disabled={busy}
-                          onClick={onOpenAiSettings}
-                        >
-                          前往 AI 设置
-                        </Button>
-                      </div>
+                      {activeAiProfile && aiError ? (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() => void handleStart(false)}
+                          >
+                            重试
+                          </Button>
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() => void handleStart(true)}
+                          >
+                            使用原名称
+                          </Button>
+                        </div>
+                      ) : null}
                     </Alert>
                   ) : null}
 

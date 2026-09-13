@@ -350,6 +350,7 @@ export function EngineSettingsPanel() {
         message={engineMessage}
         messageError={engineError}
         onInstall={handleInstallBundle}
+        onOpen={handleOpenPath}
       />
       <ToolsDirectoryCard
         status={hashcat}

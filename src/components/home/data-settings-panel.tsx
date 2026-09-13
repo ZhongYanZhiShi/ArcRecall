@@ -7,6 +7,7 @@ import { SettingsInfoRow } from "@/components/home/settings-info-row"
 import { DatabaseRestorePanel } from "@/components/home/database-restore-panel"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Separator } from "@/components/ui/separator"
 import {
   Card,
   CardContent,
@@ -81,6 +82,9 @@ export function DataSettingsPanel() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          <DatabaseRestorePanel onRestored={() => void load()} />
+          <Separator />
+          <p className="text-sm font-medium">文件位置</p>
           <SettingsInfoRow
             icon={<HardDrive className="size-3.5" />}
             label="数据根目录"
@@ -113,7 +117,6 @@ export function DataSettingsPanel() {
             label="外部工具目录"
             value={dbInfo?.toolsPath ?? "—"}
           />
-          <DatabaseRestorePanel onRestored={() => void load()} />
         </CardContent>
       </Card>
     </div>

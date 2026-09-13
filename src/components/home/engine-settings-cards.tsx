@@ -180,12 +180,14 @@ export function FullBundleCard({
   message,
   messageError,
   onInstall,
+  onOpen,
 }: {
   status: FullEngineBundleStatus | null
   busy: boolean
   message: string | null
   messageError: boolean
   onInstall: () => void
+  onOpen: (path: string) => void
 }) {
   return (
     <Card size="sm">
@@ -274,6 +276,31 @@ export function FullBundleCard({
               {status.message} GPU 驱动、CUDA、HIP 与 OpenCL
               由系统提供，不进入发行包；无可用加速后端时使用 John CPU 回退。
             </p>
+            <div className="flex flex-col gap-2 border-t pt-3">
+              <p className="text-sm font-medium">7-Zip 运行诊断</p>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {status.sevenZip.message}
+              </p>
+              <SettingsInfoRow
+                icon={<HardDrive className="size-3.5" />}
+                label="7z.exe"
+                value={status.sevenZip.executablePath || "—"}
+                action={
+                  status.sevenZip.executablePath ? (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => onOpen(status.sevenZip.executablePath)}
+                    >
+                      <ExternalLink data-icon="inline-start" />
+                      打开位置
+                    </Button>
+                  ) : undefined
+                }
+              />
+            </div>
           </>
         )}
         {message ? (

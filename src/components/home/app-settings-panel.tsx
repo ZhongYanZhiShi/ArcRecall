@@ -1,9 +1,8 @@
 "use client"
 
-import { CircleAlert, ExternalLink, HardDrive, RefreshCw } from "lucide-react"
+import { CircleAlert, RefreshCw } from "lucide-react"
 import * as React from "react"
 
-import { SettingsInfoRow } from "@/components/home/settings-info-row"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -33,13 +32,10 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   type AppLogLevel,
   type AppSettings,
-  type FullEngineBundleStatus,
   DEFAULT_LOG_MAX_DISK_MIB,
   MAX_LOG_MAX_DISK_MIB,
   MIN_LOG_MAX_DISK_MIB,
-  getFullEngineBundleStatus,
   getSettings,
-  openPath,
   setSettings,
 } from "@/lib/settings"
 
@@ -58,8 +54,6 @@ const LOG_CAPACITY_PRESETS = [25, 100, 250, 500] as const
 
 export function AppSettingsPanel() {
   const [appSettings, setAppSettings] = React.useState<AppSettings | null>(null)
-  const [fullBundle, setFullBundle] =
-    React.useState<FullEngineBundleStatus | null>(null)
   const [logMaxDiskInput, setLogMaxDiskInput] = React.useState(
     String(DEFAULT_LOG_MAX_DISK_MIB)
   )
@@ -74,31 +68,20 @@ export function AppSettingsPanel() {
     const requestId = ++request.current
     setLoadBusy(true)
     setLoadError(null)
-    const [settings, bundle] = await Promise.allSettled([
-      getSettings(),
-      getFullEngineBundleStatus(),
-    ])
-    if (requestId !== request.current) {
-      return
-    }
-    if (settings.status === "fulfilled") {
-      setAppSettings(settings.value)
+    try {
+      const settings = await getSettings()
+      if (requestId !== request.current) return
+      setAppSettings(settings)
       setLogMaxDiskInput(
-        String(settings.value.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB)
+        String(settings.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB)
       )
+    } catch (error) {
+      if (requestId === request.current) {
+        setLoadError(`读取应用设置失败：${errorMessage(error)}`)
+      }
+    } finally {
+      if (requestId === request.current) setLoadBusy(false)
     }
-    if (bundle.status === "fulfilled") {
-      setFullBundle(bundle.value)
-    }
-    const failed = [settings, bundle]
-      .flatMap((result, index) =>
-        result.status === "rejected" ? [["应用设置", "7-Zip 状态"][index]] : []
-      )
-      .filter((label): label is string => Boolean(label))
-    if (failed.length > 0) {
-      setLoadError(`读取失败：${failed.join("、")}。`)
-    }
-    setLoadBusy(false)
   }, [])
 
   React.useEffect(() => {
@@ -365,52 +348,6 @@ export function AppSettingsPanel() {
               <AlertDescription aria-live="polite">{message}</AlertDescription>
             </Alert>
           ) : null}
-        </CardContent>
-      </Card>
-      <Card size="sm">
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <CardTitle>内置 7-Zip</CardTitle>
-            {fullBundle === null ? (
-              <Badge variant="secondary">正在检测</Badge>
-            ) : (
-              <Badge
-                variant={fullBundle.sevenZip.runnable ? "success" : "warning"}
-              >
-                {fullBundle.sevenZip.runnable ? "可运行" : "未就绪"}
-              </Badge>
-            )}
-          </div>
-          <CardDescription>
-            {fullBundle?.sevenZip.message ?? "正在读取 7-Zip 进程探测状态…"}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <SettingsInfoRow
-            icon={<HardDrive className="size-3.5" />}
-            label="7z.exe"
-            value={fullBundle?.sevenZip.executablePath ?? "—"}
-            action={
-              fullBundle?.sevenZip.executablePath ? (
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  onClick={() =>
-                    void openPath(fullBundle.sevenZip.executablePath).catch(
-                      (error) => {
-                        setMessageError(true)
-                        setMessage(`无法跳转到该路径：${errorMessage(error)}`)
-                      }
-                    )
-                  }
-                >
-                  <ExternalLink data-icon="inline-start" />
-                  打开位置
-                </Button>
-              ) : undefined
-            }
-          />
         </CardContent>
       </Card>
     </div>
