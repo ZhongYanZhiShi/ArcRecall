@@ -5,6 +5,7 @@ import {
   Eye,
   EyeOff,
   KeyRound,
+  ListPlus,
   PackageOpen,
   Settings2,
   ShieldCheck,
@@ -235,7 +236,7 @@ export function ExtractPageView({
           className={cn(
             "relative min-h-0 border-dashed shadow-none transition-[background-color,border-color] duration-200",
             analysis || analyzingPath || task
-              ? "flex shrink-0 flex-row items-center gap-3 px-4 py-3"
+              ? "flex shrink-0 flex-row flex-wrap items-center gap-3 px-4 py-3"
               : "flex min-h-52 flex-1 flex-col justify-center gap-0 py-0",
             dragOver
               ? "border-primary/70 bg-primary/10"
@@ -272,20 +273,34 @@ export function ExtractPageView({
                       : null}
                 </CardDescription>
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="shrink-0"
-                onClick={handlePickArchive}
-                disabled={busy || running}
-              >
-                {analyzingPath ? (
-                  <Spinner data-icon="inline-start" />
-                ) : (
-                  <Upload data-icon="inline-start" />
-                )}
-                {analyzingPath ? "正在识别" : "更换压缩包"}
-              </Button>
+              <div className="flex basis-full flex-wrap items-center gap-2 sm:basis-auto">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handlePickArchive}
+                  disabled={busy || running}
+                >
+                  {analyzingPath ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <Upload data-icon="inline-start" />
+                  )}
+                  {analyzingPath ? "正在识别" : "更换压缩包"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handlePickBatch}
+                  disabled={busy || running}
+                >
+                  <ListPlus data-icon="inline-start" />
+                  批量添加
+                </Button>
+              </div>
+              <p className="basis-full text-xs text-muted-foreground">
+                支持多文件拖入或多行路径粘贴
+                <Kbd className="ml-1">Ctrl + V</Kbd>
+              </p>
             </>
           ) : (
             <>
@@ -307,18 +322,31 @@ export function ExtractPageView({
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col items-center gap-3 px-5 pb-8">
-                <Button onClick={handlePickArchive} disabled={busy || running}>
-                  <Upload data-icon="inline-start" />
-                  选择压缩包
-                </Button>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <Button
+                    onClick={handlePickArchive}
+                    disabled={busy || running}
+                  >
+                    <Upload data-icon="inline-start" />
+                    选择压缩包
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handlePickBatch}
+                    disabled={busy || running}
+                  >
+                    <ListPlus data-icon="inline-start" />
+                    批量添加
+                  </Button>
+                </div>
                 <div className="flex flex-col items-center gap-2 text-xs text-muted-foreground">
+                  <p className="text-center leading-relaxed">
+                    支持多文件拖入或多行路径粘贴
+                    <Kbd className="ml-1">Ctrl + V</Kbd>
+                  </p>
                   <p className="inline-flex items-center gap-1.5 text-center leading-relaxed">
                     <ShieldCheck aria-hidden className="size-3.5 shrink-0" />
                     文件与密码仅在本机处理，源文件保持不变
-                  </p>
-                  <p>
-                    也可粘贴绝对路径
-                    <Kbd className="ml-1">Ctrl + V</Kbd>
                   </p>
                   <ol
                     aria-label={`恢复流程：${EMPTY_RECOVERY_STEPS.join("、")}`}
@@ -349,16 +377,8 @@ export function ExtractPageView({
           )}
         </Card>
 
-        <div className="mt-2 flex shrink-0 flex-wrap items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy || running}
-            onClick={handlePickBatch}
-          >
-            添加批次归档
-          </Button>
-          {analysis ? (
+        {analysis ? (
+          <div className="mt-2 flex shrink-0 flex-wrap items-center gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -367,11 +387,8 @@ export function ExtractPageView({
             >
               生成正确后缀副本
             </Button>
-          ) : null}
-          <span className="text-xs text-muted-foreground">
-            支持多文件拖入或多行路径粘贴
-          </span>
-        </div>
+          </div>
+        ) : null}
         {repairMessage ? (
           <p
             role="status"
