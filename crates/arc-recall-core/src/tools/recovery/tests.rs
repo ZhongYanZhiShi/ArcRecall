@@ -1210,6 +1210,93 @@ fn recursively_extracts_misleading_suffix_archive_with_inherited_password() {
 }
 
 #[test]
+fn recursive_scan_file_limit_preserves_output_and_can_resume_with_a_higher_limit() {
+    let Some(seven_zip) = locate_seven_zip() else {
+        eprintln!("skip: 7z.exe not found");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let content = dir.path().join("content");
+    fs::create_dir(&content).unwrap();
+    let payload = dir.path().join("payload.txt");
+    fs::write(&payload, b"nested-content").unwrap();
+    create_encrypted_archive(
+        &seven_zip,
+        "-t7z",
+        "shared-test-password",
+        &content.join("nested.jpg"),
+        &payload,
+    );
+    for index in 0..10 {
+        fs::write(content.join(format!("{index}.txt")), b"ordinary-file").unwrap();
+    }
+    let archive = dir.path().join("outer.7z");
+    create_encrypted_archive(
+        &seven_zip,
+        "-t7z",
+        "shared-test-password",
+        &archive,
+        &content,
+    );
+    let tools = RecoveryToolPaths {
+        seven_zip,
+        hashcat: dir.path().join("unused-hashcat"),
+        john_tools_directory: dir.path().join("unused-john"),
+        perl: dir.path().join("unused-perl"),
+    };
+    for limit in [10, 11, 0] {
+        let job = RecoveryJob {
+            archive_path: archive.clone(),
+            output_directory: dir.path().join(format!("out-{limit}")),
+            work_directory: dir.path().join(format!("work-{limit}")),
+            dictionary_path: dir.path().join("unused.dict"),
+            dictionary_count: 0,
+            known_password: Some("shared-test-password".into()),
+        };
+        let mut updates = Vec::new();
+        let result = recover_and_extract_recursive_lazy(
+            &job,
+            &tools,
+            &CancellationToken::default(),
+            RecursiveRecoveryOptions {
+                max_files_per_directory: limit,
+                ..RecursiveRecoveryOptions::default()
+            },
+            None,
+            || panic!("known passwords must avoid dictionary loading"),
+            |update| updates.push(update),
+        )
+        .unwrap();
+        assert!(result.root.success);
+        let output = job.output_directory.join("content");
+        for index in 0..10 {
+            assert_eq!(
+                fs::read(output.join(format!("{index}.txt"))).unwrap(),
+                b"ordinary-file"
+            );
+        }
+        assert!(output.join("nested.jpg").is_file());
+        if limit == 10 {
+            assert_eq!(result.extracted_nested_archives, 0);
+            assert_eq!(result.scanned_files, 0);
+            assert!(!output.join("nested").exists());
+            assert!(result.root.message.contains("按文件数上限跳过 1 个目录"));
+            assert!(
+                updates
+                    .iter()
+                    .any(|update| update.message.contains("直属文件超过 10 个"))
+            );
+        } else {
+            assert_eq!(result.extracted_nested_archives, 1);
+            assert_eq!(
+                fs::read(output.join("nested/payload.txt")).unwrap(),
+                b"nested-content"
+            );
+        }
+    }
+}
+
+#[test]
 fn real_seven_zip_recovers_a_large_pe_overlay_recursively() {
     let Some(seven_zip) = locate_seven_zip() else {
         eprintln!("skip: 7z.exe not found");

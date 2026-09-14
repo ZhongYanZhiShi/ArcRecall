@@ -23,6 +23,8 @@ import {
   type FullEngineBundleStatus,
   type HashcatStatus,
   type JohnPerlStatus,
+  DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY,
+  MAX_SCAN_MAX_FILES_PER_DIRECTORY,
   downloadHashcat,
   getFullEngineBundleStatus,
   getHashcatStatus,
@@ -50,6 +52,9 @@ type EngineActionResult = {
 let cachedEngineStatus: EngineStatusSnapshot | null = null
 
 export function EngineSettingsPanel() {
+  const [scanLimitDraft, setScanLimitDraft] = React.useState<string | null>(
+    null
+  )
   const [fullBundle, setFullBundle] =
     React.useState<FullEngineBundleStatus | null>(
       () => cachedEngineStatus?.fullBundle ?? null
@@ -283,14 +288,20 @@ export function EngineSettingsPanel() {
       return
     }
     const previous = appSettings
-    const next = { ...appSettings, recovery: { computeMode: mode } }
+    const next = {
+      ...appSettings,
+      recovery: { ...appSettings.recovery, computeMode: mode },
+    }
     setAppSettings(next)
     setRecoveryBusy(true)
     setRecoveryError(false)
     setRecoveryMessage("正在保存默认解密方式…")
     void getSettings()
       .then((current) =>
-        setSettings({ ...current, recovery: { computeMode: mode } })
+        setSettings({
+          ...current,
+          recovery: { ...current.recovery, computeMode: mode },
+        })
       )
       .then((saved) => {
         setAppSettings(saved)
@@ -313,6 +324,55 @@ export function EngineSettingsPanel() {
       await refreshEngine()
       return { message: "解密引擎状态已刷新。" }
     })
+
+  const scanLimitValue =
+    scanLimitDraft ??
+    String(
+      appSettings?.recovery?.scanMaxFilesPerDirectory ??
+        DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY
+    )
+  const handleSaveScanLimit = async () => {
+    if (recoveryBusy || appSettings === null) return
+    const limit = Number(scanLimitValue)
+    if (
+      !scanLimitValue.trim() ||
+      !Number.isInteger(limit) ||
+      limit < 0 ||
+      limit > MAX_SCAN_MAX_FILES_PER_DIRECTORY
+    ) {
+      setRecoveryError(true)
+      setRecoveryMessage(
+        `文件数上限必须是 0 到 ${MAX_SCAN_MAX_FILES_PER_DIRECTORY} 之间的整数。`
+      )
+      return
+    }
+    setRecoveryBusy(true)
+    setRecoveryError(false)
+    setRecoveryMessage("正在保存扫描上限…")
+    try {
+      const current = await getSettings()
+      const saved = await setSettings({
+        ...current,
+        recovery: {
+          computeMode: "gpuPreferred",
+          ...current.recovery,
+          scanMaxFilesPerDirectory: limit,
+        },
+      })
+      setAppSettings(saved)
+      setScanLimitDraft(null)
+      setRecoveryMessage(
+        limit === 0
+          ? "已关闭目录文件数限制，下次任务生效。"
+          : `已保存：直属文件超过 ${limit} 个时跳过该目录及其子目录的嵌套扫描，下次任务生效。`
+      )
+    } catch (error) {
+      setRecoveryError(true)
+      setRecoveryMessage(`保存失败：${errorMessage(error)}`)
+    } finally {
+      setRecoveryBusy(false)
+    }
+  }
 
   return (
     <div className="flex flex-col gap-2">
@@ -343,6 +403,9 @@ export function EngineSettingsPanel() {
         messageError={recoveryError}
         onChange={handleRecoveryModeChange}
         onRefresh={handleRefresh}
+        scanLimitValue={scanLimitValue}
+        onScanLimitChange={setScanLimitDraft}
+        onSaveScanLimit={() => void handleSaveScanLimit()}
       />
       <FullBundleCard
         status={fullBundle}

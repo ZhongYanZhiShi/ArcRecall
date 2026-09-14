@@ -334,6 +334,81 @@ test("数据库恢复必须先预览确认，并阻止不可解密密码的恢�
   }
 })
 
+test("扫描上限保存、错误处理和解密方式切换保留其他设置", async (t) => {
+  let saved = {
+    recovery: { computeMode: "cpuOnly" },
+    engine: { hashcatPath: "existing-engine" },
+  }
+  let writes = 0
+  let rejectSave = false
+  const harness = sourceHarness({
+    "@/lib/recovery": {
+      getRecoveryCapabilities: async () => ({ methods: [] }),
+      refreshRecoveryCapabilities: async () => ({ methods: [] }),
+    },
+    "@/lib/settings": {
+      DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY: 10,
+      MAX_SCAN_MAX_FILES_PER_DIRECTORY: 0xffffffff,
+      getFullEngineBundleStatus: async () => ({}),
+      getHashcatStatus: async () => ({}),
+      getJohnPerlStatus: async () => ({}),
+      getSettings: async () => structuredClone(saved),
+      setSettings: async (next) => {
+        writes += 1
+        if (rejectSave) throw new Error("disk unavailable")
+        saved = structuredClone(next)
+        return next
+      },
+    },
+  })
+  t.after(() => harness.hide())
+  const { EngineSettingsPanel } = harness.load(
+    "src/components/home/engine-settings-panel.tsx"
+  )
+  const card = () =>
+    find(
+      harness.render(EngineSettingsPanel),
+      (node) => node.type === "DefaultRecoveryCard"
+    ).props
+  card()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await settle()
+  assert.equal(card().scanLimitValue, "10")
+  for (const invalid of ["", "-1", "1.5", "4294967296"]) {
+    card().onScanLimitChange(invalid)
+    card().onSaveScanLimit()
+    await settle()
+    assert.equal(card().messageError, true)
+    assert.equal(writes, 0)
+  }
+  card().onScanLimitChange("0")
+  card().onSaveScanLimit()
+  await settle()
+  assert.deepEqual(saved.recovery, {
+    computeMode: "cpuOnly",
+    scanMaxFilesPerDirectory: 0,
+  })
+  assert.equal(saved.engine.hashcatPath, "existing-engine")
+  card().onChange("gpuPreferred")
+  await settle()
+  assert.deepEqual(saved.recovery, {
+    computeMode: "gpuPreferred",
+    scanMaxFilesPerDirectory: 0,
+  })
+  rejectSave = true
+  card().onScanLimitChange("25")
+  card().onSaveScanLimit()
+  await settle()
+  assert.equal(card().scanLimitValue, "25")
+  assert.equal(card().messageError, true)
+  assert.equal(saved.recovery.scanMaxFilesPerDirectory, 0)
+  rejectSave = false
+  card().onSaveScanLimit()
+  await settle()
+  assert.equal(saved.recovery.scanMaxFilesPerDirectory, 25)
+  assert.equal(card().scanLimitValue, "25")
+})
+
 test("保存 John / Perl 后刷新界面和共享能力缓存", async (t) => {
   let available = false
   let probes = 0

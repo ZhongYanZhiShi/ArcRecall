@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::tools::RecoveryComputeMode;
+use crate::tools::{DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY, RecoveryComputeMode};
 
 pub const DEFAULT_LOG_MAX_DISK_MIB: u16 = 25;
 pub const MIN_LOG_MAX_DISK_MIB: u16 = 5;
@@ -77,11 +77,26 @@ pub struct EngineSettings {
     pub perl_path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoverySettings {
     #[serde(default)]
     pub compute_mode: RecoveryComputeMode,
+    #[serde(default = "default_scan_max_files_per_directory")]
+    pub scan_max_files_per_directory: u32,
+}
+
+const fn default_scan_max_files_per_directory() -> u32 {
+    DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY
+}
+
+impl Default for RecoverySettings {
+    fn default() -> Self {
+        Self {
+            compute_mode: RecoveryComputeMode::default(),
+            scan_max_files_per_directory: default_scan_max_files_per_directory(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -402,6 +417,32 @@ pub struct DatabaseInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_limit_defaults_for_legacy_settings_and_survives_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(&path, r#"{"recovery":{"computeMode":"cpuOnly"}}"#).unwrap();
+        let store = SettingsStore::open(&path).unwrap();
+        let mut settings = store.load().unwrap();
+        assert_eq!(settings.recovery.scan_max_files_per_directory, 10);
+        assert_eq!(settings.recovery.compute_mode, RecoveryComputeMode::CpuOnly);
+        for limit in [0, 3, 10, 100] {
+            settings.recovery.scan_max_files_per_directory = limit;
+            store.save(&settings).unwrap();
+            assert_eq!(
+                store.load().unwrap().recovery.scan_max_files_per_directory,
+                limit
+            );
+        }
+        assert!(
+            serde_json::from_str::<RecoverySettings>(r#"{"scanMaxFilesPerDirectory":-1}"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<RecoverySettings>(r#"{"scanMaxFilesPerDirectory":1.5}"#)
+                .is_err()
+        );
+    }
 
     #[test]
     fn creates_default_settings_when_missing() {

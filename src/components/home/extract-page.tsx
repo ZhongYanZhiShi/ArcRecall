@@ -392,7 +392,7 @@ export function ExtractPage({
         const current = await getSettings()
         const saved = await setSettings({
           ...current,
-          recovery: { computeMode: nextMode },
+          recovery: { ...current.recovery, computeMode: nextMode },
         })
         setComputeMode(saved.recovery?.computeMode ?? nextMode)
       } catch (reason) {

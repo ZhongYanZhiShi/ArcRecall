@@ -35,11 +35,13 @@ import {
 } from "@/components/ui/input-group"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import type { RecoveryCapabilities, RecoveryComputeMode } from "@/lib/recovery"
-import type {
-  AppSettings,
-  FullEngineBundleStatus,
-  HashcatStatus,
-  JohnPerlStatus,
+import {
+  type AppSettings,
+  type FullEngineBundleStatus,
+  type HashcatStatus,
+  type JohnPerlStatus,
+  DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY,
+  MAX_SCAN_MAX_FILES_PER_DIRECTORY,
 } from "@/lib/settings"
 
 export function DefaultRecoveryCard({
@@ -51,6 +53,9 @@ export function DefaultRecoveryCard({
   messageError,
   onChange,
   onRefresh,
+  scanLimitValue,
+  onScanLimitChange,
+  onSaveScanLimit,
 }: {
   appSettings: AppSettings | null
   capabilities: RecoveryCapabilities | null
@@ -60,6 +65,9 @@ export function DefaultRecoveryCard({
   messageError: boolean
   onChange: (mode: RecoveryComputeMode) => void
   onRefresh: () => void
+  scanLimitValue: string
+  onScanLimitChange: (value: string) => void
+  onSaveScanLimit: () => void
 }) {
   const hashcatCpuAvailable = Boolean(
     capabilities?.methods.find((method) => method.id === "hashcatCpu")
@@ -127,6 +135,47 @@ export function DefaultRecoveryCard({
             </FieldLabel>
           </RadioGroup>
         </FieldSet>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            onSaveScanLimit()
+          }}
+        >
+          <Field>
+            <FieldLabel htmlFor="recursive-scan-file-limit">
+              目录扫描文件数上限
+            </FieldLabel>
+            <FieldDescription id="recursive-scan-file-limit-help">
+              默认 {DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY}
+              。直属文件超过上限时，跳过该目录及其子目录的嵌套压缩包扫描，保留已解压内容。设为
+              0 不限制，下次任务生效。
+            </FieldDescription>
+            <div className="flex flex-wrap items-center gap-2">
+              <InputGroup className="w-40">
+                <InputGroupInput
+                  id="recursive-scan-file-limit"
+                  type="number"
+                  min={0}
+                  max={MAX_SCAN_MAX_FILES_PER_DIRECTORY}
+                  step={1}
+                  required
+                  value={scanLimitValue}
+                  onChange={(event) => onScanLimitChange(event.target.value)}
+                  aria-describedby="recursive-scan-file-limit-help"
+                  disabled={settingsBusy || appSettings === null}
+                />
+              </InputGroup>
+              <Button
+                type="submit"
+                variant="outline"
+                size="sm"
+                disabled={settingsBusy || appSettings === null}
+              >
+                保存上限
+              </Button>
+            </div>
+          </Field>
+        </form>
         <div>
           <p className="mb-1.5 text-xs font-medium text-muted-foreground">
             恢复方式与可选能力

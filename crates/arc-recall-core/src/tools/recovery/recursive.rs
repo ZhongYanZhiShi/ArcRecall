@@ -95,6 +95,7 @@ struct RecursiveRecoveryState {
     extracted_nested_archives: u32,
     skipped_nested_archives: u32,
     scanned_files: u64,
+    skipped_directories: u64,
     depth_limit_reached: bool,
     count_limit_reached: bool,
 }
@@ -108,6 +109,7 @@ impl RecursiveRecoveryState {
             extracted_nested_archives: 0,
             skipped_nested_archives: 0,
             scanned_files: 0,
+            skipped_directories: 0,
             depth_limit_reached: false,
             count_limit_reached: false,
         }
@@ -248,9 +250,19 @@ pub fn recover_and_extract_recursive_lazy(
             &job.output_directory,
             &before_root_extraction,
             initial_limit,
+            options.max_files_per_directory,
             cancellation,
-            |scanned_files, found_archives| {
+            |scanned_files, found_archives, skipped_directory| {
                 state.scanned_files = initial_scan_base.saturating_add(scanned_files);
+                if let Some(directory) = skipped_directory {
+                    state.skipped_directories += 1;
+                    report(state.update(
+                        scan_skip_message(directory, options.max_files_per_directory),
+                        1,
+                        directory,
+                    ));
+                    return;
+                }
                 report(state.update(
                 format!(
                     "正在扫描第 1 层输出：已检查 {scanned_files} 个文件，发现 {found_archives} 个归档。"
@@ -426,9 +438,19 @@ pub fn recover_and_extract_recursive_lazy(
                         &nested_output,
                         &before_nested_extraction,
                         child_limit,
+                        options.max_files_per_directory,
                         cancellation,
-                        |scanned_files, found_archives| {
+                        |scanned_files, found_archives, skipped_directory| {
                             state.scanned_files = child_scan_base.saturating_add(scanned_files);
+                            if let Some(directory) = skipped_directory {
+                                state.skipped_directories += 1;
+                                report(state.update(
+                                    scan_skip_message(directory, options.max_files_per_directory),
+                                    next_depth,
+                                    directory,
+                                ));
+                                return;
+                            }
                             report(state.update(
                             format!(
                                 "正在扫描第 {next_depth} 层输出：已检查 {scanned_files} 个文件，发现 {found_archives} 个归档。"
@@ -517,6 +539,12 @@ pub fn recover_and_extract_recursive_lazy(
     if state.skipped_nested_archives > 0 {
         summary.push_str(&format!("，跳过 {} 个", state.skipped_nested_archives));
     }
+    if state.skipped_directories > 0 {
+        summary.push_str(&format!(
+            "；按文件数上限跳过 {} 个目录及其子目录的嵌套扫描",
+            state.skipped_directories
+        ));
+    }
     if state.depth_limit_reached || state.count_limit_reached {
         summary.push_str("；已达到安全限制");
     }
@@ -564,8 +592,9 @@ fn find_new_or_changed_archives(
     directory: &Path,
     before: &HashMap<PathBuf, FileSnapshot>,
     max_archives: usize,
+    max_files_per_directory: u32,
     cancellation: &CancellationToken,
-    mut report_progress: impl FnMut(u64, usize),
+    mut report_progress: impl FnMut(u64, usize, Option<&Path>),
 ) -> Result<ArchiveScanResult, RecoveryError> {
     if max_archives == 0 {
         return Ok(ArchiveScanResult {
@@ -577,33 +606,41 @@ fn find_new_or_changed_archives(
     let mut scanned_files = 0u64;
     let mut last_reported = 0u64;
     let mut last_report_at = Instant::now();
-    let scan_result = visit_files(directory, cancellation, |path| {
-        scanned_files = scanned_files.saturating_add(1);
-        if let Some(current) = capture_file_state(&path)
-            && before
-                .get(&path)
-                .is_none_or(|previous| current.has_changed_since(previous))
-            && detect_nested_archive_format(&path).is_ok()
-        {
-            archives.push(path);
-        }
-        if scanned_files == 1
-            || scanned_files.is_multiple_of(SCAN_PROGRESS_INTERVAL_FILES)
-            || last_report_at.elapsed() >= Duration::from_millis(250)
-        {
-            report_progress(scanned_files, archives.len());
-            last_reported = scanned_files;
-            last_report_at = Instant::now();
-        }
-        archives.len() < max_archives
-    });
+    let scan_result =
+        visit_file_entries(directory, cancellation, max_files_per_directory, |entry| {
+            let path = match entry {
+                FileVisit::File(path) => path,
+                FileVisit::SkippedDirectory(path) => {
+                    report_progress(scanned_files, archives.len(), Some(&path));
+                    return true;
+                }
+            };
+            scanned_files = scanned_files.saturating_add(1);
+            if let Some(current) = capture_file_state(&path)
+                && before
+                    .get(&path)
+                    .is_none_or(|previous| current.has_changed_since(previous))
+                && detect_nested_archive_format(&path).is_ok()
+            {
+                archives.push(path);
+            }
+            if scanned_files == 1
+                || scanned_files.is_multiple_of(SCAN_PROGRESS_INTERVAL_FILES)
+                || last_report_at.elapsed() >= Duration::from_millis(250)
+            {
+                report_progress(scanned_files, archives.len(), None);
+                last_reported = scanned_files;
+                last_report_at = Instant::now();
+            }
+            archives.len() < max_archives
+        });
     let cancelled = match scan_result {
         Err(RecoveryError::Cancelled) => true,
         Err(error) => return Err(error),
         Ok(()) => cancellation.is_cancelled(),
     };
     if scanned_files != last_reported {
-        report_progress(scanned_files, archives.len());
+        report_progress(scanned_files, archives.len(), None);
     }
     Ok(ArchiveScanResult {
         archives,
@@ -616,16 +653,44 @@ fn visit_files(
     cancellation: &CancellationToken,
     mut visit: impl FnMut(PathBuf) -> bool,
 ) -> Result<(), RecoveryError> {
+    // Snapshots must remain exhaustive so pre-existing files cannot become
+    // "new" if a directory crosses the threshold during extraction.
+    visit_file_entries(directory, cancellation, 0, |entry| match entry {
+        FileVisit::File(path) => visit(path),
+        FileVisit::SkippedDirectory(_) => unreachable!("unlimited snapshot"),
+    })
+}
+
+enum FileVisit {
+    File(PathBuf),
+    SkippedDirectory(PathBuf),
+}
+
+fn scan_skip_message(directory: &Path, limit: u32) -> String {
+    format!(
+        "目录 {} 的直属文件超过 {limit} 个，已跳过该目录及其子目录的嵌套压缩包扫描；已解压内容保留。",
+        path_for_display(directory)
+    )
+}
+
+fn visit_file_entries(
+    directory: &Path,
+    cancellation: &CancellationToken,
+    max_files_per_directory: u32,
+    mut visit: impl FnMut(FileVisit) -> bool,
+) -> Result<(), RecoveryError> {
     if !directory.is_dir() {
         return Ok(());
     }
     let mut pending = vec![directory.to_path_buf()];
-    while let Some(current) = pending.pop() {
+    'directories: while let Some(current) = pending.pop() {
         ensure_not_cancelled(cancellation)?;
-        let entries = match fs::read_dir(current) {
+        let entries = match fs::read_dir(&current) {
             Ok(entries) => entries,
             Err(_) => continue,
         };
+        let mut files = Vec::new();
+        let mut children = Vec::new();
         for entry in entries {
             ensure_not_cancelled(cancellation)?;
             let Ok(entry) = entry else {
@@ -638,8 +703,29 @@ fn visit_files(
                 continue;
             }
             if file_type.is_dir() {
-                pending.push(entry.path());
-            } else if file_type.is_file() && !visit(entry.path()) {
+                children.push(entry.path());
+            } else if file_type.is_file() {
+                if max_files_per_directory == 0 {
+                    if !visit(FileVisit::File(entry.path())) {
+                        return Ok(());
+                    }
+                } else {
+                    files.push(entry.path());
+                    if files.len() > max_files_per_directory as usize {
+                        // Decide before inspecting any file contents or descending.
+                        // Enumerating limit + 1 direct files is sufficient.
+                        if !visit(FileVisit::SkippedDirectory(current)) {
+                            return Ok(());
+                        }
+                        continue 'directories;
+                    }
+                }
+            }
+        }
+        pending.extend(children);
+        for file in files {
+            ensure_not_cancelled(cancellation)?;
+            if !visit(FileVisit::File(file)) {
                 return Ok(());
             }
         }
@@ -709,4 +795,120 @@ fn archive_display_name(path: &Path) -> String {
         .map(|name| name.to_string_lossy().into_owned())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| path_for_display(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_files(directory: &Path, count: usize) {
+        fs::create_dir_all(directory).unwrap();
+        for index in 0..count {
+            fs::write(
+                directory.join(format!("{index}.jpg")),
+                super::super::archive::SEVEN_ZIP_SIGNATURE,
+            )
+            .unwrap();
+        }
+    }
+
+    fn scan(directory: &Path, limit: u32) -> (Vec<PathBuf>, Vec<PathBuf>, u64) {
+        let mut skipped = Vec::new();
+        let mut scanned = 0;
+        let result = find_new_or_changed_archives(
+            directory,
+            &HashMap::new(),
+            100,
+            limit,
+            &CancellationToken::default(),
+            |count, _, skipped_directory| {
+                scanned = count;
+                if let Some(directory) = skipped_directory {
+                    skipped.push(directory.to_path_buf());
+                }
+            },
+        )
+        .unwrap();
+        assert!(!result.cancelled);
+        (result.archives, skipped, scanned)
+    }
+
+    #[test]
+    fn scan_limit_counts_direct_files_and_applies_before_content_detection() {
+        for count in [0, 9, 10, 11] {
+            let dir = tempfile::tempdir().unwrap();
+            write_files(dir.path(), count);
+            let (archives, skipped, scanned) = scan(dir.path(), 10);
+            if count <= 10 {
+                assert_eq!(archives.len(), count);
+                assert_eq!(scanned, count as u64);
+                assert!(skipped.is_empty());
+            } else {
+                assert!(archives.is_empty());
+                assert_eq!(scanned, 0);
+                assert_eq!(skipped, [dir.path()]);
+            }
+        }
+    }
+
+    #[test]
+    fn scan_limit_skips_descendants_but_continues_other_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let crowded = dir.path().join("crowded");
+        write_files(&crowded, 11);
+        write_files(&crowded.join("nested"), 1);
+        // Subdirectories do not count towards the direct file limit.
+        for index in 0..12 {
+            write_files(&dir.path().join(format!("sibling-{index}")), 1);
+        }
+        let (archives, skipped, scanned) = scan(dir.path(), 10);
+        assert_eq!(skipped.as_slice(), std::slice::from_ref(&crowded));
+        assert_eq!(archives.len(), 12);
+        assert_eq!(scanned, 12);
+        assert!(archives.iter().all(|path| !path.starts_with(&crowded)));
+    }
+
+    #[test]
+    fn scan_limit_can_be_disabled_or_customized_and_snapshots_stay_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        write_files(dir.path(), 11);
+        assert_eq!(scan(dir.path(), 0).0.len(), 11);
+        assert_eq!(scan(dir.path(), 11).0.len(), 11);
+        assert_eq!(scan(dir.path(), 2).2, 0);
+        let before = capture_file_snapshot(dir.path(), &CancellationToken::default()).unwrap();
+        assert_eq!(before.len(), 11);
+        fs::remove_file(dir.path().join("10.jpg")).unwrap();
+        let result = find_new_or_changed_archives(
+            dir.path(),
+            &before,
+            100,
+            10,
+            &CancellationToken::default(),
+            |_, _, _| {},
+        )
+        .unwrap();
+        assert!(
+            result.archives.is_empty(),
+            "pre-existing archives must not become new when a directory shrinks"
+        );
+    }
+
+    #[test]
+    fn scan_limit_still_observes_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_files(dir.path(), 11);
+        let cancellation = CancellationToken::default();
+        cancellation.cancel();
+        let result = find_new_or_changed_archives(
+            dir.path(),
+            &HashMap::new(),
+            100,
+            10,
+            &cancellation,
+            |_, _, _| {},
+        )
+        .unwrap();
+        assert!(result.cancelled);
+        assert!(result.archives.is_empty());
+    }
 }

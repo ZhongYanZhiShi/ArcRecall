@@ -16,6 +16,8 @@ export type AppLogLevel = "error" | "warn" | "info" | "debug"
 export const DEFAULT_LOG_MAX_DISK_MIB = 25
 export const MIN_LOG_MAX_DISK_MIB = 5
 export const MAX_LOG_MAX_DISK_MIB = 500
+export const DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY = 10
+export const MAX_SCAN_MAX_FILES_PER_DIRECTORY = 0xffffffff
 
 export type LoggingSettings = {
   level: AppLogLevel
@@ -28,6 +30,7 @@ export type AppSettings = {
   logging?: LoggingSettings
   recovery?: {
     computeMode: RecoveryComputeMode
+    scanMaxFilesPerDirectory?: number
   }
 }
 
@@ -182,6 +185,7 @@ export async function getSettings(): Promise<AppSettings> {
       },
       recovery: {
         computeMode: "gpuPreferred",
+        scanMaxFilesPerDirectory: DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY,
       },
     }
   }

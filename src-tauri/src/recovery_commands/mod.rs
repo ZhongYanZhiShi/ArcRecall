@@ -147,6 +147,14 @@ pub(crate) async fn recovery_start(
         return Err("恢复任务已取消。".into());
     }
     let tools = recovery_tool_paths(&state)?;
+    let scan_max_files_per_directory = state
+        .settings
+        .lock()
+        .map_err(|error| error.to_string())?
+        .load()
+        .map_err(|error| error.to_string())?
+        .recovery
+        .scan_max_files_per_directory;
 
     let task_id = next_recovery_task_id();
     let work_directory = state.recovery_session.directory().join(&task_id);
@@ -299,6 +307,7 @@ pub(crate) async fn recovery_start(
                 &cancellation,
                 RecursiveRecoveryOptions {
                     enabled: initial.recursive_enabled,
+                    max_files_per_directory: scan_max_files_per_directory,
                     max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
                     max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
                     compute_mode: initial.compute_mode,
@@ -756,6 +765,7 @@ mod tests {
             &cancellation,
             RecursiveRecoveryOptions {
                 compute_mode: settings.recovery.compute_mode,
+                max_files_per_directory: settings.recovery.scan_max_files_per_directory,
                 ..RecursiveRecoveryOptions::default()
             },
             fingerprint,

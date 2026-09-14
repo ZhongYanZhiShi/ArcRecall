@@ -49,6 +49,7 @@ use seven_zip::{extract_with_password, validate_archive_container, verify_passwo
 
 pub const DEFAULT_RECURSIVE_MAX_DEPTH: u32 = 5;
 pub const DEFAULT_RECURSIVE_MAX_ARCHIVES: u32 = 100;
+pub const DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY: u32 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -293,6 +294,9 @@ pub struct RecoveryDictionary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecursiveRecoveryOptions {
     pub enabled: bool,
+    /// Skip a directory and its descendants when it has more direct files.
+    /// Zero disables this scan heuristic; extraction and password checks are unaffected.
+    pub max_files_per_directory: u32,
     pub max_depth: u32,
     pub max_nested_archives: u32,
     pub compute_mode: RecoveryComputeMode,
@@ -304,6 +308,7 @@ impl Default for RecursiveRecoveryOptions {
     fn default() -> Self {
         Self {
             enabled: true,
+            max_files_per_directory: DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY,
             max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
             max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
             compute_mode: RecoveryComputeMode::default(),
