@@ -5,3 +5,8 @@ resolver = "3"
 [workspace.package]
 license = "Apache-2.0"
 repository = "https://github.com/ZhongYanZhiShi/arc-recall"
+
+# Desktop development also processes multi-GB archives. Keep SHA-256's hot
+# compression loop optimized without changing fingerprints or recovery checks.
+[profile.dev.package.sha2]
+opt-level = 3

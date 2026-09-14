@@ -110,6 +110,20 @@ pnpm desktop:dev
 
 Tauri 会启动 Next.js 开发服务器，并在原生桌面窗口中打开它。生产构建会嵌入 Next.js 静态导出，前端通过 Tauri command 调用 Rust，而不是访问本机 HTTP API。
 
+开发构建也会处理 GB 级归档，因此工作区为 `sha2` 单独启用编译优化。所有格式仍使用完整内容 SHA-256、完整密码校验和原有解压流程；该设置不改变指纹或密码判断规则。生产构建已默认启用优化。
+
+需要定位大归档耗时时，可在 PowerShell 中显式运行性能探针（默认测试不会运行它们）：
+
+```powershell
+$env:ARC_RECALL_PROFILE_ARCHIVE = 'E:/archives/example.7z'
+# 只读测量归档识别和完整指纹计算，支持分卷。
+cargo test -p arc-recall-core profile_archive_fingerprint -- --ignored --nocapture
+# Windows 原生恢复计时：复用本机历史密码、字典和应用引擎配置。
+cargo test -p arc-recall-desktop profile_local_archive_recovery -- --ignored --nocapture
+```
+
+原生探针要求根归档已有匹配的本机历史密码，在归档所在目录下创建临时输出并在结束后清理，不更新历史或字典，也不打印密码。嵌套归档继续使用正常的密码恢复流程；有跳过的归档时探针失败。
+
 ## 开发检查
 
 ```powershell

@@ -3,10 +3,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use arc_recall_core::{
-    AppSettings, FullEngineBundleInstallResult, FullEngineBundleManager, FullEngineBundleStatus,
-    HashcatInstallResult, HashcatStatus, HashcatToolDownloader, JohnPerlStatus,
-    RecoveryCapabilities, RecoveryToolPaths, probe_john_perl, probe_recovery_capabilities,
-    resolve_tools_directory,
+    AppSettings, EngineSettings, FullEngineBundleInstallResult, FullEngineBundleManager,
+    FullEngineBundleStatus, HashcatInstallResult, HashcatStatus, HashcatToolDownloader,
+    JohnPerlStatus, RecoveryCapabilities, RecoveryToolPaths, probe_john_perl,
+    probe_recovery_capabilities, resolve_tools_directory,
 };
 use tauri::State;
 
@@ -96,7 +96,14 @@ pub(crate) fn recovery_tool_paths(state: &AppState) -> Result<RecoveryToolPaths,
         let settings = state.settings.lock().map_err(|error| error.to_string())?;
         settings.load().map_err(|error| error.to_string())?.engine
     };
-    Ok(RecoveryToolPaths {
+    Ok(recovery_paths_for_engine(&manager, &engine))
+}
+
+pub(crate) fn recovery_paths_for_engine(
+    manager: &FullEngineBundleManager,
+    engine: &EngineSettings,
+) -> RecoveryToolPaths {
+    RecoveryToolPaths {
         seven_zip: manager.seven_zip_executable(),
         hashcat: configured_path_or(manager.hashcat_executable(), &engine.hashcat_path),
         john_tools_directory: configured_path_or(
@@ -104,7 +111,7 @@ pub(crate) fn recovery_tool_paths(state: &AppState) -> Result<RecoveryToolPaths,
             &engine.john_tools_directory,
         ),
         perl: configured_path_or(manager.perl_executable(), &engine.perl_path),
-    })
+    }
 }
 
 #[tauri::command]
