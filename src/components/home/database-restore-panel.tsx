@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { invoke } from "@tauri-apps/api/core"
-import { open } from "@tauri-apps/plugin-dialog"
+import { openRememberingDirectory } from "@/lib/file-dialog"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -87,7 +87,7 @@ export function DatabaseRestorePanel({
           disabled={busy || !isDesktopRuntime()}
           onClick={() =>
             void run(async () => {
-              const path = await open({
+              const path = await openRememberingDirectory("database-backup", {
                 multiple: false,
                 directory: false,
                 title: "选择 ArcRecall 数据库备份",

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core"
-import { open } from "@tauri-apps/plugin-dialog"
 
 import { isDesktopRuntime } from "@/lib/dictionary"
+import { openRememberingDirectory } from "@/lib/file-dialog"
 
 export type CompressionFormat = "sevenZip" | "zip"
 
@@ -50,7 +50,7 @@ function requireDesktopRuntime(): void {
 
 export async function pickCompressionFiles(): Promise<string[]> {
   requireDesktopRuntime()
-  const selected = await open({
+  const selected = await openRememberingDirectory("compression-files", {
     multiple: true,
     directory: false,
     title: "选择要压缩的文件",
@@ -63,7 +63,7 @@ export async function pickCompressionFiles(): Promise<string[]> {
 
 export async function pickCompressionFolder(): Promise<string | null> {
   requireDesktopRuntime()
-  const selected = await open({
+  const selected = await openRememberingDirectory("compression-folder", {
     multiple: false,
     directory: true,
     title: "选择要压缩的文件夹",
@@ -73,7 +73,7 @@ export async function pickCompressionFolder(): Promise<string | null> {
 
 export async function pickCompressionOutputDirectory(): Promise<string | null> {
   requireDesktopRuntime()
-  const selected = await open({
+  const selected = await openRememberingDirectory("compression-output", {
     multiple: false,
     directory: true,
     title: "选择归档输出目录",

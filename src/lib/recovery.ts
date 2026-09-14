@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core"
-import { open } from "@tauri-apps/plugin-dialog"
 
 import { createAsyncRefreshCache } from "@/lib/async-refresh-cache"
 import { isDesktopRuntime } from "@/lib/dictionary"
+import { openRememberingDirectory } from "@/lib/file-dialog"
 
 export type ArchiveFormat = "sevenZip" | "zip" | "rar3" | "rar5"
 export type RecoveryComputeMode = "gpuPreferred" | "cpuOnly"
@@ -133,7 +133,7 @@ function requireDesktopRuntime(): void {
 
 export async function pickArchivePath(): Promise<string | null> {
   requireDesktopRuntime()
-  const selected = await open({
+  const selected = await openRememberingDirectory("extract-source", {
     multiple: false,
     directory: false,
     title: "选择待分析文件",
@@ -149,7 +149,7 @@ export async function pickArchivePath(): Promise<string | null> {
 
 export async function pickOutputDirectory(): Promise<string | null> {
   requireDesktopRuntime()
-  const selected = await open({
+  const selected = await openRememberingDirectory("extract-output", {
     multiple: false,
     directory: true,
     title: "选择输出目录",
@@ -253,7 +253,7 @@ export async function createRepairedArchiveCopy(path: string): Promise<string> {
 
 export async function pickArchivePaths(): Promise<string[]> {
   requireDesktopRuntime()
-  const selected = await open({
+  const selected = await openRememberingDirectory("extract-source", {
     multiple: true,
     directory: false,
     title: "选择批次归档",
