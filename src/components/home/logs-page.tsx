@@ -406,8 +406,7 @@ export function LogsPage() {
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
           title="日志"
-          description="默认优先显示错误与警告；常规和过程记录可在“全部事件”中查看。"
-          className="pr-12 lg:pr-0"
+          titleHidden
           actions={
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -495,7 +494,7 @@ export function LogsPage() {
           <SummaryMetric
             label="磁盘占用"
             value={formatBytes(stats?.diskBytes ?? 0)}
-            hint={`${stats?.fileCount ?? 0} 个文件 · 上限可在设置中调整`}
+            hint={`${stats?.fileCount ?? 0} 个文件`}
             icon={<DatabaseBackup className="size-4" />}
           />
           <SummaryMetric
@@ -627,11 +626,7 @@ export function LogsPage() {
               }}
             >
               {loading ? (
-                <LogState
-                  icon={<Spinner />}
-                  title="正在读取日志"
-                  description="正在扫描本机轮转日志文件。"
-                />
+                <LogState icon={<Spinner />} title="正在读取日志" />
               ) : result?.entries.length ? (
                 <>
                   {hiddenRoutineCount > 0 ? (
@@ -670,7 +665,7 @@ export function LogsPage() {
                     <LogState
                       icon={<CheckCircle2 className="size-5" />}
                       title="没有需要关注的摘要"
-                      description="常规设置与阶段切换等记录已被收起，可切换到“全部事件”查看。"
+                      description="切换到“全部事件”查看常规记录。"
                     />
                   )}
                 </>
@@ -907,14 +902,16 @@ function LogState({
 }: {
   icon: React.ReactNode
   title: string
-  description: string
+  description?: string
 }) {
   return (
     <Empty className="h-full min-h-40 border-0 p-6">
       <EmptyHeader>
         <EmptyMedia variant="icon">{icon}</EmptyMedia>
         <EmptyTitle className="text-sm">{title}</EmptyTitle>
-        <EmptyDescription className="text-xs">{description}</EmptyDescription>
+        {description ? (
+          <EmptyDescription className="text-xs">{description}</EmptyDescription>
+        ) : null}
       </EmptyHeader>
     </Empty>
   )

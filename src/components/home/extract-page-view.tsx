@@ -8,7 +8,6 @@ import {
   ListPlus,
   PackageOpen,
   Settings2,
-  ShieldCheck,
   Square,
   Upload,
   Zap,
@@ -76,14 +75,6 @@ import type {
 import { cn } from "@/lib/utils"
 
 export type OutputMode = "sibling" | "custom"
-
-const EMPTY_RECOVERY_STEPS = [
-  "内容识别",
-  "密码复验",
-  "候选尝试",
-  "安全解包",
-  "递归扫描",
-]
 
 type ExtractPageViewProps = {
   handlePickBatch?: () => void
@@ -206,12 +197,7 @@ export function ExtractPageView({
   return (
     <WorkbenchPage>
       <WorkbenchPageContent className="overflow-y-auto pb-4">
-        <WorkbenchPageHeader
-          title="恢复并解压"
-          description="按文件内容识别格式，尝试已知或本机候选密码，并安全解包。"
-          size="large"
-          className="mb-3"
-        />
+        <WorkbenchPageHeader title="恢复并解压" titleHidden />
 
         <Card
           size="sm"
@@ -267,9 +253,9 @@ export function ExtractPageView({
                 </CardTitle>
                 <CardDescription className="mt-0.5 truncate text-xs leading-relaxed">
                   {analyzingName
-                    ? "正在读取文件签名并识别归档格式…"
+                    ? "正在识别格式…"
                     : analysis
-                      ? `${analysis.formatLabel} · ${formatFileSize(analysis.fileSize)} · 不依赖扩展名`
+                      ? `${analysis.formatLabel} · ${formatFileSize(analysis.fileSize)}`
                       : null}
                 </CardDescription>
               </div>
@@ -318,7 +304,7 @@ export function ExtractPageView({
                   {dragOver ? "松开以分析归档" : "将压缩包拖到这里"}
                 </CardTitle>
                 <CardDescription className="max-w-lg text-xs leading-relaxed text-pretty">
-                  按内容识别 7z / ZIP / RAR，支持乱后缀、无后缀与文件内嵌归档
+                  支持 7z / ZIP / RAR，可识别错误后缀、无后缀及内嵌归档
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col items-center gap-3 px-5 pb-8">
@@ -339,39 +325,10 @@ export function ExtractPageView({
                     批量添加
                   </Button>
                 </div>
-                <div className="flex flex-col items-center gap-2 text-xs text-muted-foreground">
-                  <p className="text-center leading-relaxed">
-                    支持多文件拖入或多行路径粘贴
-                    <Kbd className="ml-1">Ctrl + V</Kbd>
-                  </p>
-                  <p className="inline-flex items-center gap-1.5 text-center leading-relaxed">
-                    <ShieldCheck aria-hidden className="size-3.5 shrink-0" />
-                    文件与密码仅在本机处理，源文件保持不变
-                  </p>
-                  <ol
-                    aria-label={`恢复流程：${EMPTY_RECOVERY_STEPS.join("、")}`}
-                    className="mt-1 flex max-w-2xl flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-xs"
-                  >
-                    {EMPTY_RECOVERY_STEPS.map((step, index) => (
-                      <li key={step} className="flex items-center gap-1.5">
-                        {index > 0 ? (
-                          <ChevronRight
-                            aria-hidden
-                            className="size-3 text-muted-foreground/55"
-                          />
-                        ) : null}
-                        <span
-                          className={cn(
-                            "whitespace-nowrap",
-                            "text-muted-foreground"
-                          )}
-                        >
-                          {step}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
+                <p className="text-center text-xs leading-relaxed text-muted-foreground">
+                  支持多文件拖入或多行路径粘贴
+                  <Kbd className="ml-1">Ctrl + V</Kbd>
+                </p>
               </CardContent>
             </>
           )}
@@ -453,8 +410,8 @@ export function ExtractPageView({
           <SheetContent side="right" className="gap-0 p-0">
             <SheetHeader className="shrink-0 border-b border-border/80 px-5 py-4 pr-14">
               <SheetTitle>解压选项</SheetTitle>
-              <SheetDescription className="text-xs leading-relaxed">
-                输出位置、完成行为与解密方式。关闭后设置仍然保留。
+              <SheetDescription className="sr-only">
+                设置输出位置、递归扫描与解密方式。
               </SheetDescription>
             </SheetHeader>
 
@@ -497,11 +454,8 @@ export function ExtractPageView({
                       htmlFor="extract-open-when-done"
                       className="text-xs"
                     >
-                      完成后打开
+                      完成后打开输出文件夹
                     </FieldLabel>
-                    <FieldDescription className="text-xs">
-                      自动打开输出文件夹
-                    </FieldDescription>
                   </FieldContent>
                   <Switch
                     id="extract-open-when-done"
@@ -608,7 +562,6 @@ export function ExtractPageView({
                     : `${dictionaryCount} 条候选`}
                 </Badge>
               </div>
-              <RecoveryRoute recursive={recursive} />
               <TaskPreflight
                 outputPath={outputSummaryLabel}
                 outputMode={outputMode}
@@ -622,10 +575,9 @@ export function ExtractPageView({
                     type={showKnownPassword ? "text" : "password"}
                     value={knownPassword}
                     onChange={(event) => setKnownPassword(event.target.value)}
-                    placeholder="输入后优先复验；留空则后台查找历史密码"
+                    placeholder="优先尝试此密码；留空使用历史密码和字典"
                     disabled={busy || running}
                     autoComplete="off"
-                    aria-describedby="recovery-route"
                   />
                   <InputGroupAddon align="inline-end">
                     <InputGroupButton
@@ -653,7 +605,7 @@ export function ExtractPageView({
                     ) : (
                       <KeyRound data-icon="inline-start" />
                     )}
-                    开始恢复尝试
+                    开始恢复并解压
                   </Button>
                 )}
               </div>
@@ -751,45 +703,6 @@ export function ExtractPageView({
   )
 }
 
-function RecoveryRoute({ recursive }: { recursive: boolean }) {
-  const steps = [
-    "识别内容",
-    "校验已知密码",
-    "尝试本机候选",
-    "安全解包",
-    ...(recursive ? ["扫描嵌套归档"] : []),
-  ]
-
-  return (
-    <div id="recovery-route" className="mb-2">
-      <p className="mb-1.5 text-xs font-medium text-muted-foreground">
-        本次处理路径
-      </p>
-      <ol
-        aria-label={`本次处理路径：${steps.join("、")}`}
-        className="flex flex-wrap items-center gap-x-1 gap-y-1.5"
-      >
-        {steps.map((step, index) => (
-          <li key={step} className="flex items-center gap-1">
-            <span className="inline-flex items-center gap-1 rounded-lg bg-muted/60 px-2 py-1 text-xs text-foreground">
-              <span className="flex size-5 items-center justify-center rounded-full bg-background text-xs font-semibold tabular-nums">
-                {index + 1}
-              </span>
-              {step}
-            </span>
-            {index < steps.length - 1 ? (
-              <ChevronRight
-                aria-hidden
-                className="size-3 text-muted-foreground/70"
-              />
-            ) : null}
-          </li>
-        ))}
-      </ol>
-    </div>
-  )
-}
-
 function TaskPreflight({
   outputPath,
   outputMode,
@@ -802,13 +715,9 @@ function TaskPreflight({
   recursive: boolean
 }) {
   const collisionPolicy =
-    outputMode === "sibling"
-      ? "已有目录时自动使用新的序号目录"
-      : "同名文件自动改名，不覆盖已有文件"
+    outputMode === "sibling" ? "新建序号目录，不覆盖" : "自动改名，不覆盖"
   const computePolicy =
-    computeMode === "cpuOnly"
-      ? "仅使用 CPU"
-      : "可用时使用 GPU，否则自动回退 CPU"
+    computeMode === "cpuOnly" ? "仅使用 CPU" : "GPU 优先，不可用时使用 CPU"
 
   return (
     <div
@@ -821,7 +730,7 @@ function TaskPreflight({
       <PreflightItem label="计算方式" value={computePolicy} />
       <PreflightItem
         label="任务控制"
-        value={`${recursive ? "最多扫描 5 层嵌套归档" : "不扫描嵌套归档"} · 可随时取消 · 运行期间请保持应用开启`}
+        value={`${recursive ? "最多扫描 5 层" : "仅主归档"} · 可取消，请保持应用开启`}
       />
     </div>
   )
@@ -831,7 +740,7 @@ function PreflightItem({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 bg-card px-3 py-2">
       <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      <p className="mt-0.5 truncate text-xs text-foreground" title={value}>
+      <p className="mt-0.5 text-xs break-words text-foreground" title={value}>
         {value}
       </p>
     </div>

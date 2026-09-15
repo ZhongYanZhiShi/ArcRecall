@@ -314,7 +314,7 @@ export function HistoryPage() {
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
           title="历史"
-          description="按内容指纹归并成功记录，不保存来源文件名或路径"
+          titleHidden
           actions={
             <>
               <Button
@@ -540,7 +540,7 @@ export function HistoryPage() {
                         description={
                           appliedSearch
                             ? "请检查指纹前缀，或清空查询后重试。"
-                            : "成功解压归档后，会在这里按内容指纹自动归档。"
+                            : "成功解压后自动保存记录。"
                         }
                       />
                     )}
@@ -580,7 +580,7 @@ export function HistoryPage() {
                   description={
                     appliedSearch
                       ? "请检查指纹前缀，或清空查询后重试。"
-                      : "成功解压归档后，会在这里按内容指纹自动归档。"
+                      : "成功解压后自动保存记录。"
                   }
                 />
               )}

@@ -88,7 +88,7 @@ export function RecoveryQueuePanel({
         </div>
       </div>
       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-        使用当前解压选项逐项处理，失败后继续下一项；停止会取消当前任务并保留等待项。队列仅保留在本次应用会话中。
+        按当前选项逐项处理，失败后继续；停止会取消当前项并保留等待项，退出应用后队列清空。
       </p>
       <div className="mt-3 grid items-center gap-2 sm:grid-cols-[auto_1fr]">
         <Label htmlFor="batch-known-password" className="text-xs">
@@ -101,7 +101,7 @@ export function RecoveryQueuePanel({
           value={knownPassword}
           onChange={(event) => onPasswordChange(event.target.value)}
           disabled={disabled || queue.running}
-          placeholder="逐项优先复验；留空则查找历史和候选字典"
+          placeholder="留空使用历史密码和字典"
         />
       </div>
       {queue.error ? (

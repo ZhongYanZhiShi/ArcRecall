@@ -38,31 +38,26 @@ const CATEGORIES: {
   id: SettingsCategory
   label: string
   icon: React.ComponentType<{ className?: string; strokeWidth?: number }>
-  description: string
 }[] = [
   {
     id: "ai",
     label: "AI 模型",
     icon: Sparkles,
-    description: "模型服务、系统凭据、模型列表与重命名提示词",
   },
   {
     id: "engine",
     label: "解密引擎",
     icon: Cpu,
-    description: "7-Zip、Hashcat、John 与 CPU / GPU 能力",
   },
   {
     id: "app",
     label: "应用",
     icon: Settings2,
-    description: "本机日志级别与磁盘占用上限",
   },
   {
     id: "data",
     label: "数据",
     icon: Database,
-    description: "数据库备份与恢复、本机数据和设置文件位置",
   },
 ]
 
@@ -113,9 +108,6 @@ export const SettingsPage = React.forwardRef<
   if (!visitedCategories.includes(category)) {
     setVisitedCategories([...visitedCategories, category])
   }
-
-  const activeMeta =
-    CATEGORIES.find((item) => item.id === category) ?? CATEGORIES[0]!
 
   const handleAiDirtyChange = React.useCallback(
     (dirty: boolean) => {
@@ -183,7 +175,7 @@ export const SettingsPage = React.forwardRef<
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
           title="设置"
-          description={activeMeta.description}
+          titleHidden
           actions={
             returnAction ? (
               <Button

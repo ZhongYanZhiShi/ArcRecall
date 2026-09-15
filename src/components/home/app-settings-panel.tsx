@@ -223,7 +223,7 @@ export function AppSettingsPanel() {
             </Badge>
           </div>
           <CardDescription>
-            控制本机日志的详细程度和最大磁盘占用。密码、候选内容和用户路径会在写入前隐藏。
+            密码、候选内容和用户路径会在写入前隐藏。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -335,8 +335,8 @@ export function AppSettingsPanel() {
               ))}
             </ToggleGroup>
             <FieldDescription id="log-max-disk-hint">
-              可设置 {MIN_LOG_MAX_DISK_MIB}–{MAX_LOG_MAX_DISK_MIB} MiB；日志按 5
-              MiB 分片，到达总上限后自动删除最旧文件。
+              可设置 {MIN_LOG_MAX_DISK_MIB}–{MAX_LOG_MAX_DISK_MIB}{" "}
+              MiB；达到上限后自动删除最旧日志。
             </FieldDescription>
           </FieldSet>
           {message ? (

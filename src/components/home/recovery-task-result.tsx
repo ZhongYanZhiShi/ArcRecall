@@ -156,7 +156,7 @@ export function RecoveryTaskResult({
           </p>
           {task.running && task.rootExtractionCompleted ? (
             <p className="mt-1 text-xs text-success-foreground">
-              主归档已完成，当前仅处理递归发现的嵌套归档。
+              主归档已完成，正在处理嵌套归档。
             </p>
           ) : null}
           {hasCandidateProgress || task.elapsedMs > 0 ? (
@@ -281,18 +281,18 @@ function taskRecoveryHint(task: RecoveryTaskStatus): string | null {
   }
   if (task.cancelled) {
     if (task.rootExtractionCompleted) {
-      return "已完成的输出已保留。可在详细过程中查看完成、跳过和待处理清单，再选择未完成的归档继续处理。"
+      return "已保留完成的输出。可在详细过程中查看并选择未完成归档重试。"
     }
-    return "任务已取消，所选归档和当前设置仍然保留，可调整后重新开始。"
+    return "归档和设置已保留，可重新开始。"
   }
   if (task.phase === "exhausted") {
-    return "没有找到可用密码。可补充已知密码、导入候选字典或检查解密引擎后重试。"
+    return "可补充已知密码、导入字典或检查引擎后重试。"
   }
   if (task.phase === "failed") {
     if (isArchiveContainerFailure(task)) {
-      return "7-Zip 无法读取有效归档结构。请确认文件完整，且确实包含可打开的 7z、ZIP 或 RAR 数据；GPU 尚未开始。"
+      return "无法读取归档。请确认文件完整且包含有效的 7z、ZIP 或 RAR 数据。"
     }
-    return "请先查看详细过程定位原因，再调整输出选项或解密引擎后重试。"
+    return "查看详细过程，检查输出选项或引擎后重试。"
   }
   return null
 }
@@ -349,7 +349,7 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
               </Badge>
             </div>
             <SheetDescription className="text-xs leading-relaxed">
-              最新事件置顶，共 {events.length} 条；关闭抽屉不会中断恢复任务。
+              最新事件置顶，共 {events.length} 条。
             </SheetDescription>
             <div className="flex flex-wrap gap-1.5 pt-1">
               <Badge variant="outline" className="font-normal">
@@ -467,7 +467,7 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
 
           <Separator />
           <p className="shrink-0 px-5 py-3 text-xs text-muted-foreground">
-            为保护密码安全，仅展示候选进度，不展示或记录具体候选内容。
+            候选密码不显示、不记录。
           </p>
         </SheetContent>
       </Sheet>

@@ -8,13 +8,7 @@ import { DatabaseRestorePanel } from "@/components/home/database-restore-panel"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { type DatabaseInfo, getDatabaseInfo } from "@/lib/settings"
 
 export function DataSettingsPanel() {
@@ -77,9 +71,6 @@ export function DataSettingsPanel() {
             <Database className="size-4 text-muted-foreground" />
             <CardTitle>本地数据</CardTitle>
           </div>
-          <CardDescription>
-            本机 SQLite，不在项目仓库内；缺失时自动创建。字典导入编码自动识别。
-          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <DatabaseRestorePanel onRestored={() => void load()} />

@@ -87,10 +87,9 @@ export function DefaultRecoveryCard({
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2">
               <CardTitle>默认解密方式</CardTitle>
-              <Badge variant="secondary">可在解压页快速切换</Badge>
             </div>
             <CardDescription>
-              GPU 优先会自动回退 CPU；仅 CPU 模式不会启动 GPU 恢复进程。
+              GPU 不可用或失败时，自动使用 CPU。
             </CardDescription>
           </div>
           <Button
@@ -259,9 +258,7 @@ export function FullBundleCard({
               )}
             </div>
             <CardDescription>
-              安装器内包含 7-Zip、Hashcat、John CPU 引擎、Strawberry Perl，以及
-              7z2john / rar2john / zip2john。部署时逐包校验
-              SHA-256，再展开到可写工具目录。
+              离线安装 7-Zip、Hashcat、John 和 Perl，自动校验完整性。
             </CardDescription>
           </div>
           <Button
@@ -322,8 +319,7 @@ export function FullBundleCard({
               </Badge>
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground">
-              {status.message} GPU 驱动、CUDA、HIP 与 OpenCL
-              由系统提供，不进入发行包；无可用加速后端时使用 John CPU 回退。
+              {status.message} GPU 驱动需自行安装；无可用 GPU 时使用 CPU。
             </p>
             <div className="flex flex-col gap-2 border-t pt-3">
               <p className="text-sm font-medium">7-Zip 运行诊断</p>
@@ -388,10 +384,7 @@ export function ToolsDirectoryCard({
     <Card size="sm">
       <CardHeader className="border-b border-border/80">
         <CardTitle>工具公共目录</CardTitle>
-        <CardDescription>
-          引擎下载安装的根目录。可设为公共/共享路径，供本机多处复用；留空则使用应用默认
-          tools 目录。
-        </CardDescription>
+        <CardDescription>引擎安装位置；留空使用默认目录。</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <Field>
@@ -467,9 +460,7 @@ export function HashcatCard({
               )}
             </div>
             <CardDescription>
-              完整发行包已内置固定版本；这里保留 GitHub
-              下载作为精简构建或修复安装的后备路径。下载同样执行 SHA-256
-              校验，不静默更新、不提权。
+              从 GitHub 下载并校验，用于补装或修复 Hashcat。
             </CardDescription>
           </div>
           <Button
@@ -560,9 +551,7 @@ export function JohnPerlCard({
               )}
             </div>
             <CardDescription>
-              完整包会自动写入 John 工具目录与
-              perl.exe；也可在此覆盖为自备版本。提供 7z2john、rar2john、zip2john
-              哈希转换及 John CPU 回退。
+              离线包自动配置路径；使用自备 John 或 Perl 时可在此修改。
             </CardDescription>
           </div>
           <div className="flex shrink-0 flex-wrap gap-1.5">

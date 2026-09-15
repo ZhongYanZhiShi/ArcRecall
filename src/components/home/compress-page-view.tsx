@@ -214,13 +214,9 @@ export function CompressPageView({
         data-testid="compress-page"
         className="pb-5"
       >
-        <WorkbenchPageHeader
-          title="创建归档"
-          description="先整理来源，再设置归档参数；主操作始终保持可见。"
-          size="large"
-        />
+        <WorkbenchPageHeader title="创建归档" titleHidden />
 
-        <div className="mt-4 grid min-h-0 flex-1 grid-rows-[minmax(11rem,0.85fr)_minmax(0,1.15fr)] gap-3 lg:grid-cols-[minmax(18rem,0.85fr)_minmax(0,1.4fr)] lg:grid-rows-1">
+        <div className="grid min-h-0 flex-1 grid-rows-[minmax(11rem,0.85fr)_minmax(0,1.15fr)] gap-3 lg:grid-cols-[minmax(18rem,0.85fr)_minmax(0,1.4fr)] lg:grid-rows-1">
           <Card
             size="sm"
             className={cn(
@@ -245,7 +241,7 @@ export function CompressPageView({
                   <CardDescription className="mt-0.5 text-xs">
                     {dragOver
                       ? "松开即可加入当前列表"
-                      : "支持混合添加文件与文件夹，可调整归档顺序。"}
+                      : "可混合添加文件与文件夹"}
                   </CardDescription>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
@@ -340,7 +336,7 @@ export function CompressPageView({
                       {dragOver ? "松开以添加来源" : "拖入文件或文件夹"}
                     </EmptyTitle>
                     <EmptyDescription className="hidden max-w-xs text-xs sm:block">
-                      父文件夹已选中时，内部重复项目会在开始压缩前自动去重。
+                      重复来源会自动去重
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>
@@ -351,9 +347,6 @@ export function CompressPageView({
           <Card size="sm" className="min-h-0 gap-0 py-0">
             <CardHeader className="shrink-0 px-4 py-3">
               <CardTitle className="text-sm font-semibold">归档设置</CardTitle>
-              <CardDescription className="text-xs">
-                输出、格式、命名与安全选项
-              </CardDescription>
               <CardAction>
                 <Badge variant="secondary">
                   {extension} · {activeLevel?.label ?? "标准"}
@@ -449,7 +442,7 @@ export function CompressPageView({
                         id="archive-name-hint"
                         className="text-xs leading-relaxed text-muted-foreground"
                       >
-                        名称由你提供；无效文件名字符会在本机安全替换。
+                        无效文件名字符会自动替换。
                       </FieldDescription>
                     </Field>
 
@@ -536,7 +529,7 @@ export function CompressPageView({
                         </Button>
                       </div>
                       <FieldDescription className="text-xs leading-relaxed">
-                        只发送你填写的基础名称与提示词，不读取来源文件、路径或内容。
+                        仅发送基础名称和提示词，不读取文件、路径或内容。
                       </FieldDescription>
                     </FieldContent>
                     <Switch
@@ -647,7 +640,7 @@ export function CompressPageView({
                         id="compression-level-hint"
                         className="text-xs leading-relaxed"
                       >
-                        级别越高通常体积越小，但耗时和资源占用也会增加。
+                        级别越高，通常越小、越慢。
                       </FieldDescription>
                     </Field>
 
@@ -780,8 +773,7 @@ export function CompressPageView({
                             passwordError ? "text-destructive" : undefined
                           }
                         >
-                          {passwordError ??
-                            "开始压缩或保存永久密码前，两次输入需要完全一致。"}
+                          {passwordError ?? "两次输入须一致。"}
                         </FieldDescription>
                       </Field>
                     ) : null}

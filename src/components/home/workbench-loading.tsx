@@ -32,20 +32,12 @@ function LoadingFrame({
   )
 }
 
-function LoadingHeader({ actions = 0 }: { actions?: number }) {
+function LoadingHeader({ actions }: { actions: number }) {
   return (
-    <div className="flex shrink-0 items-start justify-between gap-3">
-      <div className="space-y-2">
-        <Skeleton className="h-6 w-32" />
-        <Skeleton className="h-3 w-72 max-w-[65vw]" />
-      </div>
-      {actions > 0 ? (
-        <div className="flex gap-1.5">
-          {Array.from({ length: actions }, (_, index) => (
-            <Skeleton key={index} className="h-8 w-16 rounded-lg" />
-          ))}
-        </div>
-      ) : null}
+    <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+      {Array.from({ length: actions }, (_, index) => (
+        <Skeleton key={index} className="h-8 w-16 rounded-lg" />
+      ))}
     </div>
   )
 }
@@ -133,8 +125,7 @@ function LoadingTable({
 export function ExtractPageLoading() {
   return (
     <LoadingFrame label="正在载入解压工作区…">
-      <LoadingHeader />
-      <LoadingSurface className="mt-5 flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8">
+      <LoadingSurface className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8">
         <Skeleton className="size-12 rounded-xl" />
         <Skeleton className="h-5 w-40 rounded-lg" />
         <Skeleton className="h-3 w-96 max-w-[72vw] rounded-md" />
@@ -155,8 +146,7 @@ export function ExtractPageLoading() {
 export function CompressPageLoading() {
   return (
     <LoadingFrame label="正在载入压缩工作区…" width="wide">
-      <LoadingHeader />
-      <div className="mt-4 grid min-h-0 flex-1 grid-rows-2 gap-3 lg:grid-cols-[minmax(18rem,0.85fr)_minmax(0,1.4fr)] lg:grid-rows-1">
+      <div className="grid min-h-0 flex-1 grid-rows-2 gap-3 lg:grid-cols-[minmax(18rem,0.85fr)_minmax(0,1.4fr)] lg:grid-rows-1">
         <LoadingSurface className="flex min-h-0 flex-col overflow-hidden">
           <div className="flex h-20 shrink-0 items-center justify-between border-b border-border/70 px-4">
             <div className="space-y-2">
@@ -201,7 +191,7 @@ export function CompressPageLoading() {
 export function DictionaryPageLoading() {
   return (
     <LoadingFrame label="正在载入字典工作区…">
-      <LoadingHeader actions={3} />
+      <LoadingHeader actions={2} />
       <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2">
         <LoadingToolbar />
         <LoadingTable columns="dictionary" />
@@ -274,8 +264,7 @@ export function LogsPageLoading() {
 export function SettingsPageLoading() {
   return (
     <LoadingFrame label="正在载入设置工作区…">
-      <LoadingHeader />
-      <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2">
+      <div className="flex min-h-0 flex-1 flex-col gap-2">
         <div className="flex h-9 shrink-0 gap-1 rounded-xl bg-muted/50 p-1">
           {[0, 1, 2, 3].map((item) => (
             <Skeleton key={item} className="h-7 w-24 rounded-lg" />

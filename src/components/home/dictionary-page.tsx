@@ -102,9 +102,7 @@ export function DictionaryPage() {
     () => new Set()
   )
   const [isBusy, setIsBusy] = React.useState(false)
-  const [status, setStatus] = React.useState(
-    "导入候选后，解压 / 验密流程会直接使用这份全局字典。"
-  )
+  const [status, setStatus] = React.useState("解压时自动尝试此处的候选密码。")
   const [statusTone, setStatusTone] = React.useState<StatusTone>("neutral")
   const [addPanelOpen, setAddPanelOpen] = React.useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false)
@@ -212,9 +210,7 @@ export function DictionaryPage() {
           error instanceof Error ? error.message : String(error ?? "未知错误")
         if (!isDesktopRuntime()) {
           setStatusTone("neutral")
-          setStatus(
-            "浏览器预览使用内存字典（刷新即清空）；桌面端写入本机 SQLite。"
-          )
+          setStatus("预览字典刷新后清空；桌面端自动保存。")
         } else {
           setStatusTone("error")
           setStatus(`加载失败：${message}`)
@@ -433,7 +429,7 @@ export function DictionaryPage() {
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
           title="字典"
-          description="管理本机全局密码候选集 · 解压验密直接读取此处"
+          titleHidden
           actions={
             <>
               <Button
@@ -479,7 +475,7 @@ export function DictionaryPage() {
                   }
                 />
                 <p className="text-xs text-muted-foreground">
-                  取消后保留已完成批次，尚未提交的候选不会写入。
+                  取消后保留已导入的候选。
                 </p>
               </div>
               <Button
@@ -614,7 +610,7 @@ export function DictionaryPage() {
                               没有可显示的候选
                             </EmptyTitle>
                             <EmptyDescription className="max-w-xs text-xs">
-                              导入字典文件，或直接添加候选；重复项会自动跳过。
+                              导入文件或添加密码，重复项自动跳过。
                             </EmptyDescription>
                           </EmptyHeader>
                           <EmptyContent>
@@ -736,9 +732,7 @@ export function DictionaryPage() {
         <SheetContent side="right" showCloseButton className="gap-0 p-0">
           <SheetHeader className="shrink-0 border-b border-border/80 pr-12">
             <SheetTitle>添加候选</SheetTitle>
-            <SheetDescription>
-              导入文本字典，或单条 / 多行新增；重复项自动跳过。
-            </SheetDescription>
+            <SheetDescription>每行一个密码，重复项自动跳过。</SheetDescription>
           </SheetHeader>
 
           <div className="flex min-h-0 flex-1 scroll-fade flex-col gap-4 overflow-y-auto px-6 py-4 pb-24">
@@ -747,7 +741,7 @@ export function DictionaryPage() {
                 <div className="min-w-0">
                   <CardTitle className="text-sm">批量导入</CardTitle>
                   <CardDescription className="text-xs">
-                    每行一条候选 · 不保存文件路径
+                    自动识别编码，不保存文件路径
                   </CardDescription>
                 </div>
                 <Button

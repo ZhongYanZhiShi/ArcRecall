@@ -107,7 +107,7 @@ export function resolveRecoveryCapabilityNotice(
   if (error) {
     return {
       title: "能力探测失败",
-      description: "暂时无法确认可用的计算设备与引擎，请前往设置重新检测。",
+      description: "请前往引擎设置重新检测。",
       reasons: [error],
     }
   }
@@ -142,8 +142,8 @@ export function resolveRecoveryCapabilityNotice(
       title: "密码恢复引擎未就绪",
       description:
         computeMode === "cpuOnly"
-          ? "当前未检测到可用的 CPU 恢复引擎，自动密码恢复能力受限。"
-          : "当前未检测到可用的 GPU 或 CPU 恢复引擎，自动密码恢复能力受限。",
+          ? "无可用 CPU 引擎，请在设置中补全。"
+          : "无可用恢复引擎，请在设置中补全。",
       reasons,
     }
   }
@@ -154,9 +154,8 @@ export function resolveRecoveryCapabilityNotice(
     capabilities.cpuAvailable
   ) {
     return {
-      title: "GPU 未就绪，仍可使用 CPU 回退",
-      description:
-        "任务会自动使用当前可用的 CPU 引擎；可前往设置补全 GPU 加速能力。",
+      title: "GPU 未就绪，将使用 CPU",
+      description: "可前往设置启用 GPU 加速。",
       reasons,
     }
   }
@@ -167,9 +166,8 @@ export function resolveRecoveryCapabilityNotice(
     !capabilities.cpuAvailable
   ) {
     return {
-      title: "CPU 回退未就绪，GPU 仍可使用",
-      description:
-        "当前可以使用 GPU 恢复；建议补全 CPU 引擎，以便 GPU 不可用时自动回退。",
+      title: "CPU 未就绪，GPU 可用",
+      description: "补全 CPU 引擎后，可在 GPU 不可用时继续恢复。",
       reasons,
     }
   }
@@ -179,8 +177,8 @@ export function resolveRecoveryCapabilityNotice(
       computeMode === "cpuOnly" ? "部分 CPU 引擎未就绪" : "部分回退引擎未就绪",
     description:
       computeMode === "cpuOnly"
-        ? "当前仍可使用已就绪的 CPU 引擎；补全其他引擎可提高格式兼容性。"
-        : "当前仍可使用已就绪的恢复引擎；补全回退能力可提高任务稳定性。",
+        ? "可继续使用现有 CPU 引擎；补全后可支持更多格式。"
+        : "可继续使用现有引擎；补全后可在失败时自动切换。",
     reasons,
   }
 }

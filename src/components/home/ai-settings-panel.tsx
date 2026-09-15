@@ -172,8 +172,7 @@ export const AiSettingsPanel = React.forwardRef<
         <CardHeader className="border-b border-border/80">
           <CardTitle>AI 模型配置</CardTitle>
           <CardDescription>
-            可保存多个兼容 OpenAI 接口的模型服务配置。API Key
-            仅保存在系统凭据中，不写入配置文件。
+            支持兼容 OpenAI 接口的服务；API Key 仅保存在系统凭据中。
           </CardDescription>
           <CardAction>
             <Button
@@ -213,9 +212,7 @@ export const AiSettingsPanel = React.forwardRef<
                     <Bot />
                   </EmptyMedia>
                   <EmptyTitle>尚无 AI 配置</EmptyTitle>
-                  <EmptyDescription>
-                    右侧可创建本地模型或自定义兼容服务。
-                  </EmptyDescription>
+                  <EmptyDescription>填写并保存模型服务配置。</EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : (
@@ -312,7 +309,6 @@ export const AiSettingsPanel = React.forwardRef<
                 value={draft.baseUrl}
                 disabled={busy}
                 aria-invalid={invalidField === "baseUrl"}
-                aria-describedby="ai-base-url-hint"
                 onChange={(event) => {
                   if (invalidField === "baseUrl") {
                     setInvalidField(null)
@@ -326,9 +322,6 @@ export const AiSettingsPanel = React.forwardRef<
                 placeholder="http://127.0.0.1:11434/v1"
                 spellCheck={false}
               />
-              <FieldDescription id="ai-base-url-hint">
-                用于读取模型列表和测试生成连接；本地服务无需联网。
-              </FieldDescription>
               {invalidField === "baseUrl" ? (
                 <FieldError>
                   {profileFeedback?.message ?? "请输入模型服务地址。"}
@@ -505,11 +498,6 @@ export const AiSettingsPanel = React.forwardRef<
                     {draft.id ? "有未保存更改" : "新配置未保存"}
                   </Badge>
                 ) : null}
-                <span className="text-xs text-muted-foreground">
-                  {providerMeta.local
-                    ? "本地模型仅连接此设备"
-                    : "仅在启用 AI 重命名时发起请求"}
-                </span>
               </div>
               <div className="flex items-center gap-2">
                 {draft.id ? (
@@ -579,8 +567,7 @@ export const AiSettingsPanel = React.forwardRef<
             {promptDirty ? <Badge variant="warning">有未保存更改</Badge> : null}
           </div>
           <CardDescription>
-            AI
-            只会收到此提示词和你在压缩页填写的基础名称，不会读取或上传来源文件、路径和内容。
+            仅发送提示词和基础名称，不读取或上传文件、路径或内容。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -602,10 +589,7 @@ export const AiSettingsPanel = React.forwardRef<
             {renamePromptError ? (
               <FieldError>{renamePromptError}</FieldError>
             ) : null}
-            <FieldDescription>
-              最长 2000 字符；AI 结果会再次经过本机文件名安全处理。当前{" "}
-              {prompt.length} / 2000。
-            </FieldDescription>
+            <FieldDescription>{prompt.length} / 2000 字符</FieldDescription>
           </Field>
           <div className="flex justify-end">
             <Button

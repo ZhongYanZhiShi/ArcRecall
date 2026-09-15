@@ -45,6 +45,7 @@ type WorkbenchPageHeaderProps = Omit<
   "title"
 > & {
   title: React.ReactNode
+  titleHidden?: boolean
   description?: React.ReactNode
   actions?: React.ReactNode
   size?: "default" | "large"
@@ -54,6 +55,7 @@ type WorkbenchPageHeaderProps = Omit<
 
 function WorkbenchPageHeader({
   title,
+  titleHidden = false,
   description,
   actions,
   size = "default",
@@ -68,12 +70,17 @@ function WorkbenchPageHeader({
     <header
       data-slot="workbench-page-header"
       className={cn(
-        "flex shrink-0 flex-wrap items-start justify-between gap-3",
+        titleHidden && !actions
+          ? "sr-only"
+          : "flex shrink-0 flex-wrap items-start gap-3",
+        titleHidden ? "justify-end" : "justify-between",
         className
       )}
       {...props}
     >
-      <div className={cn("min-w-0", contentClassName)}>
+      <div
+        className={cn(titleHidden ? "sr-only" : "min-w-0", contentClassName)}
+      >
         <h1
           className={cn(
             "font-semibold tracking-tight",
