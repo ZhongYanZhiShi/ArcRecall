@@ -1,9 +1,12 @@
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+
+use super::CancellationToken;
+use super::install_io::{CancellableReader, check_cancelled, sha256_file};
 
 /// Pinned release — never use `/latest` for installs (matches original ArcRecall).
 pub const HASHCAT_MANIFEST_VERSION: &str = "7.1.2";
@@ -122,6 +125,14 @@ impl HashcatToolDownloader {
 
     /// Download pinned hashcat release, verify SHA-256, extract into tools/.
     pub fn install(&self) -> Result<HashcatInstallResult, HashcatToolError> {
+        self.install_with_cancellation(&CancellationToken::default())
+    }
+
+    pub fn install_with_cancellation(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<HashcatInstallResult, HashcatToolError> {
+        check_cancelled(cancellation)?;
         fs::create_dir_all(&self.tools_dir)?;
         fs::create_dir_all(&self.temp_dir)?;
 
@@ -138,12 +149,17 @@ impl HashcatToolDownloader {
             .prefix("hashcat-download-")
             .tempdir_in(&self.temp_dir)?;
         let archive_path = download.path().join("hashcat.7z");
-        download_file(HASHCAT_DOWNLOAD_URL, &archive_path, MAX_DOWNLOAD_BYTES)?;
-        if !sha256_file(&archive_path)?.eq_ignore_ascii_case(HASHCAT_SHA256) {
+        download_file(
+            HASHCAT_DOWNLOAD_URL,
+            &archive_path,
+            MAX_DOWNLOAD_BYTES,
+            cancellation,
+        )?;
+        if !sha256_file(&archive_path, cancellation)?.eq_ignore_ascii_case(HASHCAT_SHA256) {
             return Err(HashcatToolError::ChecksumMismatch);
         }
 
-        self.install_archive(&archive_path)?;
+        self.install_archive(&archive_path, cancellation)?;
 
         Ok(HashcatInstallResult {
             success: true,
@@ -152,7 +168,12 @@ impl HashcatToolDownloader {
         })
     }
 
-    fn install_archive(&self, archive: &Path) -> Result<(), HashcatToolError> {
+    fn install_archive(
+        &self,
+        archive: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<(), HashcatToolError> {
+        check_cancelled(cancellation)?;
         let install_dir = self.install_directory();
         let parent = install_dir
             .parent()
@@ -164,7 +185,7 @@ impl HashcatToolDownloader {
             .prefix(".hashcat-staging-")
             .tempdir_in(parent)?;
         let extract_dir = staging.path().join("extract");
-        extract_7z(archive, &extract_dir)?;
+        extract_7z(archive, &extract_dir, cancellation)?;
         let extracted_exe = find_hashcat_exe(&extract_dir).ok_or_else(|| {
             HashcatToolError::Message("下载包中未找到 hashcat 可执行文件，未安装。".into())
         })?;
@@ -181,6 +202,7 @@ impl HashcatToolDownloader {
         }
         // Preserve an old incomplete installation so retry can repair it without
         // deleting files that may have been placed there by the user.
+        check_cancelled(cancellation)?;
         let backup = if install_dir.symlink_metadata().is_ok() {
             let backup = tempfile::Builder::new()
                 .prefix("hashcat-incomplete-")
@@ -217,61 +239,75 @@ fn hashcat_exe_name() -> &'static str {
     }
 }
 
-fn download_file(url: &str, dest: &Path, max_bytes: u64) -> Result<(), HashcatToolError> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(concat!("ArcRecall/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(600))
-        .build()
-        .map_err(|e| HashcatToolError::Download(e.to_string()))?;
-
-    let mut response = client
-        .get(url)
-        .send()
-        .map_err(|e| HashcatToolError::Download(e.to_string()))?
-        .error_for_status()
-        .map_err(|e| HashcatToolError::Download(e.to_string()))?;
-
-    let mut file = File::create(dest)?;
-    let mut buffer = [0u8; 64 * 1024];
-    let mut total = 0u64;
-    loop {
-        let n = response
-            .read(&mut buffer)
-            .map_err(|e| HashcatToolError::Download(e.to_string()))?;
-        if n == 0 {
-            break;
+fn download_file(
+    url: &str,
+    dest: &Path,
+    max_bytes: u64,
+    cancellation: &CancellationToken,
+) -> Result<(), HashcatToolError> {
+    check_cancelled(cancellation)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let transfer = async {
+            let client = reqwest::Client::builder()
+                .user_agent(concat!("ArcRecall/", env!("CARGO_PKG_VERSION")))
+                .timeout(Duration::from_secs(600))
+                .build()
+                .map_err(|error| HashcatToolError::Download(error.to_string()))?;
+            let mut response = client
+                .get(url)
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status)
+                .map_err(|error| HashcatToolError::Download(error.to_string()))?;
+            let mut file = File::create(dest)?;
+            let mut total = 0u64;
+            while let Some(bytes) = response
+                .chunk()
+                .await
+                .map_err(|error| HashcatToolError::Download(error.to_string()))?
+            {
+                check_cancelled(cancellation)?;
+                total += bytes.len() as u64;
+                if total > max_bytes {
+                    return Err(HashcatToolError::Download(format!(
+                        "下载超过大小上限（{} MiB）",
+                        max_bytes / 1024 / 1024
+                    )));
+                }
+                file.write_all(&bytes)?;
+            }
+            file.flush()?;
+            Ok(())
+        };
+        let mut transfer = std::pin::pin!(transfer);
+        loop {
+            check_cancelled(cancellation)?;
+            // Keep polling the same transfer; dropping it cancels pending network I/O.
+            if let Ok(result) =
+                tokio::time::timeout(Duration::from_millis(100), transfer.as_mut()).await
+            {
+                return result;
+            }
         }
-        total += n as u64;
-        if total > max_bytes {
-            return Err(HashcatToolError::Download(format!(
-                "下载超过大小上限（{} MiB）",
-                max_bytes / 1024 / 1024
-            )));
-        }
-        file.write_all(&buffer[..n])?;
-    }
-    file.flush()?;
-    Ok(())
+    })
 }
 
-fn sha256_file(path: &Path) -> Result<String, HashcatToolError> {
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let n = file.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buffer[..n]);
-    }
-    Ok(hex::encode(hasher.finalize()))
-}
-
-fn extract_7z(archive: &Path, dest: &Path) -> Result<(), HashcatToolError> {
-    fs::create_dir_all(dest)?;
-    sevenz_rust::decompress_file(archive, dest)
-        .map_err(|e| HashcatToolError::Extract(e.to_string()))
+fn extract_7z(
+    archive: &Path,
+    dest: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), HashcatToolError> {
+    check_cancelled(cancellation)?;
+    let reader = CancellableReader::new(File::open(archive)?, cancellation);
+    sevenz_rust::decompress_with_extract_fn(reader, dest, |entry, reader, path| {
+        check_cancelled(cancellation).map_err(sevenz_rust::Error::io)?;
+        let mut reader = CancellableReader::new(reader, cancellation);
+        sevenz_rust::default_entry_extract_fn(entry, &mut reader, path)
+    })
+    .map_err(|error| HashcatToolError::Extract(error.to_string()))
 }
 
 fn find_hashcat_exe(root: &Path) -> Option<PathBuf> {
@@ -303,6 +339,81 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cancellation_interrupts_stalled_headers_and_body() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+        for send_headers in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (stop_tx, stop_rx) = mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                if send_headers {
+                    stream
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+                        .unwrap();
+                }
+                ready_tx.send(()).unwrap();
+                let _ = stop_rx.recv_timeout(Duration::from_secs(5));
+            });
+            let directory = tempfile::tempdir().unwrap();
+            let destination = directory.path().join("download");
+            let cancellation = CancellationToken::default();
+            let worker_token = cancellation.clone();
+            let (done_tx, done_rx) = mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let result = download_file(
+                    &format!("http://{address}"),
+                    &destination,
+                    1024,
+                    &worker_token,
+                );
+                let _ = done_tx.send(result);
+            });
+            ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            cancellation.cancel();
+            let result = done_rx.recv_timeout(Duration::from_secs(2));
+            let _ = stop_tx.send(());
+            server.join().unwrap();
+            worker.join().unwrap();
+            let error = result.unwrap().unwrap_err();
+            assert!(
+                error.to_string().contains("已取消"),
+                "headers={send_headers}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cancelled_install_does_not_publish_or_create_work_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let tools = directory.path().join("tools");
+        let downloader =
+            HashcatToolDownloader::new(&tools, &tools, "", directory.path().join("downloads"));
+        let cancellation = CancellationToken::default();
+        cancellation.cancel();
+        assert!(downloader.install_with_cancellation(&cancellation).is_err());
+        assert!(!tools.exists());
+        assert!(
+            downloader
+                .install_archive(&directory.path().join("unused.7z"), &cancellation)
+                .is_err()
+        );
+        assert!(!tools.exists());
+    }
+
+    #[test]
     fn installation_stages_all_resources_and_can_retry_after_failure() {
         let directory = tempfile::tempdir().unwrap();
         let tools = directory.path().join("tools");
@@ -313,7 +424,11 @@ mod tests {
         fs::write(package.join(hashcat_exe_name()), b"synthetic executable").unwrap();
         let archive = directory.path().join("hashcat.7z");
         sevenz_rust::compress_to_path(&package, &archive).unwrap();
-        assert!(downloader.install_archive(&archive).is_err());
+        assert!(
+            downloader
+                .install_archive(&archive, &CancellationToken::default())
+                .is_err()
+        );
         assert!(!downloader.status("").installed);
         assert!(!downloader.install_directory().exists());
         assert_eq!(fs::read_dir(tools.join("hashcat")).unwrap().count(), 0);
@@ -327,7 +442,9 @@ mod tests {
             fs::write(path, b"resource").unwrap();
         }
         sevenz_rust::compress_to_path(&package, &archive).unwrap();
-        downloader.install_archive(&archive).unwrap();
+        downloader
+            .install_archive(&archive, &CancellationToken::default())
+            .unwrap();
         assert!(downloader.status("").installed);
         assert_eq!(
             fs::read(downloader.expected_executable()).unwrap(),

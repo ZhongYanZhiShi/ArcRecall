@@ -155,7 +155,9 @@ pub(crate) async fn tool_full_bundle_install(
     let manager = full_bundle_manager(&state)?;
     let (result, _task_lease) = tauri::async_runtime::spawn_blocking(move || {
         (
-            manager.install().map_err(|error| error.to_string()),
+            manager
+                .install_with_cancellation(&task_lease.cancellation)
+                .map_err(|error| error.to_string()),
             task_lease,
         )
     })
@@ -228,7 +230,9 @@ pub(crate) async fn tool_hashcat_download(
     let downloader = hashcat_downloader(&state)?;
     let (result, _task_lease) = tauri::async_runtime::spawn_blocking(move || {
         (
-            downloader.install().map_err(|error| error.to_string()),
+            downloader
+                .install_with_cancellation(&task_lease.cancellation)
+                .map_err(|error| error.to_string()),
             task_lease,
         )
     })

@@ -1,13 +1,12 @@
 use std::ffi::OsString;
-use std::fs::{self, File};
-use std::io::Read;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
-use super::runner::{ProcessRequest, run_process};
+use super::install_io::{check_cancelled, sha256_file};
+use super::runner::{CancellationToken, ProcessRequest, run_process};
 
 pub const ENGINE_BUNDLE_MANIFEST_VERSION: u32 = 1;
 pub const ENGINE_BUNDLE_TARGET: &str = "windows-x86_64";
@@ -149,19 +148,33 @@ impl FullEngineBundleManager {
 
     /// Probe only the component required for archive compression and extraction.
     pub fn seven_zip_status(&self) -> EngineComponentStatus {
+        self.seven_zip_status_with_cancellation(None)
+    }
+
+    fn seven_zip_status_with_cancellation(
+        &self,
+        cancellation: Option<&CancellationToken>,
+    ) -> EngineComponentStatus {
         probe_component(
             "7zip",
             "7-Zip",
             SEVEN_ZIP_VERSION,
             self.resources_present(),
             self.seven_zip_executable(),
-            ["i"],
-            "7-Zip",
+            (["i"], "7-Zip"),
+            cancellation,
         )
     }
 
     pub fn status(&self) -> FullEngineBundleStatus {
-        let seven_zip = self.seven_zip_status();
+        self.status_with_cancellation(None)
+    }
+
+    fn status_with_cancellation(
+        &self,
+        cancellation: Option<&CancellationToken>,
+    ) -> FullEngineBundleStatus {
+        let seven_zip = self.seven_zip_status_with_cancellation(cancellation);
         let bundled = seven_zip.bundled;
         let hashcat = probe_component(
             "hashcat",
@@ -169,8 +182,8 @@ impl FullEngineBundleManager {
             super::HASHCAT_MANIFEST_VERSION,
             bundled,
             self.hashcat_executable(),
-            ["--version"],
-            "7.1.2",
+            (["--version"], "7.1.2"),
+            cancellation,
         );
         let john_dir = self.john_tools_directory();
         let john = probe_component(
@@ -179,8 +192,8 @@ impl FullEngineBundleManager {
             JOHN_VERSION,
             bundled,
             john_dir.join("john.exe"),
-            ["--list=build-info"],
-            "1.9.0",
+            (["--list=build-info"], "1.9.0"),
+            cancellation,
         );
         let perl = probe_component(
             "perl",
@@ -188,8 +201,8 @@ impl FullEngineBundleManager {
             PERL_VERSION,
             bundled,
             self.perl_executable(),
-            ["-v"],
-            "perl",
+            (["-v"], "perl"),
+            cancellation,
         );
         let has_7z2john = john_dir.join("7z2john.pl").is_file();
         let has_rar2john = john_dir.join("rar2john.exe").is_file();
@@ -234,10 +247,18 @@ impl FullEngineBundleManager {
     }
 
     pub fn install(&self) -> Result<FullEngineBundleInstallResult, EngineBundleError> {
+        self.install_with_cancellation(&CancellationToken::default())
+    }
+
+    pub fn install_with_cancellation(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<FullEngineBundleInstallResult, EngineBundleError> {
+        check_cancelled(cancellation)?;
         if !cfg!(all(windows, target_arch = "x86_64")) {
             return Err(EngineBundleError::UnsupportedPlatform);
         }
-        self.verify_resources()?;
+        self.verify_resources(cancellation)?;
         fs::create_dir_all(&self.tools_dir)?;
 
         let staging_root = self
@@ -246,7 +267,7 @@ impl FullEngineBundleManager {
             .join(unique_stamp());
         fs::create_dir_all(&staging_root)?;
 
-        let result = self.install_inner(&staging_root);
+        let result = self.install_inner(&staging_root, cancellation);
         if staging_root.starts_with(&self.tools_dir) {
             let _ = fs::remove_dir_all(&staging_root);
         }
@@ -256,6 +277,7 @@ impl FullEngineBundleManager {
     fn install_inner(
         &self,
         staging_root: &Path,
+        cancellation: &CancellationToken,
     ) -> Result<FullEngineBundleInstallResult, EngineBundleError> {
         let bootstrap = self.resource_root.join(BOOTSTRAP_ARCHIVE);
         let seven_zip_install_dir = self
@@ -269,6 +291,7 @@ impl FullEngineBundleManager {
             &seven_zip_install_dir,
             staging_root.join("7zip"),
             ComponentLayout::ExecutableParent("7z.exe"),
+            cancellation,
         )?;
 
         let seven_zip = self.seven_zip_executable();
@@ -283,6 +306,7 @@ impl FullEngineBundleManager {
             &hashcat_install_dir,
             staging_root.join("hashcat"),
             ComponentLayout::ExecutableParent("hashcat.exe"),
+            cancellation,
         )?;
         install_component(
             &seven_zip,
@@ -290,6 +314,7 @@ impl FullEngineBundleManager {
             &self.john_root(),
             staging_root.join("john"),
             ComponentLayout::ParentOfDirectoryContaining("john.exe"),
+            cancellation,
         )?;
         let perl_install_dir = self
             .perl_executable()
@@ -303,9 +328,11 @@ impl FullEngineBundleManager {
             &perl_install_dir,
             staging_root.join("perl"),
             ComponentLayout::ParentOfDirectoryContainingDirectory("perl.exe"),
+            cancellation,
         )?;
 
-        let status = self.status();
+        let status = self.status_with_cancellation(Some(cancellation));
+        check_cancelled(cancellation)?;
         if !status.installed {
             return Err(EngineBundleError::Message(format!(
                 "资源已展开，但完整探测未通过：{}",
@@ -338,7 +365,7 @@ impl FullEngineBundleManager {
         .all(|relative| self.resource_root.join(relative).is_file())
     }
 
-    fn verify_resources(&self) -> Result<(), EngineBundleError> {
+    fn verify_resources(&self, cancellation: &CancellationToken) -> Result<(), EngineBundleError> {
         if !self.resources_present() {
             return Err(EngineBundleError::MissingResource(
                 self.resource_root.display().to_string(),
@@ -353,7 +380,7 @@ impl FullEngineBundleManager {
             (JOHN_SOURCE_ARCHIVE, JOHN_SOURCE_SHA256),
             (SEVEN_ZIP_SOURCE_ARCHIVE, SEVEN_ZIP_SOURCE_SHA256),
         ] {
-            let actual = sha256_file(&self.resource_root.join(relative))?;
+            let actual = sha256_file(&self.resource_root.join(relative), cancellation)?;
             if !actual.eq_ignore_ascii_case(expected) {
                 return Err(EngineBundleError::ChecksumMismatch(relative.into()));
             }
@@ -374,7 +401,9 @@ fn install_component(
     install_dir: &Path,
     staging_dir: PathBuf,
     layout: ComponentLayout,
+    cancellation: &CancellationToken,
 ) -> Result<(), EngineBundleError> {
+    check_cancelled(cancellation)?;
     if component_sentinel(install_dir, &layout).is_file() {
         return Ok(());
     }
@@ -385,7 +414,7 @@ fn install_component(
         )));
     }
     fs::create_dir_all(&staging_dir)?;
-    extract_archive(extractor, archive, &staging_dir)?;
+    extract_archive(extractor, archive, &staging_dir, cancellation)?;
     let source_root = locate_component_root(&staging_dir, &layout).ok_or_else(|| {
         EngineBundleError::Message(format!(
             "归档 {} 中未找到预期可执行文件。",
@@ -395,6 +424,7 @@ fn install_component(
     if let Some(parent) = install_dir.parent() {
         fs::create_dir_all(parent)?;
     }
+    check_cancelled(cancellation)?;
     fs::rename(&source_root, install_dir)?;
     Ok(())
 }
@@ -432,6 +462,7 @@ fn extract_archive(
     extractor: &Path,
     archive: &Path,
     destination: &Path,
+    cancellation: &CancellationToken,
 ) -> Result<(), EngineBundleError> {
     let mut request = ProcessRequest::new(extractor);
     request.args = vec![
@@ -444,7 +475,7 @@ fn extract_archive(
     request.current_dir = extractor.parent().map(Path::to_path_buf);
     request.timeout = Duration::from_secs(30 * 60);
     request.max_output_bytes = 1024 * 1024;
-    let output = run_process(&request, None)
+    let output = run_process(&request, Some(cancellation))
         .map_err(|error| EngineBundleError::Process(format!("{}：{error}", extractor.display())))?;
     if !output.success {
         let detail = if output.stderr.trim().is_empty() {
@@ -468,9 +499,10 @@ fn probe_component<const N: usize>(
     version: &str,
     bundled: bool,
     executable: PathBuf,
-    args: [&str; N],
-    marker: &str,
+    probe: ([&str; N], &str),
+    cancellation: Option<&CancellationToken>,
 ) -> EngineComponentStatus {
+    let (args, marker) = probe;
     let installed = executable.is_file();
     if !installed {
         return EngineComponentStatus {
@@ -489,7 +521,7 @@ fn probe_component<const N: usize>(
     request.current_dir = executable.parent().map(Path::to_path_buf);
     request.timeout = Duration::from_secs(8);
     request.max_output_bytes = 256 * 1024;
-    match run_process(&request, None) {
+    match run_process(&request, cancellation) {
         Ok(output) => {
             let combined = format!("{}\n{}", output.stdout, output.stderr);
             let runnable =
@@ -543,20 +575,6 @@ fn find_file(directory: &Path, file_name: &str) -> Option<PathBuf> {
     None
 }
 
-fn sha256_file(path: &Path) -> Result<String, std::io::Error> {
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(hex::encode(hasher.finalize()))
-}
-
 fn unique_stamp() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -568,6 +586,23 @@ fn unique_stamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_bundle_does_not_touch_installation() {
+        let directory = tempfile::tempdir().unwrap();
+        let tools = directory.path().join("tools");
+        let manager = FullEngineBundleManager::new(directory.path().join("resources"), &tools);
+        let cancellation = CancellationToken::default();
+        cancellation.cancel();
+        assert!(
+            manager
+                .install_with_cancellation(&cancellation)
+                .unwrap_err()
+                .to_string()
+                .contains("已取消")
+        );
+        assert!(!tools.exists());
+    }
 
     #[test]
     fn expected_paths_are_versioned_under_tools_root() {

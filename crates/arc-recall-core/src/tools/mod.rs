@@ -1,6 +1,7 @@
 mod bundle;
 mod compression;
 mod hashcat;
+mod install_io;
 mod john;
 mod recovery;
 mod runner;
