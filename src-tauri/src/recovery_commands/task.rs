@@ -266,7 +266,7 @@ pub(super) fn recovery_failure_kind(error: &RecoveryError) -> RecoveryFailureKin
         RecoveryError::MissingTool(_) => RecoveryFailureKind::MissingTool,
         RecoveryError::NotFound(_) => RecoveryFailureKind::NotFound,
         RecoveryError::Io(_) => RecoveryFailureKind::Io,
-        RecoveryError::Process(_) => RecoveryFailureKind::Process,
+        RecoveryError::Process(_) | RecoveryError::ProcessStart(_) => RecoveryFailureKind::Process,
         RecoveryError::BudgetExceeded(_) | RecoveryError::Cancelled | RecoveryError::Message(_) => {
             RecoveryFailureKind::Other
         }

@@ -493,6 +493,7 @@ fn run_internal_dictionary(
     let mut reader = BufReader::with_capacity(64 * 1024, file);
     let mut line = String::new();
     let mut attempted = 0u64;
+    let mut reported_oversized_candidate = false;
     let mut last_reported = 0u64;
     let mut last_report_at = Instant::now();
 
@@ -531,7 +532,26 @@ fn run_internal_dictionary(
         if already_verified.contains(&line) {
             continue;
         }
-        if verify_password(&job.archive_path, &line, tools, cancellation)? {
+        let verified = match verify_password(&job.archive_path, &line, tools, cancellation) {
+            Ok(verified) => verified,
+            // Use the actual Windows spawn limit, including argument quoting and paths.
+            // Do not truncate the candidate or hide unrelated process failures.
+            Err(RecoveryError::ProcessStart(error))
+                if cfg!(windows) && error.raw_os_error() == Some(206) =>
+            {
+                if !reported_oversized_candidate {
+                    report(RecoveryUpdate::stage(
+                        RecoveryPhase::Internal,
+                        Some("7-Zip CPU"),
+                        "已跳过超出 Windows 命令行长度限制的候选密码，继续尝试后续候选。",
+                    ));
+                    reported_oversized_candidate = true;
+                }
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if verified {
             extract_with_password(input, tools, &line, cancellation, report)?;
             return Ok(Some(success_result(
                 job,

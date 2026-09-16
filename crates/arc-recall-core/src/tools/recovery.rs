@@ -368,6 +368,8 @@ pub enum RecoveryError {
     MissingTool(String),
     #[error("外部工具执行失败：{0}")]
     Process(String),
+    #[error("外部工具执行失败：无法启动外部进程：{0}")]
+    ProcessStart(#[source] std::io::Error),
     #[error("外部恢复任务已取消")]
     Cancelled,
     #[error("归档无法继续验密：{0}")]
@@ -590,6 +592,7 @@ fn run_checked(
 ) -> Result<ProcessOutput, RecoveryError> {
     run_process(request, Some(cancellation)).map_err(|error| match error {
         ProcessRunnerError::Cancelled => RecoveryError::Cancelled,
+        ProcessRunnerError::Spawn(error) => RecoveryError::ProcessStart(error),
         other => RecoveryError::Process(other.to_string()),
     })
 }

@@ -1681,11 +1681,14 @@ fn dictionary_recovery_falls_back_to_seven_zip_when_external_tools_are_missing()
     let archive = dir.path().join("fallback.7z");
     create_encrypted_archive(&seven_zip, "-t7z", password, &archive, &payload);
     let dictionary_path = dir.path().join("fallback.dict");
-    fs::write(
-        &dictionary_path,
-        format!("wrong-one\nwrong-two\n{password}\n"),
-    )
-    .unwrap();
+    let mut candidates = vec!["wrong-one".to_owned(), "wrong-two".to_owned()];
+    if cfg!(windows) {
+        candidates.push("x".repeat(40_000));
+        // Shorter input can still exceed the limit after Windows quotes argv.
+        candidates.push("\"".repeat(20_000));
+    }
+    candidates.push(password.to_owned());
+    fs::write(&dictionary_path, candidates.join("\n")).unwrap();
 
     let tools = RecoveryToolPaths {
         seven_zip,
@@ -1698,7 +1701,7 @@ fn dictionary_recovery_falls_back_to_seven_zip_when_external_tools_are_missing()
         archive_path: archive,
         output_directory: output_directory.clone(),
         dictionary_path,
-        dictionary_count: 3,
+        dictionary_count: candidates.len() as u64,
         known_password: None,
         work_directory: dir.path().join("fallback-work"),
     };
@@ -1712,6 +1715,13 @@ fn dictionary_recovery_falls_back_to_seven_zip_when_external_tools_are_missing()
     assert!(result.success, "{}", result.message);
     assert_eq!(result.password.as_deref(), Some(password));
     assert_eq!(result.engine.as_deref(), Some("7-Zip CPU"));
+    if cfg!(windows) {
+        assert!(
+            updates
+                .iter()
+                .any(|update| update.message.contains("命令行长度限制"))
+        );
+    }
     assert!(
         updates
             .iter()
