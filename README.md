@@ -87,8 +87,10 @@ arc-recall/
 ## 环境要求
 
 - 当前稳定版 Rust 工具链
-- 当前维护中的 Node.js 版本与 [pnpm](https://pnpm.io/)
+- Node.js 22.x（至少 22.12）或 24 及以上版本，以及 [pnpm](https://pnpm.io/) 10 及以上版本
 - [Tauri 环境要求](https://v2.tauri.app/start/prerequisites/)中列出的当前平台依赖
+
+测试命令依赖 `--experimental-strip-types`，不支持 Node.js 20。开发工具的固定版本见 `mise.toml`。
 
 ## 快速开始
 

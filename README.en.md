@@ -77,8 +77,10 @@ arc-recall/
 ## Requirements
 
 - Current stable Rust toolchain
-- A currently maintained Node.js release and [pnpm](https://pnpm.io/)
+- Node.js 22.x (22.12 or later) or version 24 and above, plus [pnpm](https://pnpm.io/) 10 or later
 - The platform dependencies listed in the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
+
+The test command requires `--experimental-strip-types` and does not support Node.js 20. See `mise.toml` for pinned development tool versions.
 
 ## Quick start
 
