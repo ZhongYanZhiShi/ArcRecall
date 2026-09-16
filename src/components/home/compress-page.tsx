@@ -64,6 +64,7 @@ export function CompressPage({
   const passwordError = compressionPasswordError(password, passwordConfirmation)
   const [hasPermanentPassword, setHasPermanentPassword] = React.useState(false)
   const [usePermanentPassword, setUsePermanentPassword] = React.useState(false)
+  const permanentPasswordInitialized = React.useRef(false)
   const [permanentPasswordReady, setPermanentPasswordReady] =
     React.useState(false)
   const [passwordCredentialBusy, setPasswordCredentialBusy] =
@@ -132,7 +133,10 @@ export function CompressPage({
           return
         }
         setHasPermanentPassword(status.hasPassword)
-        setUsePermanentPassword(status.hasPassword)
+        if (!permanentPasswordInitialized.current || !status.hasPassword) {
+          setUsePermanentPassword(status.hasPassword)
+        }
+        permanentPasswordInitialized.current = true
       })
       .catch((reason) => {
         if (!disposed) {

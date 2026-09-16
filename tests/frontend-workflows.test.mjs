@@ -626,6 +626,59 @@ test("AI 准备阶段锁住实际输入、拖放和异步文件选择结果", as
   harness.hide()
 })
 
+test("返回压缩页保留永久密码选择，凭据删除后取消使用", async (t) => {
+  let hasPassword = true
+  const starts = []
+  const harness = sourceHarness({
+    "@/lib/dictionary": { isDesktopRuntime: () => false },
+    "@/lib/ai": { listAiProfiles: async () => ({ profiles: [] }) },
+    "@/lib/compression": {
+      getPermanentCompressionPasswordStatus: async () => ({ hasPassword }),
+      startCompression: async (request) => {
+        starts.push(request)
+        return { running: false }
+      },
+    },
+    "@/hooks/use-desktop-task": {
+      useDesktopTask: () => ({
+        task: null,
+        running: false,
+        runningRef: { current: false },
+        setTask: () => {},
+      }),
+    },
+  })
+  t.after(() => harness.hide())
+  const { CompressPage } = harness.load("src/components/home/compress-page.tsx")
+  const draft = {
+    ...harness.load("src/lib/compression-draft.ts").createCompressionDraft(),
+    sources: ["C:\\fixture.txt"],
+    baseName: "fixture",
+  }
+  const render = () =>
+    harness.render(CompressPage, {
+      draft,
+      onDraftChange: () => {},
+      onOpenAiSettings: () => {},
+    })
+  render()
+  await settle()
+  assert.equal(render().props.usePermanentPassword, true)
+  render().props.setUsePermanentPassword(false)
+  harness.hide()
+  render()
+  await settle()
+  assert.equal(render().props.usePermanentPassword, false)
+  await render().props.handleStart()
+  assert.equal(starts[0].usePermanentPassword, false)
+  render().props.setUsePermanentPassword(true)
+  hasPassword = false
+  harness.hide()
+  render()
+  await settle()
+  assert.equal(render().props.usePermanentPassword, false)
+})
+
 test("新密码未确认时阻止压缩与永久保存，确认时保留空格", async (t) => {
   const starts = []
   const saves = []
