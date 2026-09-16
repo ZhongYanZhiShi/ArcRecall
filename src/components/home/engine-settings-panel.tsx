@@ -33,7 +33,7 @@ import {
   installFullEngineBundle,
   openPath,
   setJohnPerl,
-  setSettings,
+  updateSettings,
   setToolsDirectory,
 } from "@/lib/settings"
 
@@ -296,13 +296,7 @@ export function EngineSettingsPanel() {
     setRecoveryBusy(true)
     setRecoveryError(false)
     setRecoveryMessage("正在保存默认解密方式…")
-    void getSettings()
-      .then((current) =>
-        setSettings({
-          ...current,
-          recovery: { ...current.recovery, computeMode: mode },
-        })
-      )
+    void updateSettings({ kind: "recoveryComputeMode", value: mode })
       .then((saved) => {
         setAppSettings(saved)
         setRecoveryMessage(
@@ -350,14 +344,9 @@ export function EngineSettingsPanel() {
     setRecoveryError(false)
     setRecoveryMessage("正在保存扫描上限…")
     try {
-      const current = await getSettings()
-      const saved = await setSettings({
-        ...current,
-        recovery: {
-          computeMode: "gpuPreferred",
-          ...current.recovery,
-          scanMaxFilesPerDirectory: limit,
-        },
+      const saved = await updateSettings({
+        kind: "scanMaxFilesPerDirectory",
+        value: limit,
       })
       setAppSettings(saved)
       setScanLimitDraft(null)

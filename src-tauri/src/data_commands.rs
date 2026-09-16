@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use arc_recall_core::{
     AppSettings, DatabaseInfo, DictionaryCandidateAddSummary, DictionaryCandidateQuery,
-    DictionaryCandidateStore, DictionaryListResult, MAX_LOG_MAX_DISK_MIB, MIN_LOG_MAX_DISK_MIB,
+    DictionaryCandidateStore, DictionaryListResult, SettingsUpdate,
 };
 use serde::Serialize;
 use tauri::State;
@@ -357,24 +357,20 @@ pub(crate) fn settings_get(state: State<'_, AppState>) -> Result<AppSettings, St
 }
 
 #[tauri::command]
-pub(crate) fn settings_set(
+pub(crate) fn settings_update(
     state: State<'_, AppState>,
-    settings: AppSettings,
+    update: SettingsUpdate,
 ) -> Result<AppSettings, String> {
-    if !settings.logging.has_valid_disk_limit() {
-        return Err(format!(
-            "日志最大占用必须在 {MIN_LOG_MAX_DISK_MIB}–{MAX_LOG_MAX_DISK_MIB} MiB 之间。"
-        ));
-    }
-    let logging = settings.logging.clone();
     let result = {
         let store = state.settings.lock().map_err(|error| error.to_string())?;
-        store.save(&settings).map_err(|error| error.to_string())?;
-        store.load().map_err(|error| error.to_string())
+        store
+            .update_preferences(update)
+            .map_err(|error| error.to_string())
     };
     match &result {
-        Ok(_) => {
-            apply_logging_settings(&state.logger, &logging)?;
+        Ok(settings) => {
+            let logging = &settings.logging;
+            apply_logging_settings(&state.logger, logging)?;
             write_log(
                 &state.logger,
                 LogLevel::Info,

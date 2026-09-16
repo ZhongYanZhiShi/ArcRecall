@@ -35,7 +35,7 @@ use compression_commands::{
 use data_commands::{
     database_backup, database_info, database_restore_apply, database_restore_discard,
     database_restore_preview, dictionary_add, dictionary_count, dictionary_delete, dictionary_list,
-    settings_get, settings_set,
+    settings_get, settings_update,
 };
 use engine_commands::{
     recovery_capabilities, tool_full_bundle_install, tool_full_bundle_status,
@@ -447,7 +447,7 @@ pub fn run() {
             history_clear,
             database_info,
             settings_get,
-            settings_set,
+            settings_update,
             ai_profiles_list,
             ai_profile_upsert,
             ai_profile_delete,

@@ -36,7 +36,7 @@ import {
   MAX_LOG_MAX_DISK_MIB,
   MIN_LOG_MAX_DISK_MIB,
   getSettings,
-  setSettings,
+  updateSettings,
 } from "@/lib/settings"
 
 const LOG_LEVELS: {
@@ -108,16 +108,7 @@ export function AppSettingsPanel() {
     setBusy(true)
     setMessageError(false)
     setMessage("正在保存日志级别…")
-    void getSettings()
-      .then((current) =>
-        setSettings({
-          ...current,
-          logging: {
-            level,
-            maxDiskMib: current.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB,
-          },
-        })
-      )
+    void updateSettings({ kind: "logLevel", value: level })
       .then((saved) => {
         setAppSettings(saved)
         setMessage(`日志级别已切换为“${logLevelLabel(level)}”。`)
@@ -158,16 +149,7 @@ export function AppSettingsPanel() {
     setBusy(true)
     setMessageError(false)
     setMessage("正在保存日志容量…")
-    void getSettings()
-      .then((current) =>
-        setSettings({
-          ...current,
-          logging: {
-            level: current.logging?.level ?? "info",
-            maxDiskMib,
-          },
-        })
-      )
+    void updateSettings({ kind: "logMaxDiskMib", value: maxDiskMib })
       .then((saved) => {
         const savedMaxDiskMib =
           saved.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB

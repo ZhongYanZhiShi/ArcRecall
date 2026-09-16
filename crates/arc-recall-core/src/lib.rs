@@ -20,7 +20,7 @@ pub use settings::{
     AiProfile, AiProviderKind, AiSettings, AppLogLevel, AppSettings, CURRENT_SETTINGS_VERSION,
     DEFAULT_AI_RENAME_PROMPT, DEFAULT_LOG_MAX_DISK_MIB, DatabaseInfo, EngineSettings,
     LoggingSettings, MAX_LOG_MAX_DISK_MIB, MIN_LOG_MAX_DISK_MIB, RecoverySettings, SettingsError,
-    SettingsStore, resolve_tools_directory,
+    SettingsStore, SettingsUpdate, resolve_tools_directory,
 };
 pub use tools::{
     ArchiveAnalysis, ArchiveFormat, CancellationToken, CompressionError, CompressionFormat,

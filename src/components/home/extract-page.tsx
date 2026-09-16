@@ -29,7 +29,7 @@ import { recoveryQueue } from "@/lib/recovery-queue-session"
 import { RecoveryQueuePanel } from "@/components/home/recovery-queue-panel"
 import { recoveryTaskAttachmentId } from "@/lib/recovery-task-attachment"
 import { copySensitiveText } from "@/lib/sensitive-clipboard"
-import { getSettings, setSettings } from "@/lib/settings"
+import { getSettings, updateSettings } from "@/lib/settings"
 import { useDesktopTask } from "@/hooks/use-desktop-task"
 
 export function ExtractPage({
@@ -389,10 +389,9 @@ export function ExtractPage({
       setComputeModeBusy(true)
       setError(null)
       try {
-        const current = await getSettings()
-        const saved = await setSettings({
-          ...current,
-          recovery: { ...current.recovery, computeMode: nextMode },
+        const saved = await updateSettings({
+          kind: "recoveryComputeMode",
+          value: nextMode,
         })
         setComputeMode(saved.recovery?.computeMode ?? nextMode)
       } catch (reason) {

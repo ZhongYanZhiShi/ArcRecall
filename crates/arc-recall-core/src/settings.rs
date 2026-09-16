@@ -13,6 +13,15 @@ pub const CURRENT_SETTINGS_VERSION: u32 = 1;
 pub const DEFAULT_AI_RENAME_PROMPT: &str = "命名规则要以windows的文件命名规则来进行";
 const LEGACY_AI_RENAME_PROMPT: &str = "在保留原意的前提下，将用户提供的归档基础名称改写为简洁、可读、适合文件系统的名称；只返回名称，不返回扩展名或解释。";
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "camelCase")]
+pub enum SettingsUpdate {
+    LogLevel(AppLogLevel),
+    LogMaxDiskMib(u16),
+    RecoveryComputeMode(RecoveryComputeMode),
+    ScanMaxFilesPerDirectory(u32),
+}
+
 /// Maximum log verbosity persisted by the desktop application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -247,6 +256,8 @@ fn default_ai_rename_prompt() -> String {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
+    #[error("日志最大占用必须在 {MIN_LOG_MAX_DISK_MIB}–{MAX_LOG_MAX_DISK_MIB} MiB 之间。")]
+    InvalidLogDiskLimit,
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
@@ -259,6 +270,26 @@ pub struct SettingsStore {
 }
 
 impl SettingsStore {
+    /// Callers serialize this read-modify-write with all other settings writers.
+    pub fn update_preferences(&self, update: SettingsUpdate) -> Result<AppSettings, SettingsError> {
+        let mut settings = self.load()?;
+        match update {
+            SettingsUpdate::LogLevel(value) => settings.logging.level = value,
+            SettingsUpdate::LogMaxDiskMib(value) => {
+                settings.logging.max_disk_mib = value;
+                if !settings.logging.has_valid_disk_limit() {
+                    return Err(SettingsError::InvalidLogDiskLimit);
+                }
+            }
+            SettingsUpdate::RecoveryComputeMode(value) => settings.recovery.compute_mode = value,
+            SettingsUpdate::ScanMaxFilesPerDirectory(value) => {
+                settings.recovery.scan_max_files_per_directory = value
+            }
+        }
+        self.save(&settings)?;
+        Ok(settings)
+    }
+
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, SettingsError> {
         let path = path.into();
         if let Some(parent) = path.parent() {
@@ -417,6 +448,42 @@ pub struct DatabaseInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preference_updates_preserve_installed_paths_and_other_preferences() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SettingsStore::open(directory.path().join("settings.json")).unwrap();
+        let mut installed = store.load().unwrap();
+        installed.engine.hashcat_path = "newly-installed-hashcat".into();
+        installed.ai.rename_prompt = "keep this prompt".into();
+        store.save(&installed).unwrap();
+        store
+            .update_preferences(SettingsUpdate::RecoveryComputeMode(
+                RecoveryComputeMode::CpuOnly,
+            ))
+            .unwrap();
+        store
+            .update_preferences(SettingsUpdate::ScanMaxFilesPerDirectory(3))
+            .unwrap();
+        store
+            .update_preferences(SettingsUpdate::LogLevel(AppLogLevel::Debug))
+            .unwrap();
+        let saved = store
+            .update_preferences(SettingsUpdate::LogMaxDiskMib(100))
+            .unwrap();
+        assert_eq!(saved.engine, installed.engine);
+        assert_eq!(saved.ai, installed.ai);
+        assert_eq!(saved.recovery.compute_mode, RecoveryComputeMode::CpuOnly);
+        assert_eq!(saved.recovery.scan_max_files_per_directory, 3);
+        assert_eq!(saved.logging.level, AppLogLevel::Debug);
+        assert_eq!(saved.logging.max_disk_mib, 100);
+        assert!(
+            store
+                .update_preferences(SettingsUpdate::LogMaxDiskMib(0))
+                .is_err()
+        );
+        assert_eq!(store.load().unwrap(), saved);
+    }
 
     #[test]
     fn scan_limit_defaults_for_legacy_settings_and_survives_reload() {

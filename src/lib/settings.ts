@@ -192,11 +192,33 @@ export async function getSettings(): Promise<AppSettings> {
   return invoke<AppSettings>("settings_get")
 }
 
-export async function setSettings(settings: AppSettings): Promise<AppSettings> {
-  if (!isDesktopRuntime()) {
-    return settings
+export type SettingsUpdate =
+  | { kind: "logLevel"; value: AppLogLevel }
+  | { kind: "logMaxDiskMib"; value: number }
+  | { kind: "recoveryComputeMode"; value: RecoveryComputeMode }
+  | { kind: "scanMaxFilesPerDirectory"; value: number }
+
+export async function updateSettings(
+  update: SettingsUpdate
+): Promise<AppSettings> {
+  if (isDesktopRuntime())
+    return invoke<AppSettings>("settings_update", { update })
+  const settings = await getSettings()
+  switch (update.kind) {
+    case "logLevel":
+      settings.logging!.level = update.value
+      break
+    case "logMaxDiskMib":
+      settings.logging!.maxDiskMib = update.value
+      break
+    case "recoveryComputeMode":
+      settings.recovery!.computeMode = update.value
+      break
+    case "scanMaxFilesPerDirectory":
+      settings.recovery!.scanMaxFilesPerDirectory = update.value
+      break
   }
-  return invoke<AppSettings>("settings_set", { settings })
+  return settings
 }
 
 export async function getDatabaseInfo(): Promise<DatabaseInfo> {

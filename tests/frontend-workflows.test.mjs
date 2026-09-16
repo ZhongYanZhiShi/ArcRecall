@@ -392,11 +392,15 @@ test("扫描上限保存、错误处理和解密方式切换保留其他设置",
       getHashcatStatus: async () => ({}),
       getJohnPerlStatus: async () => ({}),
       getSettings: async () => structuredClone(saved),
-      setSettings: async (next) => {
+      updateSettings: async (update) => {
         writes += 1
         if (rejectSave) throw new Error("disk unavailable")
-        saved = structuredClone(next)
-        return next
+        const field =
+          update.kind === "recoveryComputeMode"
+            ? "computeMode"
+            : "scanMaxFilesPerDirectory"
+        saved.recovery[field] = update.value
+        return structuredClone(saved)
       },
     },
   })
@@ -428,8 +432,10 @@ test("扫描上限保存、错误处理和解密方式切换保留其他设置",
     scanMaxFilesPerDirectory: 0,
   })
   assert.equal(saved.engine.hashcatPath, "existing-engine")
+  saved.engine.hashcatPath = "newly-installed-engine"
   card().onChange("gpuPreferred")
   await settle()
+  assert.equal(saved.engine.hashcatPath, "newly-installed-engine")
   assert.deepEqual(saved.recovery, {
     computeMode: "gpuPreferred",
     scanMaxFilesPerDirectory: 0,

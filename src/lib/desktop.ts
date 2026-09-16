@@ -50,7 +50,7 @@ export {
   installFullEngineBundle,
   openPath,
   setJohnPerl,
-  setSettings,
+  updateSettings,
   setToolsDirectory,
   type AppSettings,
   type AppLogLevel,
