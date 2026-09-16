@@ -11,7 +11,7 @@ import { Separator } from "@/components/ui/separator"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { type DatabaseInfo, getDatabaseInfo } from "@/lib/settings"
 
-export function DataSettingsPanel() {
+export function DataSettingsPanel({ onRestored }: { onRestored: () => void }) {
   const [dbInfo, setDbInfo] = React.useState<DatabaseInfo | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -73,7 +73,12 @@ export function DataSettingsPanel() {
           </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          <DatabaseRestorePanel onRestored={() => void load()} />
+          <DatabaseRestorePanel
+            onRestored={() => {
+              onRestored()
+              void load()
+            }}
+          />
           <Separator />
           <p className="text-sm font-medium">文件位置</p>
           <SettingsInfoRow

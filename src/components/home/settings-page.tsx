@@ -62,6 +62,7 @@ const CATEGORIES: {
 ]
 
 type SettingsPageProps = {
+  onDatabaseRestored: () => void
   initialCategory?: SettingsCategory
   categoryRequestId?: number
   returnAction?: {
@@ -84,6 +85,7 @@ export const SettingsPage = React.forwardRef<
     categoryRequestId = 0,
     returnAction,
     onAiDirtyChange,
+    onDatabaseRestored,
   },
   ref
 ) {
@@ -238,7 +240,7 @@ export const SettingsPage = React.forwardRef<
               <AppSettingsPanel />
             </TabsContent>
             <TabsContent value="data" className="mt-0 outline-none">
-              <DataSettingsPanel />
+              <DataSettingsPanel onRestored={onDatabaseRestored} />
             </TabsContent>
           </div>
         </Tabs>

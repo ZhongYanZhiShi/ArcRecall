@@ -106,6 +106,7 @@ function prefersReducedMotion() {
  * Effect，重新显示时恢复监听与轮询。入场动画仅作用于当前可见层。
  */
 export default function Page() {
+  const [databaseRevision, setDatabaseRevision] = React.useState(0)
   const settingsPageRef = React.useRef<SettingsPageHandle>(null)
   const [activeNav, setActiveNav] = React.useState<NavId>("extract")
   const [visitedNavs, setVisitedNavs] = React.useState<ReadonlySet<NavId>>(
@@ -285,12 +286,18 @@ export default function Page() {
               onOpenAiSettings={handleOpenAiSettings}
             />
           )}
-          {renderActivity("dictionary", <DictionaryPage />)}
-          {renderActivity("history", <HistoryPage />)}
+          {renderActivity(
+            "dictionary",
+            <DictionaryPage key={databaseRevision} />
+          )}
+          {renderActivity("history", <HistoryPage key={databaseRevision} />)}
           {renderActivity("logs", <LogsPage />)}
           {renderActivity(
             "settings",
             <SettingsPage
+              onDatabaseRestored={() =>
+                setDatabaseRevision((revision) => revision + 1)
+              }
               ref={settingsPageRef}
               initialCategory={settingsCategory}
               categoryRequestId={settingsCategoryRequestId}

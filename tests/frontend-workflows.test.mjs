@@ -72,7 +72,7 @@ function sourceHarness(overrides) {
     useLayoutEffect: effect,
   }
   const ui = new Proxy({}, { get: (_, key) => key })
-  const jsx = (type, props) => ({ type, props })
+  const jsx = (type, props, key) => ({ type, props, key })
   const modules = new Map()
   const mocks = {
     react: React,
@@ -144,6 +144,45 @@ const button = (tree, text) =>
     (node) =>
       node.type === "Button" && [node.props.children].flat().includes(text)
   )
+
+test("恢复数据库后重建字典和历史视图，保留其他工作台状态", (t) => {
+  const previousWindow = globalThis.window
+  globalThis.window = {
+    matchMedia: () => ({ matches: true }),
+    requestIdleCallback: () => 1,
+    cancelIdleCallback: () => {},
+  }
+  const names = [
+    "ExtractPage",
+    "CompressPage",
+    "DictionaryPage",
+    "HistoryPage",
+    "LogsPage",
+    "SettingsPage",
+  ]
+  const harness = sourceHarness({
+    "next/dynamic": { default: () => names.shift(), __esModule: true },
+  })
+  t.after(() => {
+    harness.hide()
+    globalThis.window = previousWindow
+  })
+  const Page = harness.load("src/app/page.tsx").default
+  const view = (tree, name) => find(tree, (node) => node.type === name)
+  let tree = harness.render(Page)
+  for (const nav of ["dictionary", "history", "compress", "settings"]) {
+    view(tree, "AppShell").props.onNavChange(nav)
+    tree = harness.render(Page)
+  }
+  const dictionaryKey = view(tree, "DictionaryPage").key
+  const historyKey = view(tree, "HistoryPage").key
+  const draft = view(tree, "CompressPage").props.draft
+  view(tree, "SettingsPage").props.onDatabaseRestored()
+  tree = harness.render(Page)
+  assert.notEqual(view(tree, "DictionaryPage").key, dictionaryKey)
+  assert.notEqual(view(tree, "HistoryPage").key, historyKey)
+  assert.equal(view(tree, "CompressPage").props.draft, draft)
+})
 
 test("批次接收全部拖入和粘贴路径，恢复启动期间拒绝并发操作", async (t) => {
   const previousWindow = globalThis.window
