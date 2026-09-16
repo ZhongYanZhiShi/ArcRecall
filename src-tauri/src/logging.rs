@@ -231,13 +231,32 @@ impl LogStore {
         };
         fs::create_dir_all(&self.directory).map_err(|error| error.to_string())?;
         let active = self.active_path();
-        let current_metadata = fs::metadata(&active).ok();
-        let current_bytes = current_metadata
-            .as_ref()
-            .map_or(0, |metadata| metadata.len());
-        let rotate = current_bytes > 0
-            && current_bytes.saturating_add(line.len() as u64) > self.max_file_bytes;
-        if rotate || disk_bytes.saturating_add(line_bytes) > max_total {
+        let open_active = || {
+            OpenOptions::new()
+                .create(true)
+                .read(true)
+                .append(true)
+                .open(&active)
+                .map_err(|error| error.to_string())
+        };
+        let mut file = open_active()?;
+        let current_metadata = file.metadata().map_err(|error| error.to_string())?;
+        let current_bytes = current_metadata.len();
+        let needs_separator = if current_bytes > 0 {
+            file.seek(SeekFrom::End(-1))
+                .map_err(|error| error.to_string())?;
+            let mut last_byte = [0];
+            file.read_exact(&mut last_byte)
+                .map_err(|error| error.to_string())?;
+            last_byte[0] != b'\n'
+        } else {
+            false
+        };
+        let append_bytes = line_bytes + u64::from(needs_separator);
+        let rotate =
+            current_bytes > 0 && current_bytes.saturating_add(append_bytes) > self.max_file_bytes;
+        if rotate || disk_bytes.saturating_add(append_bytes) > max_total {
+            drop(file);
             self.cache_epoch.fetch_add(1, Ordering::Relaxed);
             self.summary_cache
                 .lock()
@@ -246,17 +265,22 @@ impl LogStore {
             if rotate {
                 self.rotate_locked()?;
             }
-            disk_bytes = self.trim_to_capacity_locked(line_bytes)?;
+            disk_bytes =
+                self.trim_to_capacity_locked(if rotate { line_bytes } else { append_bytes })?;
+            file = open_active()?;
         }
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&active)
-            .map_err(|error| error.to_string())?;
+        // Rotation or trimming may have removed the unfinished line entirely.
+        let separator_bytes =
+            if needs_separator && file.metadata().map_err(|error| error.to_string())?.len() > 0 {
+                file.write_all(b"\n").map_err(|error| error.to_string())?;
+                1
+            } else {
+                0
+            };
         file.write_all(&line).map_err(|error| error.to_string())?;
         let metadata = file.metadata().map_err(|error| error.to_string())?;
-        *retained = Some(disk_bytes.saturating_add(line_bytes));
+        *retained = Some(disk_bytes.saturating_add(line_bytes + separator_bytes));
         if let Some(cached) = self
             .summary_cache
             .lock()
@@ -265,10 +289,7 @@ impl LogStore {
             .filter(|cached| {
                 cached.byte_count == current_bytes
                     && cached.ends_with_newline
-                    && cached.modified_at
-                        == current_metadata
-                            .as_ref()
-                            .and_then(|value| value.modified().ok())
+                    && cached.modified_at == current_metadata.modified().ok()
             })
         {
             let mut normalized = entry.clone();
@@ -1336,37 +1357,84 @@ mod tests {
 
     #[test]
     fn appending_after_an_unterminated_record_rebuilds_statistics() {
-        let (_directory, store) = store(1024 * 1024, 3);
-        fs::write(store.active_path(), b"unfinished-record").unwrap();
-        assert_eq!(
+        for valid in [false, true] {
+            let (_directory, store) = store(1024 * 1024, 3);
+            let initial = if valid {
+                let entry = store
+                    .write(
+                        LogLevel::Info,
+                        "test",
+                        "previous",
+                        "previous",
+                        BTreeMap::new(),
+                    )
+                    .unwrap()
+                    .unwrap();
+                serde_json::to_vec(&entry).unwrap()
+            } else {
+                b"unfinished-record".to_vec()
+            };
+            fs::write(store.active_path(), &initial).unwrap();
+            // Simulate the first write after restarting with a partially flushed file.
+            *store.file_lock.lock().unwrap() = None;
+            let before = store.list(&LogQuery::default()).unwrap();
+            assert_eq!(before.total_count, usize::from(valid));
+            assert_eq!(before.stats.unreadable_line_count, usize::from(!valid));
             store
-                .list(&LogQuery::default())
-                .unwrap()
-                .stats
-                .unreadable_line_count,
-            1
-        );
+                .write(
+                    LogLevel::Info,
+                    "test",
+                    "appended",
+                    "appended",
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let listed = store.list(&LogQuery::default()).unwrap();
+            let searched = store
+                .list(&LogQuery {
+                    search_text: "appended".into(),
+                    ..LogQuery::default()
+                })
+                .unwrap();
+            assert_eq!(listed.total_count, 1 + usize::from(valid));
+            assert_eq!(listed.stats.unreadable_line_count, usize::from(!valid));
+            assert_eq!(listed.stats, searched.stats);
+            assert_eq!(searched.entries.len(), 1);
+            assert_eq!(searched.entries[0].event, "appended");
+            assert_eq!(
+                *store.file_lock.lock().unwrap(),
+                Some(store.disk_bytes_locked().unwrap())
+            );
+        }
+    }
 
-        store
-            .write(
-                LogLevel::Info,
-                "test",
-                "appended",
-                "appended",
-                BTreeMap::new(),
-            )
-            .unwrap();
-
-        let listed = store.list(&LogQuery::default()).unwrap();
-        let searched = store
-            .list(&LogQuery {
-                search_text: "appended".into(),
-                ..LogQuery::default()
-            })
-            .unwrap();
-        assert_eq!(listed.total_count, 0);
-        assert_eq!(listed.stats.unreadable_line_count, 1);
-        assert_eq!(listed.stats, searched.stats);
+    #[test]
+    fn unterminated_records_respect_rotation_and_total_capacity() {
+        for (file_limit, total_limit, archive_bytes) in
+            [(220, 660, 0), (220, 220, 0), (1000, 1200, 1000)]
+        {
+            let directory = tempfile::tempdir().unwrap();
+            let store = LogStore::with_limits(directory.path(), file_limit, total_limit).unwrap();
+            fs::write(store.active_path(), vec![b'x'; 200]).unwrap();
+            if archive_bytes > 0 {
+                fs::write(store.archive_path(1), vec![b'x'; archive_bytes]).unwrap();
+            }
+            store
+                .write(
+                    LogLevel::Info,
+                    "test",
+                    "appended",
+                    "appended",
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let listed = store.list(&LogQuery::default()).unwrap();
+            assert_eq!(listed.entries[0].event, "appended");
+            let disk_bytes = store.disk_bytes_locked().unwrap();
+            assert!(disk_bytes <= total_limit);
+            assert_eq!(*store.file_lock.lock().unwrap(), Some(disk_bytes));
+            assert_ne!(fs::read(store.active_path()).unwrap()[0], b'\n');
+        }
     }
 
     #[test]
