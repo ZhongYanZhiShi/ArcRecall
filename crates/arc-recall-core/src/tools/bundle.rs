@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::install_io::{check_cancelled, sha256_file};
+use super::install_io::{check_cancelled, publish_installation, sha256_file};
 use super::runner::{CancellationToken, ProcessRequest, run_process};
 
 pub const ENGINE_BUNDLE_MANIFEST_VERSION: u32 = 1;
@@ -290,7 +290,7 @@ impl FullEngineBundleManager {
             &self.resource_root.join(SEVEN_ZIP_ARCHIVE),
             &seven_zip_install_dir,
             staging_root.join("7zip"),
-            ComponentLayout::ExecutableParent("7z.exe"),
+            ComponentLayout::SevenZip,
             cancellation,
         )?;
 
@@ -305,7 +305,7 @@ impl FullEngineBundleManager {
             &self.resource_root.join(HASHCAT_ARCHIVE),
             &hashcat_install_dir,
             staging_root.join("hashcat"),
-            ComponentLayout::ExecutableParent("hashcat.exe"),
+            ComponentLayout::Hashcat,
             cancellation,
         )?;
         install_component(
@@ -313,7 +313,7 @@ impl FullEngineBundleManager {
             &self.resource_root.join(JOHN_ARCHIVE),
             &self.john_root(),
             staging_root.join("john"),
-            ComponentLayout::ParentOfDirectoryContaining("john.exe"),
+            ComponentLayout::John,
             cancellation,
         )?;
         let perl_install_dir = self
@@ -327,7 +327,7 @@ impl FullEngineBundleManager {
             &self.resource_root.join(PERL_ARCHIVE),
             &perl_install_dir,
             staging_root.join("perl"),
-            ComponentLayout::ParentOfDirectoryContainingDirectory("perl.exe"),
+            ComponentLayout::Perl,
             cancellation,
         )?;
 
@@ -390,9 +390,40 @@ impl FullEngineBundleManager {
 }
 
 enum ComponentLayout {
-    ExecutableParent(&'static str),
-    ParentOfDirectoryContaining(&'static str),
-    ParentOfDirectoryContainingDirectory(&'static str),
+    SevenZip,
+    Hashcat,
+    John,
+    Perl,
+}
+
+impl ComponentLayout {
+    fn executable(&self) -> &'static str {
+        match self {
+            Self::SevenZip => "7z.exe",
+            Self::Hashcat => "hashcat.exe",
+            Self::John => "run/john.exe",
+            Self::Perl => "perl/bin/perl.exe",
+        }
+    }
+
+    fn is_complete(&self, root: &Path) -> bool {
+        let required: &[&str] = match self {
+            Self::SevenZip => &["7z.exe", "7z.dll"],
+            Self::Hashcat => return super::hashcat::complete_hashcat_directory(root),
+            Self::John => &[
+                "run/john.exe",
+                "run/7z2john.pl",
+                "run/rar2john.exe",
+                "run/zip2john.exe",
+            ],
+            Self::Perl => &[
+                "perl/bin/perl.exe",
+                "perl/bin/perl542.dll",
+                "perl/lib/Config.pm",
+            ],
+        };
+        required.iter().all(|path| root.join(path).is_file())
+    }
 }
 
 fn install_component(
@@ -404,14 +435,8 @@ fn install_component(
     cancellation: &CancellationToken,
 ) -> Result<(), EngineBundleError> {
     check_cancelled(cancellation)?;
-    if component_sentinel(install_dir, &layout).is_file() {
+    if layout.is_complete(install_dir) {
         return Ok(());
-    }
-    if install_dir.exists() {
-        return Err(EngineBundleError::Message(format!(
-            "发现不完整的引擎目录：{}。请移走该版本目录后重试。",
-            install_dir.display()
-        )));
     }
     fs::create_dir_all(&staging_dir)?;
     extract_archive(extractor, archive, &staging_dir, cancellation)?;
@@ -421,41 +446,24 @@ fn install_component(
             archive.display()
         ))
     })?;
-    if let Some(parent) = install_dir.parent() {
-        fs::create_dir_all(parent)?;
+    if !layout.is_complete(&source_root) {
+        return Err(EngineBundleError::Message(format!(
+            "归档 {} 缺少必要运行文件，未替换现有安装。",
+            archive.display()
+        )));
     }
     check_cancelled(cancellation)?;
-    fs::rename(&source_root, install_dir)?;
+    publish_installation(&source_root, install_dir)?;
     Ok(())
 }
 
-fn component_sentinel(install_dir: &Path, layout: &ComponentLayout) -> PathBuf {
-    match layout {
-        ComponentLayout::ExecutableParent(name) => install_dir.join(name),
-        ComponentLayout::ParentOfDirectoryContaining(name) => install_dir.join("run").join(name),
-        ComponentLayout::ParentOfDirectoryContainingDirectory(name) => {
-            install_dir.join("perl").join("bin").join(name)
-        }
-    }
-}
-
 fn locate_component_root(staging_dir: &Path, layout: &ComponentLayout) -> Option<PathBuf> {
-    let executable = match layout {
-        ComponentLayout::ExecutableParent(name)
-        | ComponentLayout::ParentOfDirectoryContaining(name)
-        | ComponentLayout::ParentOfDirectoryContainingDirectory(name) => {
-            find_file(staging_dir, name)?
-        }
-    };
-    match layout {
-        ComponentLayout::ExecutableParent(_) => executable.parent().map(Path::to_path_buf),
-        ComponentLayout::ParentOfDirectoryContaining(_) => {
-            executable.parent()?.parent().map(Path::to_path_buf)
-        }
-        ComponentLayout::ParentOfDirectoryContainingDirectory(_) => {
-            executable.ancestors().nth(3).map(Path::to_path_buf)
-        }
-    }
+    let relative = Path::new(layout.executable());
+    let executable = find_file(staging_dir, relative.file_name()?.to_str()?)?;
+    executable
+        .ancestors()
+        .nth(relative.components().count())
+        .map(Path::to_path_buf)
 }
 
 fn extract_archive(
@@ -667,5 +675,37 @@ mod tests {
         assert!(status.has_rar2john);
         assert!(status.has_zip2john);
         assert!(status.john_cpu_ready);
+
+        // Reinstall must repair missing support files even while the executables remain.
+        for path in [
+            manager.seven_zip_executable().with_file_name("7z.dll"),
+            manager
+                .hashcat_executable()
+                .with_file_name("tunings")
+                .join("Alias.hctune"),
+            manager.john_tools_directory().join("zip2john.exe"),
+            manager.perl_executable().with_file_name("perl542.dll"),
+        ] {
+            fs::remove_file(path).unwrap();
+        }
+        fs::write(manager.john_root().join("user-note.txt"), "keep me").unwrap();
+        assert!(!manager.status().installed);
+        assert!(manager.install().unwrap().success);
+        assert!(manager.status().installed);
+        let backups: Vec<_> = fs::read_dir(manager.john_root().parent().unwrap())
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("engine-incomplete-")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(
+            fs::read_to_string(backups[0].path().join("previous/user-note.txt")).unwrap(),
+            "keep me"
+        );
     }
 }

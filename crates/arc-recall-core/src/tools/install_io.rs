@@ -1,10 +1,35 @@
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
 use super::CancellationToken;
+
+/// Publish a staged component, keeping any previous installation as a backup.
+/// Do not cancel between the two renames: failure must restore the old directory.
+pub(super) fn publish_installation(source: &Path, destination: &Path) -> io::Result<()> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| io::Error::other("安装目录缺少父目录"))?;
+    fs::create_dir_all(parent)?;
+    let backup = if destination.symlink_metadata().is_ok() {
+        let backup = tempfile::Builder::new()
+            .prefix("engine-incomplete-")
+            .tempdir_in(parent)?;
+        fs::rename(destination, backup.path().join("previous"))?;
+        Some(backup.keep())
+    } else {
+        None
+    };
+    if let Err(error) = fs::rename(source, destination) {
+        if let Some(backup) = backup {
+            fs::rename(backup.join("previous"), destination)?;
+        }
+        return Err(error);
+    }
+    Ok(())
+}
 
 pub(super) fn check_cancelled(cancellation: &CancellationToken) -> io::Result<()> {
     if cancellation.is_cancelled() {
@@ -61,6 +86,21 @@ pub(super) fn sha256_file(path: &Path, cancellation: &CancellationToken) -> io::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_publication_restores_previous_installation() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("installed");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("user.txt"), "keep me").unwrap();
+        assert!(
+            publish_installation(&directory.path().join("missing-source"), &destination).is_err()
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("user.txt")).unwrap(),
+            "keep me"
+        );
+    }
 
     #[test]
     fn cancellation_stops_copy_instead_of_retrying() {

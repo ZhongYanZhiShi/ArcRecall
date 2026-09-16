@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::CancellationToken;
-use super::install_io::{CancellableReader, check_cancelled, sha256_file};
+use super::install_io::{CancellableReader, check_cancelled, publish_installation, sha256_file};
 
 /// Pinned release — never use `/latest` for installs (matches original ArcRecall).
 pub const HASHCAT_MANIFEST_VERSION: &str = "7.1.2";
@@ -203,28 +203,14 @@ impl HashcatToolDownloader {
         // Preserve an old incomplete installation so retry can repair it without
         // deleting files that may have been placed there by the user.
         check_cancelled(cancellation)?;
-        let backup = if install_dir.symlink_metadata().is_ok() {
-            let backup = tempfile::Builder::new()
-                .prefix("hashcat-incomplete-")
-                .tempdir_in(parent)?;
-            fs::rename(&install_dir, backup.path().join("previous"))?;
-            Some(backup.keep())
-        } else {
-            None
-        };
-        if let Err(error) = fs::rename(extracted_root, &install_dir) {
-            if let Some(backup) = backup {
-                let _ = fs::rename(backup.join("previous"), &install_dir);
-            }
-            return Err(error.into());
-        }
+        publish_installation(extracted_root, &install_dir)?;
         Ok(())
     }
 }
 
-fn complete_hashcat_directory(root: &Path) -> bool {
+pub(super) fn complete_hashcat_directory(root: &Path) -> bool {
     root.join(hashcat_exe_name()).is_file()
-        && root.join("hashcat.hctune").is_file()
+        && root.join("tunings/Alias.hctune").is_file()
         && ["OpenCL", "modules"].iter().all(|directory| {
             fs::read_dir(root.join(directory))
                 .is_ok_and(|entries| entries.flatten().any(|entry| entry.path().is_file()))
@@ -436,7 +422,11 @@ mod tests {
         fs::create_dir_all(downloader.install_directory()).unwrap();
         fs::write(downloader.expected_executable(), b"incomplete old install").unwrap();
         assert!(!downloader.status("").installed);
-        for resource in ["OpenCL/kernel.cl", "modules/module.dll", "hashcat.hctune"] {
+        for resource in [
+            "OpenCL/kernel.cl",
+            "modules/module.dll",
+            "tunings/Alias.hctune",
+        ] {
             let path = package.join(resource);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, b"resource").unwrap();
@@ -463,7 +453,7 @@ mod tests {
                 entry
                     .file_name()
                     .to_string_lossy()
-                    .starts_with("hashcat-incomplete-")
+                    .starts_with("engine-incomplete-")
             })
             .unwrap();
         assert_eq!(
