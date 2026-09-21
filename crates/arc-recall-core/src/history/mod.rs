@@ -214,20 +214,23 @@ impl RecoveryHistoryStore {
             let skip = query.skip.max(0);
             let take = query.take.clamp(1, 500);
 
-            let total_count = count_query(conn, "SELECT COUNT(*) FROM recovery_history;", None)?;
+            // Recovery workers use independent store connections. Keep every
+            // count and the displayed page in one snapshot while they write.
+            let tx = conn.unchecked_transaction()?;
+            let total_count = count_query(&tx, "SELECT COUNT(*) FROM recovery_history;", None)?;
             let password_count = count_query(
-                conn,
+                &tx,
                 "SELECT COUNT(*) FROM recovery_history WHERE password_protected IS NOT NULL;",
                 None,
             )?;
             let matched_count = count_query(
-                conn,
+                &tx,
                 "SELECT COUNT(*) FROM recovery_history
                  WHERE ?1 = '' OR instr(fingerprint_sha256, ?1) = 1;",
                 Some(&search),
             )?;
 
-            let mut statement = conn.prepare_cached(
+            let mut statement = tx.prepare_cached(
                 "SELECT
                     id,
                     substr(fingerprint_sha256, 1, ?2),
@@ -260,6 +263,8 @@ impl RecoveryHistoryStore {
                 },
             )?;
             let entries = rows.collect::<Result<Vec<_>, _>>()?;
+            drop(statement);
+            tx.commit()?;
 
             Ok(RecoveryHistoryListResult {
                 entries,
@@ -619,6 +624,60 @@ mod tests {
                 .total_count,
             0
         );
+    }
+
+    #[test]
+    fn list_keeps_counts_and_rows_consistent_during_background_writes() {
+        use std::sync::Barrier;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let (_directory, store) = store();
+        store.upsert(&record('a', 100, Some("saved"))).unwrap();
+        let barrier = Barrier::new(2);
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let writer = scope.spawn(|| {
+                let mut connection = Connection::open(store.database_path()).unwrap();
+                connection
+                    .busy_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                barrier.wait();
+                for index in 0..2_000 {
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let tx = connection.transaction().unwrap();
+                    tx.execute("DELETE FROM recovery_history;", []).unwrap();
+                    for fingerprint in if index % 2 == 0 { "ab" } else { "a" }.chars() {
+                        RecoveryHistoryStore::upsert_record(
+                            &tx,
+                            &record(fingerprint, 100, Some("saved")),
+                        )
+                        .unwrap();
+                    }
+                    tx.commit().unwrap();
+                }
+            });
+            barrier.wait();
+            let mut mismatch = None;
+            for _ in 0..200 {
+                let result = store.list(&RecoveryHistoryQuery::default()).unwrap();
+                let entry_count = result.entries.len() as u64;
+                if result.total_count != entry_count
+                    || result.matched_count != entry_count
+                    || result.password_count != entry_count
+                {
+                    mismatch = Some(result);
+                    break;
+                }
+            }
+            stop.store(true, Ordering::Release);
+            writer.join().unwrap();
+            assert!(
+                mismatch.is_none(),
+                "inconsistent read snapshot: {mismatch:?}"
+            );
+        });
     }
 
     #[test]

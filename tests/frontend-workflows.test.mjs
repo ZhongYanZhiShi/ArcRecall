@@ -924,10 +924,15 @@ test("历史明文按绝对期限隐藏，Activity 清理后异步结果不能�
   harness.hide()
   tree = harness.render(HistoryPage)
   assert.equal(passwordCell(tree).props.revealed, null)
+  await settle()
+  tree = harness.render(HistoryPage)
   pendingReveal = deferred()
   passwordCell(tree).props.onReveal()
   harness.hide()
   pendingReveal.resolve("late-secret")
+  await settle()
+  tree = harness.render(HistoryPage)
+  assert.equal(passwordCell(tree)?.props.revealed ?? null, null)
   await settle()
   tree = harness.render(HistoryPage)
   assert.equal(passwordCell(tree).props.revealed, null)
@@ -1146,4 +1151,57 @@ test("批次在页面隐藏期间换任务并完成，返回页面恢复最新�
   assert.equal(view.props.running, false)
   assert.equal(view.props.busy, false)
   assert.equal(view.props.queueContent.props.disabled, false)
+})
+
+test("历史页面每次恢复都刷新，隐藏前的迟到响应不能覆盖新结果", async (t) => {
+  enableClock(t)
+  const pending = []
+  const harness = sourceHarness({
+    "@/lib/history": {
+      HISTORY_PAGE_SIZE: 100,
+      listRecoveryHistory: () => {
+        const request = deferred()
+        pending.push(request)
+        return request.promise
+      },
+    },
+    "@/lib/sensitive-clipboard": {},
+  })
+  t.after(() => harness.hide())
+  const { HistoryPage } = harness.load("src/components/home/history-page.tsx")
+  const result = (id) => ({
+    entries: [
+      {
+        id,
+        fingerprintPrefix: `item-${id}`,
+        hasPassword: true,
+        firstSuccessAtMs: 1000,
+        lastVerifiedAtMs: 2000,
+      },
+    ],
+    matchedCount: 1,
+    totalCount: 1,
+    passwordCount: 1,
+  })
+  harness.render(HistoryPage)
+  assert.equal(pending.length, 1)
+  pending[0].resolve(result(1))
+  await settle()
+  let tree = harness.render(HistoryPage)
+  const row = () => find(tree, (node) => node.type?.name === "PasswordCell")
+  assert.equal(row().props.entry.id, 1)
+  harness.hide()
+  harness.render(HistoryPage)
+  assert.equal(pending.length, 2)
+  harness.hide()
+  harness.render(HistoryPage)
+  assert.equal(pending.length, 3)
+  pending[2].resolve(result(3))
+  await settle()
+  tree = harness.render(HistoryPage)
+  assert.equal(row().props.entry.id, 3)
+  pending[1].resolve(result(2))
+  await settle()
+  tree = harness.render(HistoryPage)
+  assert.equal(row().props.entry.id, 3)
 })

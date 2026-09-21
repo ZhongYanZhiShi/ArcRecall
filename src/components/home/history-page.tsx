@@ -107,7 +107,8 @@ export function HistoryPage() {
   const [appliedSearch, setAppliedSearch] = React.useState("")
   const [pageIndex, setPageIndex] = React.useState(0)
   const [loading, setLoading] = React.useState(true)
-  const [busy, setBusy] = React.useState(false)
+  const [working, setBusy] = React.useState(false)
+  const busy = loading || working
   const [error, setError] = React.useState<string | null>(null)
   const [notice, setNotice] = React.useState<string | null>(null)
   const [revealed, setRevealed] = React.useState<RevealedPassword | null>(null)
@@ -115,7 +116,8 @@ export function HistoryPage() {
   const [deleteTarget, setDeleteTarget] =
     React.useState<RecoveryHistoryEntry | null>(null)
   const [clearDialogOpen, setClearDialogOpen] = React.useState(false)
-  const initialLoadStarted = React.useRef(false)
+  const requestSequence = React.useRef(0)
+  const operationBusy = React.useRef(false)
   const revealVersion = React.useRef(0)
 
   React.useLayoutEffect(() => {
@@ -128,13 +130,17 @@ export function HistoryPage() {
 
   const load = React.useCallback(
     async (searchText = appliedSearch, requestedPage = pageIndex) => {
+      const requestId = ++requestSequence.current
+      setLoading(true)
       setError(null)
+      setNotice(null)
       try {
         let next = await listRecoveryHistory({
           searchText,
           skip: requestedPage * HISTORY_PAGE_SIZE,
           take: HISTORY_PAGE_SIZE,
         })
+        if (requestId !== requestSequence.current) return null
         const pageCount = Math.max(
           1,
           Math.ceil(next.matchedCount / HISTORY_PAGE_SIZE)
@@ -150,39 +156,35 @@ export function HistoryPage() {
             take: HISTORY_PAGE_SIZE,
           })
         }
+        if (requestId !== requestSequence.current) return null
         setResult(next)
         setPageIndex(resolvedPage)
         setAppliedSearch(searchText)
         setRevealed(null)
         return next
       } catch (reason) {
-        setError(toErrorMessage(reason))
+        if (requestId === requestSequence.current) {
+          setError(toErrorMessage(reason))
+        }
         return null
+      } finally {
+        if (requestId === requestSequence.current) setLoading(false)
       }
     },
     [appliedSearch, pageIndex]
   )
 
+  const latestLoad = React.useRef(load)
+  React.useLayoutEffect(() => {
+    latestLoad.current = load
+  }, [load])
+
   React.useEffect(() => {
-    if (initialLoadStarted.current) {
-      return
+    // Activity resumes this effect when returning from another workbench page.
+    void latestLoad.current()
+    return () => {
+      requestSequence.current += 1
     }
-    initialLoadStarted.current = true
-    void listRecoveryHistory({
-      searchText: "",
-      skip: 0,
-      take: HISTORY_PAGE_SIZE,
-    })
-      .then((next) => {
-        setResult(next)
-      })
-      .catch((reason) => {
-        initialLoadStarted.current = false
-        setError(toErrorMessage(reason))
-      })
-      .finally(() => {
-        setLoading(false)
-      })
   }, [])
 
   React.useEffect(() => {
@@ -206,9 +208,10 @@ export function HistoryPage() {
 
   const runBusy = React.useCallback(
     async (action: () => Promise<void>) => {
-      if (busy) {
+      if (busy || operationBusy.current) {
         return
       }
+      operationBusy.current = true
       setBusy(true)
       setError(null)
       setNotice(null)
@@ -217,6 +220,7 @@ export function HistoryPage() {
       } catch (reason) {
         setError(toErrorMessage(reason))
       } finally {
+        operationBusy.current = false
         setBusy(false)
       }
     },
@@ -231,8 +235,7 @@ export function HistoryPage() {
 
   const handleRefresh = React.useCallback(() => {
     void runBusy(async () => {
-      await load()
-      setNotice("历史记录已刷新。")
+      if (await load()) setNotice("历史记录已刷新。")
     })
   }, [load, runBusy])
 
