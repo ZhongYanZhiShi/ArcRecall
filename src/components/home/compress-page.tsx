@@ -32,6 +32,10 @@ import {
   compressionSourceIdentity,
   normalizeCompressionSourcePath,
 } from "@/lib/compression-path"
+import {
+  CompressionRenameError,
+  startCompressionWithRename,
+} from "@/lib/compression-start"
 import { isDesktopRuntime } from "@/lib/dictionary"
 import { openPath } from "@/lib/settings"
 import { useDesktopTask } from "@/hooks/use-desktop-task"
@@ -391,29 +395,31 @@ export function CompressPage({
       setError(null)
       setAiError(null)
       try {
-        let resolvedName = baseName.trim()
-        if (useAiRename && !skipAiRename) {
-          resolvedName = await generateAiArchiveName(
-            resolvedName,
-            activeAiProfile?.id
-          )
-          onDraftChange((current) => ({ ...current, baseName: resolvedName }))
-        }
-        const next = await startCompression({
-          sources,
-          outputDirectory:
-            outputMode === "custom" ? outputDirectory : undefined,
-          baseName: resolvedName,
-          format,
-          level,
-          password: password || undefined,
-          usePermanentPassword: hasPermanentPassword && usePermanentPassword,
-          encryptFileNames,
+        const next = await startCompressionWithRename(baseName.trim(), {
+          rename:
+            useAiRename && !skipAiRename
+              ? (name) => generateAiArchiveName(name, activeAiProfile?.id)
+              : undefined,
+          onRenamed: (name) =>
+            onDraftChange((current) => ({ ...current, baseName: name })),
+          start: (name) =>
+            startCompression({
+              sources,
+              outputDirectory:
+                outputMode === "custom" ? outputDirectory : undefined,
+              baseName: name,
+              format,
+              level,
+              password: password || undefined,
+              usePermanentPassword:
+                hasPermanentPassword && usePermanentPassword,
+              encryptFileNames,
+            }),
         })
         setTask(next)
       } catch (reason) {
         const message = toErrorMessage(reason)
-        if (useAiRename && !skipAiRename) {
+        if (reason instanceof CompressionRenameError) {
           setAiError(message)
         } else {
           setError(message)
