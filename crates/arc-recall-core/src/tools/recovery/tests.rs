@@ -1748,6 +1748,71 @@ fn cancellation_stops_before_external_engines() {
     ));
 }
 
+#[test]
+fn completed_external_engine_rechecks_long_candidates_with_seven_zip() {
+    let Some(seven_zip) = locate_seven_zip() else {
+        eprintln!("skip: 7z.exe not found");
+        return;
+    };
+
+    // Simulate the exhausted engine boundary without requiring Hashcat/OpenCL
+    // or John. Real 7-Zip must still recover candidates past each engine limit.
+    for (format, limit, password) in [
+        ("-t7z", 256, "a".repeat(257)),
+        ("-t7z", 28, "密".repeat(11)),
+        ("-tzip", 31, "a".repeat(32)),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let payload = directory.path().join("payload.txt");
+        fs::write(&payload, b"long-candidate-ok").unwrap();
+        let archive = directory.path().join(if format == "-t7z" {
+            "long.7z"
+        } else {
+            "long.zip"
+        });
+        create_encrypted_archive(&seven_zip, format, &password, &archive, &payload);
+        let dictionary_path = directory.path().join("dictionary");
+        fs::write(&dictionary_path, format!("wrong-short\r\n{password}\r\n")).unwrap();
+        let job = RecoveryJob {
+            archive_path: archive,
+            output_directory: directory.path().join("output"),
+            dictionary_path,
+            dictionary_count: 2,
+            known_password: None,
+            work_directory: directory.path().join("work"),
+        };
+        fs::create_dir(&job.work_directory).unwrap();
+        let tools = RecoveryToolPaths {
+            seven_zip: seven_zip.clone(),
+            hashcat: directory.path().join("missing-hashcat"),
+            john_tools_directory: directory.path().join("missing-john"),
+            perl: directory.path().join("missing-perl"),
+        };
+        let input = RecoveryInput {
+            job: &job,
+            archive_bytes: fs::metadata(&job.archive_path).unwrap().len(),
+            disk_budget: &TaskDiskBudget::default(),
+        };
+        let result = cracking::finish_external_dictionary(
+            &input,
+            &tools,
+            &CancellationToken::default(),
+            &mut |_| {},
+            &std::collections::HashSet::new(),
+            limit,
+            "external test engine",
+        )
+        .expect("long candidate fallback");
+
+        assert!(result.success, "{}", result.message);
+        assert_eq!(result.password.as_deref(), Some(password.as_str()));
+        assert_eq!(
+            fs::read(job.output_directory.join("payload.txt")).unwrap(),
+            b"long-candidate-ok"
+        );
+    }
+}
+
 /// openwall/john-samples RAR fixtures (password = `password`).
 #[test]
 fn recovers_openwall_rar3_and_rar5_with_known_password() {

@@ -30,7 +30,7 @@ pub(super) struct HashRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CrackAttempt {
     Found(String),
-    Exhausted,
+    Exhausted(usize),
     Failed,
 }
 
@@ -73,7 +73,7 @@ pub(super) fn recover_with_dictionary(
     };
 
     let mut verified_candidates = HashSet::new();
-    let mut hashcat_completed = false;
+    let mut hashcat_covered_bytes: Option<usize> = None;
     let mut hashcat_attempted = false;
     if let Some(records) = records.as_ref() {
         if tools.hashcat.is_file() {
@@ -117,9 +117,11 @@ pub(super) fn recover_with_dictionary(
                             report,
                         ) {
                             Ok(attempt) => {
-                                let completed = attempt == CrackAttempt::Exhausted;
-                                device_completed |= completed;
-                                hashcat_completed |= completed;
+                                if let CrackAttempt::Exhausted(limit) = &attempt {
+                                    device_completed = true;
+                                    hashcat_covered_bytes =
+                                        Some(hashcat_covered_bytes.unwrap_or(0).max(*limit));
+                                }
                                 if let Some(result) = verify_crack_attempt(
                                     attempt,
                                     input,
@@ -151,14 +153,19 @@ pub(super) fn recover_with_dictionary(
         }
     }
 
-    if hashcat_completed {
-        return Ok(exhausted_result(
-            job,
-            "Hashcat 已完成当前字典，未命中密码。",
-        ));
+    if let Some(limit) = hashcat_covered_bytes {
+        return finish_external_dictionary(
+            input,
+            tools,
+            cancellation,
+            report,
+            &verified_candidates,
+            limit,
+            "Hashcat",
+        );
     }
 
-    let mut john_completed = false;
+    let mut john_covered_bytes = None;
     if let Some(records) = records.as_ref() {
         if tools.john_tools_directory.join("john.exe").is_file() {
             report(RecoveryUpdate::stage(
@@ -175,7 +182,9 @@ pub(super) fn recover_with_dictionary(
             ));
             match run_john(job, tools, records, cancellation) {
                 Ok(attempt) => {
-                    john_completed = attempt == CrackAttempt::Exhausted;
+                    if let CrackAttempt::Exhausted(limit) = &attempt {
+                        john_covered_bytes = Some(*limit);
+                    }
                     if let Some(result) = verify_crack_attempt(
                         attempt,
                         input,
@@ -196,11 +205,16 @@ pub(super) fn recover_with_dictionary(
         }
     }
 
-    if john_completed {
-        return Ok(exhausted_result(
-            job,
-            "可用的外部恢复引擎已完成，当前字典未命中密码。",
-        ));
+    if let Some(limit) = john_covered_bytes {
+        return finish_external_dictionary(
+            input,
+            tools,
+            cancellation,
+            report,
+            &verified_candidates,
+            limit,
+            "John CPU",
+        );
     }
 
     let fallback_summary = if fallback_reasons.is_empty() {
@@ -215,9 +229,14 @@ pub(super) fn recover_with_dictionary(
         0,
         job.dictionary_count,
     ));
-    if let Some(result) =
-        run_internal_dictionary(input, tools, cancellation, report, &verified_candidates)?
-    {
+    if let Some(result) = run_internal_dictionary(
+        input,
+        tools,
+        cancellation,
+        report,
+        &verified_candidates,
+        None,
+    )? {
         return Ok(result);
     }
     Ok(exhausted_result(
@@ -481,12 +500,45 @@ pub(super) fn parse_hashcat_device_types(output: &str) -> (bool, bool) {
     (gpu, cpu)
 }
 
+pub(super) fn finish_external_dictionary(
+    input: &RecoveryInput<'_>,
+    tools: &RecoveryToolPaths,
+    cancellation: &CancellationToken,
+    report: &mut impl FnMut(RecoveryUpdate),
+    already_verified: &HashSet<String>,
+    covered_password_bytes: usize,
+    engine: &str,
+) -> Result<RecoveryResult, RecoveryError> {
+    report(RecoveryUpdate::stage(
+        RecoveryPhase::Internal,
+        Some("7-Zip CPU"),
+        format!(
+            "{engine} 已完成支持长度内的候选，正在补验超过 {covered_password_bytes} 字节的候选。"
+        ),
+    ));
+    if let Some(result) = run_internal_dictionary(
+        input,
+        tools,
+        cancellation,
+        report,
+        already_verified,
+        Some(covered_password_bytes),
+    )? {
+        return Ok(result);
+    }
+    Ok(exhausted_result(
+        input.job,
+        "外部恢复引擎与长候选补验已完成，当前字典未命中密码。",
+    ))
+}
+
 fn run_internal_dictionary(
     input: &RecoveryInput<'_>,
     tools: &RecoveryToolPaths,
     cancellation: &CancellationToken,
     report: &mut impl FnMut(RecoveryUpdate),
     already_verified: &HashSet<String>,
+    covered_password_bytes: Option<usize>,
 ) -> Result<Option<RecoveryResult>, RecoveryError> {
     let job = input.job;
     let file = fs::File::open(&job.dictionary_path)?;
@@ -519,7 +571,7 @@ fn run_internal_dictionary(
                 RecoveryPhase::Internal,
                 "7-Zip CPU",
                 format!(
-                    "7-Zip CPU 正在逐条验密：{} / {}。",
+                    "7-Zip CPU 正在检查字典：{} / {}。",
                     attempted, job.dictionary_count
                 ),
                 attempted,
@@ -529,7 +581,9 @@ fn run_internal_dictionary(
             last_report_at = Instant::now();
         }
 
-        if already_verified.contains(&line) {
+        if already_verified.contains(&line)
+            || covered_password_bytes.is_some_and(|limit| line.len() <= limit)
+        {
             continue;
         }
         let verified = match verify_password(&job.archive_path, &line, tools, cancellation) {
@@ -567,7 +621,7 @@ fn run_internal_dictionary(
             RecoveryPhase::Internal,
             "7-Zip CPU",
             format!(
-                "7-Zip CPU 已完成逐条验密：{} / {}。",
+                "7-Zip CPU 已完成字典检查：{} / {}。",
                 attempted, job.dictionary_count
             ),
             attempted,
@@ -776,9 +830,55 @@ fn run_hashcat(
         return Ok(CrackAttempt::Found(password));
     }
     Ok(match output.exit_code {
-        Some(1) => CrackAttempt::Exhausted,
+        Some(1) => hashcat_password_limit(&output.stdout, &output.stderr)
+            .map(CrackAttempt::Exhausted)
+            .unwrap_or(CrackAttempt::Failed),
         _ => CrackAttempt::Failed,
     })
+}
+
+fn hashcat_password_limit(stdout: &str, stderr: &str) -> Option<usize> {
+    // Hashcat 7.1.2 emits this before processing the dictionary, including in
+    // --status-json mode. The runner retains the beginning of capped output.
+    // Its wordlist reader also silently skips entries over PW_MAX (256 bytes),
+    // before they can contribute to the status JSON's rejected count.
+    stdout
+        .lines()
+        .chain(stderr.lines())
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("Maximum password length supported by kernel:")?
+                .trim()
+                .parse::<usize>()
+                .ok()
+        })
+        .min()
+        .map(|limit| limit.min(256))
+}
+
+fn john_password_limit(records: &[HashRecord]) -> usize {
+    // Bundled John 1.9.0-jumbo-1 plaintext limits. For UTF-16 formats use the
+    // SIMD character limit as a conservative byte limit: no UTF-8 candidate
+    // below it can overflow the character buffer, regardless of build flags.
+    records
+        .iter()
+        .map(|record| {
+            if record.hash.starts_with("$7z$") {
+                28
+            } else if record.hash.starts_with("$RAR3$") {
+                26
+            } else if record.hash.starts_with("$rar5$") {
+                32
+            } else if record.hash.starts_with("$pkzip2$") {
+                31
+            } else if record.hash.starts_with("$zip2$") {
+                125
+            } else {
+                0
+            }
+        })
+        .min()
+        .unwrap_or(0)
 }
 
 // Read only numeric telemetry. Never forward target hashes, candidate text,
@@ -855,7 +955,7 @@ fn run_john(
         }
     }
     Ok(if output.success {
-        CrackAttempt::Exhausted
+        CrackAttempt::Exhausted(john_password_limit(records))
     } else {
         CrackAttempt::Failed
     })
@@ -981,6 +1081,99 @@ pub(super) fn decode_password(value: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::tools::probe_john_perl;
+
+    #[test]
+    fn completed_hashcat_uses_the_reported_kernel_limit_and_wordlist_cap() {
+        assert_eq!(
+            hashcat_password_limit(
+                "Maximum password length supported by kernel: 128\r\n{\"progress\":[1,1]}",
+                "",
+            ),
+            Some(128)
+        );
+        assert_eq!(
+            hashcat_password_limit("", "Maximum password length supported by kernel: 512"),
+            Some(256)
+        );
+        assert_eq!(hashcat_password_limit("{\"progress\":[1,1]}", ""), None);
+        assert_eq!(
+            hashcat_password_limit("Maximum password length supported by kernel: unknown", ""),
+            None
+        );
+    }
+
+    #[test]
+    fn completed_john_uses_the_conservative_limit_for_mixed_hashes() {
+        let mut records: Vec<_> = ["$zip2$", "$pkzip2$"]
+            .into_iter()
+            .map(|hash| HashRecord {
+                john_line: String::new(),
+                hash: hash.into(),
+            })
+            .collect();
+        assert_eq!(john_password_limit(&records), 31);
+        records.push(HashRecord {
+            john_line: String::new(),
+            hash: "unknown".into(),
+        });
+        assert_eq!(john_password_limit(&records), 0);
+        assert_eq!(john_password_limit(&[]), 0);
+    }
+
+    #[test]
+    fn completed_external_engine_does_not_retry_covered_candidates() {
+        let directory = tempfile::tempdir().unwrap();
+        let job = RecoveryJob {
+            archive_path: directory.path().join("unused-archive"),
+            output_directory: directory.path().join("unused-output"),
+            dictionary_path: directory.path().join("dictionary"),
+            dictionary_count: 2,
+            known_password: None,
+            work_directory: directory.path().join("unused-work"),
+        };
+        fs::write(
+            &job.dictionary_path,
+            format!("{}\r\n{}", "a".repeat(256), "中".repeat(85)),
+        )
+        .unwrap();
+        let tools = RecoveryToolPaths {
+            seven_zip: directory.path().join("missing-7z"),
+            hashcat: directory.path().join("missing-hashcat"),
+            john_tools_directory: directory.path().join("missing-john"),
+            perl: directory.path().join("missing-perl"),
+        };
+        let input = RecoveryInput {
+            job: &job,
+            archive_bytes: 0,
+            disk_budget: &super::super::TaskDiskBudget::default(),
+        };
+        let result = finish_external_dictionary(
+            &input,
+            &tools,
+            &CancellationToken::default(),
+            &mut |_| {},
+            &HashSet::new(),
+            256,
+            "Hashcat",
+        )
+        .expect("covered candidates must not launch missing 7-Zip");
+        assert!(!result.success);
+
+        let cancellation = CancellationToken::default();
+        cancellation.cancel();
+        assert!(matches!(
+            finish_external_dictionary(
+                &input,
+                &tools,
+                &cancellation,
+                &mut |_| {},
+                &HashSet::new(),
+                256,
+                "Hashcat",
+            ),
+            Err(RecoveryError::Cancelled)
+        ));
+    }
 
     #[test]
     fn hashcat_status_only_projects_numeric_telemetry() {
