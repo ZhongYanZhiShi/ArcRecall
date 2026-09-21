@@ -1,5 +1,8 @@
 #[cfg(windows)]
-fn clear_clipboard_if_matches_impl(expected: &str) -> Result<bool, String> {
+fn clear_clipboard_if_matches_impl(
+    expected: &str,
+    window: windows_sys::Win32::Foundation::HWND,
+) -> Result<bool, String> {
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard,
     };
@@ -7,11 +10,16 @@ fn clear_clipboard_if_matches_impl(expected: &str) -> Result<bool, String> {
 
     const CF_UNICODETEXT: u32 = 13;
 
+    if window.is_null() {
+        return Err("无法获取剪贴板操作所需的窗口句柄。".into());
+    }
+
     let mut opened = false;
     for _ in 0..5 {
-        // SAFETY: A null owner is allowed and the clipboard is closed by the
-        // guard below before this function returns.
-        if unsafe { OpenClipboard(std::ptr::null_mut()) } != 0 {
+        // SAFETY: The synchronous command supplies its live Tauri window. A real
+        // window handle prevents unrelated NULL-owner calls from reopening and
+        // closing the clipboard during the comparison. The guard closes it.
+        if unsafe { OpenClipboard(window) } != 0 {
             opened = true;
             break;
         }
@@ -84,6 +92,20 @@ fn clear_clipboard_if_matches_impl(_expected: &str) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub(crate) fn clipboard_clear_if_matches(expected: String) -> Result<bool, String> {
-    clear_clipboard_if_matches_impl(&expected)
+pub(crate) fn clipboard_clear_if_matches(
+    window: tauri::Window,
+    expected: String,
+) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        let handle = window
+            .hwnd()
+            .map_err(|error| format!("无法获取剪贴板操作所需的窗口句柄：{error}"))?;
+        clear_clipboard_if_matches_impl(&expected, handle.0)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        clear_clipboard_if_matches_impl(&expected)
+    }
 }
