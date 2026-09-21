@@ -1913,6 +1913,10 @@ fn dictionary_recovery_cracks_encrypted_7z_and_zip() {
     let password = "dict-pass-42";
     let dictionary_path = dir.path().join("wordlist.txt");
     fs::write(&dictionary_path, "wrong1\nwrong2\ndict-pass-42\nwrong3\n").unwrap();
+    let mut john_only_tools = tools.clone();
+    john_only_tools.hashcat = tools_root
+        .path()
+        .join("intentionally-unavailable-hashcat.exe");
 
     for (name, format_flag) in [("dict.7z", "-t7z"), ("dict.zip", "-tzip")] {
         let archive = dir.path().join(name);
@@ -1942,33 +1946,49 @@ fn dictionary_recovery_cracks_encrypted_7z_and_zip() {
             "{name}: converter produced no hash records"
         );
 
-        let output_directory = dir.path().join(format!("{name}-out"));
-        let job = RecoveryJob {
-            archive_path: archive,
-            output_directory: output_directory.clone(),
-            dictionary_path: dictionary_path.clone(),
-            dictionary_count: 4,
-            known_password: None,
-            work_directory: dir.path().join(format!("{name}-work")),
-        };
-        fs::create_dir_all(&job.work_directory).unwrap();
-        let cancellation = CancellationToken::default();
-        let mut phases = Vec::new();
-        let result = recover_and_extract(&job, &tools, &cancellation, |update| {
-            phases.push(update.phase);
-        })
-        .expect("dictionary recovery");
+        for (engine_path, active_tools) in [("auto", &tools), ("john", &john_only_tools)] {
+            let output_directory = dir.path().join(format!("{name}-{engine_path}-out"));
+            let job = RecoveryJob {
+                archive_path: archive.clone(),
+                output_directory: output_directory.clone(),
+                dictionary_path: dictionary_path.clone(),
+                dictionary_count: 4,
+                known_password: None,
+                work_directory: dir.path().join(format!("{name}-{engine_path}-work")),
+            };
+            fs::create_dir_all(&job.work_directory).unwrap();
+            let cancellation = CancellationToken::default();
+            let mut phases = Vec::new();
+            let result = recover_and_extract(&job, active_tools, &cancellation, |update| {
+                phases.push(update.phase);
+            })
+            .expect("dictionary recovery");
 
-        assert!(result.success, "{name}: {}", result.message);
-        assert_eq!(result.password.as_deref(), Some(password));
-        assert_eq!(
-            fs::read_to_string(output_directory.join("payload.txt")).unwrap(),
-            "dictionary-recovery-ok"
-        );
-        assert!(
-            phases.contains(&RecoveryPhase::Converting),
-            "{name}: expected converting phase, got {phases:?}"
-        );
+            assert!(result.success, "{name} ({engine_path}): {}", result.message);
+            let engine = result.engine.as_deref();
+            eprintln!("native recovery {name} ({engine_path}): {engine:?}");
+            if engine_path == "john" {
+                assert_eq!(
+                    engine,
+                    Some("John CPU"),
+                    "{name}: expected real John recovery"
+                );
+            } else {
+                assert!(
+                    matches!(engine, Some("Hashcat GPU" | "Hashcat CPU" | "John CPU")),
+                    "{name}: expected external-engine recovery, got {engine:?}"
+                );
+            }
+            assert_eq!(result.password.as_deref(), Some(password));
+            assert_eq!(
+                fs::read_to_string(output_directory.join("payload.txt")).unwrap(),
+                "dictionary-recovery-ok"
+            );
+            assert!(
+                phases.contains(&RecoveryPhase::Converting),
+                "{name}: expected converting phase, got {phases:?}"
+            );
+        }
     }
 }
 
@@ -1980,10 +2000,7 @@ fn dictionary_recovery_cracks_openwall_rar_samples() {
         return;
     }
     let fixtures = rar_fixture_dir();
-    if !fixtures.is_dir() {
-        eprintln!("skip: RAR fixtures missing");
-        return;
-    }
+    assert!(fixtures.is_dir(), "RAR fixtures missing");
 
     let resource_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -2049,6 +2066,12 @@ fn dictionary_recovery_cracks_openwall_rar_samples() {
         let result = recover_and_extract(&job, &tools, &CancellationToken::default(), |_| {})
             .unwrap_or_else(|error| panic!("{name} recovery failed: {error}"));
         assert!(result.success, "{name}: {}", result.message);
+        let engine = result.engine.as_deref();
+        eprintln!("native recovery {name}: {engine:?}");
+        assert!(
+            matches!(engine, Some("Hashcat GPU" | "Hashcat CPU" | "John CPU")),
+            "{name}: expected external-engine recovery, got {engine:?}"
+        );
         assert_eq!(result.password.as_deref(), Some(password));
         assert!(
             output_directory.read_dir().unwrap().next().is_some(),
@@ -2058,7 +2081,7 @@ fn dictionary_recovery_cracks_openwall_rar_samples() {
 }
 
 #[test]
-#[ignore = "expands the large real tool bundle"]
+#[ignore = "requires a usable Hashcat backend and expands the large real tool bundle"]
 fn cancel_token_kills_long_running_hashcat_attempt() {
     if !cfg!(all(windows, target_arch = "x86_64")) {
         return;
@@ -2071,9 +2094,7 @@ fn cancel_token_kills_long_running_hashcat_attempt() {
         .join("resources");
     let tools_root = tempfile::tempdir().unwrap();
     let manager = super::super::FullEngineBundleManager::new(&resource_dir, tools_root.path());
-    if !manager.status().bundled {
-        return;
-    }
+    assert!(manager.status().bundled, "run engine-bundle:prepare first");
     manager.install().expect("install engine bundle");
 
     let tools = RecoveryToolPaths {
@@ -2091,10 +2112,11 @@ fn cancel_token_kills_long_running_hashcat_attempt() {
     let archive = dir.path().join("cancel.7z");
     create_encrypted_archive(&tools.seven_zip, "-t7z", password, &archive, &payload);
 
-    // Large-ish wrong dictionary so Hashcat has work to do before exhausting.
+    // Keep enough work pending to cancel after real Hashcat progress, including
+    // on fast GPUs where a small wordlist can finish before the first update.
     let dictionary_path = dir.path().join("wrong.txt");
     let mut dict = String::new();
-    for index in 0..5_000 {
+    for index in 0..100_000 {
         dict.push_str(&format!("not-the-password-{index}\n"));
     }
     fs::write(&dictionary_path, dict).unwrap();
@@ -2103,7 +2125,7 @@ fn cancel_token_kills_long_running_hashcat_attempt() {
         archive_path: archive,
         output_directory: dir.path().join("cancel-out"),
         dictionary_path,
-        dictionary_count: 5_000,
+        dictionary_count: 100_000,
         known_password: None,
         work_directory: dir.path().join("cancel-work"),
     };
@@ -2111,11 +2133,32 @@ fn cancel_token_kills_long_running_hashcat_attempt() {
 
     let cancellation = CancellationToken::default();
     let cancel_flag = cancellation.clone();
-    let worker =
-        std::thread::spawn(move || recover_and_extract(&job, &tools, &cancellation, |_| {}));
-    std::thread::sleep(Duration::from_millis(800));
+    let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        recover_and_extract(&job, &tools, &cancellation, |update| {
+            if update.phase == RecoveryPhase::Hashcat
+                && update
+                    .hashcat_progress
+                    .as_ref()
+                    .is_some_and(|progress| progress.completed < progress.total)
+            {
+                // This callback receives the running process's numeric status,
+                // not just the stage announced before the process is spawned.
+                let _ = started_tx.try_send(());
+                cancellation.cancel();
+            }
+        })
+    });
+    let started = started_rx.recv_timeout(Duration::from_secs(120));
+    // Bound failure paths as well: a missing backend or failed launch must not
+    // leave John or the compatibility fallback processing the large wordlist.
     cancel_flag.cancel();
     let outcome = worker.join().expect("worker panicked");
+    assert!(
+        started.is_ok(),
+        "Hashcat never reported active work before cancellation: {started:?}; {outcome:?}"
+    );
+    eprintln!("native cancellation: observed active Hashcat progress before cancelling");
     assert!(
         matches!(outcome, Err(RecoveryError::Cancelled))
             || matches!(
