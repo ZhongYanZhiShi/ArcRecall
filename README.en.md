@@ -18,13 +18,38 @@ Some files shared online have their extensions removed, replaced with misleading
 
 ArcRecall reads file contents to determine the actual format, restores or corrects extensions, and works through nested archives one layer at a time. Password checks for encrypted files run locally. The Next.js frontend provides the interface, Tauri owns the native desktop lifecycle and IPC boundary, and the platform-independent Rust core handles file inspection and archive processing.
 
-## Planned features
+## Features
 
 - Detect actual formats from file signatures and internal structure
 - Inspect and unpack nested archives one layer at a time
 - Detect encryption and verify passwords locally
 - Keep processing records for later review
 - Keep local structured runtime logs with diagnostic export and SQLite backup
+- Queue multiple selected or dropped files, or pasted paths, and extract them in order with per-item results
+- Create separate copies with correct extensions, copying and consistently naming every archive volume
+- Show dictionary import progress with cancellation, and live Hashcat progress and speed
+
+A batch accepts up to 200 items. Stopping a batch preserves waiting items, and
+failed or cancelled items can be queued again. The queue is cleared when the app
+exits. Each archive uses a separate output directory; the batch's preferred
+password is used only for that batch and is not saved in browser storage.
+Hashcat progress describes the current engine attempt and starts over when the
+mode changes or the next nested archive begins.
+
+By default, nested-archive scanning skips directories containing more than 10
+direct files, along with their subdirectories. Other sibling directories are
+still scanned, and extracted content is preserved. Adjust the limit under
+Settings → Recovery engines → Directory scan file limit; set it to 0 to remove
+the file-count limit. Changes apply to new tasks. The detailed process view and
+completion summary explain skipped directories.
+
+Each recovery task shares a cumulative extraction budget of 100 GiB and 100,000
+files or directories. LZ4 decoding and split-volume copy fallbacks also count
+toward the byte budget. Windows checks available disk space before extraction,
+then checks actual output and remaining space every 500 ms while reserving at
+least 256 MiB. The budget can be briefly exceeded between checks; reaching it
+stops recursion and preserves completed output. Other platforms enforce the
+cumulative budget but currently do not query available disk space.
 
 ## Recovery history
 
@@ -56,6 +81,15 @@ removed automatically when it is reached. The Logs page supports
 human-readable summaries with expandable technical details, level/text
 filters, automatic refresh, export, clearing, opening the log directory, and
 consistent SQLite snapshots that include committed WAL data.
+
+Settings → Data can create backups or restore the dictionary and history from a
+backup in the current format. Before confirmation, the app shows record counts,
+checks integrity, and verifies that the current Windows account can decrypt
+saved passwords. It then backs up the current database and replaces the data
+in a transaction, rolling back on failure. Backups do not include application
+settings, AI API keys, or the permanent compression password. Restore backups
+containing DPAPI-protected passwords using the Windows account that created
+them; backups with unreadable passwords are blocked.
 
 The default verbosity is `info`; switch between `error`, `warn`, `info`, and
 `debug` in the same settings card. Passwords, dictionary candidate contents,
@@ -106,17 +140,43 @@ pnpm desktop:dev
 
 Tauri starts the Next.js development server and opens it in a native desktop window. Production builds embed the static Next.js export. The frontend calls Rust through Tauri commands instead of a localhost HTTP API.
 
+Development builds also process multi-GB archives, so the workspace enables
+optimization for `sha2`. All formats still use full-content SHA-256 fingerprints,
+complete password verification, and the same extraction process; this setting
+does not change fingerprint or password-matching rules. Release builds already
+enable optimization by default.
+
+To investigate processing time for large archives, explicitly run the performance
+probes in PowerShell. They are excluded from the default test run:
+
+```powershell
+$env:ARC_RECALL_PROFILE_ARCHIVE = 'E:/archives/example.7z'
+# Read-only archive analysis and full fingerprint timing, including split archives.
+cargo test -p arc-recall-core profile_archive_fingerprint -- --ignored --nocapture
+# Windows native recovery timing using local history, dictionary, and engine settings.
+cargo test -p arc-recall-desktop profile_local_archive_recovery -- --ignored --nocapture
+```
+
+The native probe requires a matching local-history password for the root archive.
+It creates temporary output alongside the archive and removes it afterward. It
+does not update history or the dictionary, or print passwords. Nested archives
+use the normal recovery process; the probe fails if any archive is skipped.
+
 ## Development checks
+
+Debug builds accept an absolute `ARC_RECALL_TEST_DATA_ROOT` to isolate the database, settings, and logs for native tests. It points directly to the ArcRecall data directory and is ignored by release builds. System credentials and the clipboard still belong to the current OS user; tests of those interfaces should use separate synthetic records and clean up afterward.
 
 ```powershell
 # Rust
 cargo fmt --all -- --check
-cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets --all-features
 
 # Web
 pnpm format:check
 pnpm lint
 pnpm typecheck
+pnpm test
 pnpm build
 
 # Desktop

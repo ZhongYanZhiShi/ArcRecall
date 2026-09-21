@@ -132,6 +132,8 @@ cargo test -p arc-recall-desktop profile_local_archive_recovery -- --ignored --n
 
 ## 开发检查
 
+调试构建可通过 `ARC_RECALL_TEST_DATA_ROOT` 指定绝对路径，使用独立的数据库、配置和日志进行原生测试。该变量指向 ArcRecall 数据目录本身；发布构建会忽略它。系统凭据和剪贴板仍属于当前系统用户，测试这些接口时应使用独立的合成记录并清理。
+
 ```powershell
 # Rust
 cargo fmt --all -- --check
