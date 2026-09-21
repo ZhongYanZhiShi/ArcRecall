@@ -22,6 +22,7 @@ export type QueueSnapshot = {
   items: QueueItem[]
   running: boolean
   stopping: boolean
+  cancelling: boolean
   error: string | null
 }
 export type QueueOptions = Omit<
@@ -67,10 +68,12 @@ export function createRecoveryQueue(api: QueueApi) {
     items: [],
     running: false,
     stopping: false,
+    cancelling: false,
     error: null,
   }
   let sequence = 0
   let activeTaskId: string | null = null
+  let stopError: string | null = null
   const listeners = new Set<() => void>()
   const publish = (update: Partial<QueueSnapshot>) => {
     if (
@@ -99,13 +102,24 @@ export function createRecoveryQueue(api: QueueApi) {
   const message = (error: unknown) =>
     error instanceof Error ? error.message : String(error)
   const stop = async () => {
-    if (!snapshot.running) return
-    publish({ stopping: true })
-    if (activeTaskId) {
-      try {
-        await api.cancel(activeTaskId)
-      } catch (error) {
-        publish({ error: `停止请求失败，仍在跟踪当前任务：${message(error)}` })
+    if (!snapshot.running || snapshot.cancelling) return
+    const cancellingTaskId = activeTaskId
+    if (!cancellingTaskId) {
+      publish({ stopping: true })
+      return
+    }
+    stopError = null
+    publish({ stopping: true, cancelling: true, error: null })
+    try {
+      await api.cancel(cancellingTaskId)
+    } catch (error) {
+      if (activeTaskId === cancellingTaskId) {
+        stopError = `停止请求失败，可再次请求停止：${message(error)}`
+        publish({ error: stopError })
+      }
+    } finally {
+      if (activeTaskId === cancellingTaskId) {
+        publish({ cancelling: false })
       }
     }
   }
@@ -168,7 +182,12 @@ export function createRecoveryQueue(api: QueueApi) {
         !snapshot.items.some((item) => item.state === "waiting")
       )
         return
-      publish({ running: true, stopping: false, error: null })
+      publish({
+        running: true,
+        stopping: false,
+        cancelling: false,
+        error: null,
+      })
       let lastOutput: string | null = null
       try {
         while (!snapshot.stopping) {
@@ -214,7 +233,9 @@ export function createRecoveryQueue(api: QueueApi) {
                 if (!next || next.taskId !== task.taskId)
                   throw new Error("无法确认当前任务状态")
                 task = next
-                if (task.running) patch(item.id, { task }, { error: null })
+                if (task.running) {
+                  patch(item.id, { task }, { error: stopError })
+                }
               } catch (error) {
                 // An uncertain IPC response must not start a second job.
                 publish({ error: `正在重新连接当前任务：${message(error)}` })
@@ -248,7 +269,8 @@ export function createRecoveryQueue(api: QueueApi) {
         }
       } finally {
         activeTaskId = null
-        publish({ running: false, stopping: false })
+        stopError = null
+        publish({ running: false, stopping: false, cancelling: false })
       }
     },
   }

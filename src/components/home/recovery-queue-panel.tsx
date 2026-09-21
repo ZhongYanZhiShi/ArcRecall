@@ -37,6 +37,9 @@ export function RecoveryQueuePanel({
   const failed = queue.items.some(
     (item) => item.state === "failed" || item.state === "cancelled"
   )
+  const currentTask = queue.items.find(
+    (item) => item.id === queue.currentItemId
+  )?.task
   return (
     <section
       aria-label="批次队列"
@@ -51,10 +54,18 @@ export function RecoveryQueuePanel({
             <Button
               size="xs"
               variant="outline"
-              disabled={queue.stopping}
+              disabled={
+                queue.cancelling || (queue.stopping && !currentTask?.running)
+              }
               onClick={() => void recoveryQueue.stop()}
             >
-              {queue.stopping ? "正在停止" : "停止批次"}
+              {queue.cancelling
+                ? "正在请求停止"
+                : queue.stopping && currentTask?.running
+                  ? "再次请求停止"
+                  : queue.stopping
+                    ? "正在停止"
+                    : "停止批次"}
             </Button>
           ) : (
             <>

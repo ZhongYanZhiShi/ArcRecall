@@ -27,7 +27,10 @@ import {
 import { uniqueArchivePaths } from "@/lib/recovery-queue"
 import { recoveryQueue } from "@/lib/recovery-queue-session"
 import { RecoveryQueuePanel } from "@/components/home/recovery-queue-panel"
-import { recoveryTaskAttachmentId } from "@/lib/recovery-task-attachment"
+import {
+  createRecoveryTaskSubscription,
+  recoveryTaskAttachmentId,
+} from "@/lib/recovery-task-attachment"
 import { copySensitiveText } from "@/lib/sensitive-clipboard"
 import { getSettings, updateSettings } from "@/lib/settings"
 import { useDesktopTask } from "@/hooks/use-desktop-task"
@@ -447,20 +450,13 @@ export function ExtractPage({
     )
   }, [task])
 
-  React.useEffect(() => {
-    let previous: RecoveryTaskStatus | null | undefined
-    return recoveryQueue.subscribe(() => {
-      const current = recoveryQueue.getSnapshot()
-      const latest =
-        current.items.find((item) => item.id === current.currentItemId)?.task ??
-        current.items.findLast((item) => item.task)?.task
-      if (latest && latest !== previous) {
-        previous = latest
-        setTask(latest)
-        setReattachedTaskId(latest.taskId)
-      }
+  const [subscribeToQueueTask] = React.useState(() =>
+    createRecoveryTaskSubscription(recoveryQueue, (latest) => {
+      setTask(latest)
+      setReattachedTaskId(latest.taskId)
     })
-  }, [setTask])
+  )
+  React.useEffect(subscribeToQueueTask, [subscribeToQueueTask])
 
   const handlePickBatch = async () => {
     if (isInputLocked()) return

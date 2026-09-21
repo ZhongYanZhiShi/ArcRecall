@@ -107,6 +107,7 @@ function sourceHarness(overrides) {
       (name) => {
         if (name in mocks) return mocks[name]
         if (name.startsWith("@/lib/")) return load(`src/${name.slice(2)}.ts`)
+        if (name.startsWith("@/hooks/")) return load(`src/${name.slice(2)}.ts`)
         if (name === "@/components/home/ai-settings-draft")
           return load("src/components/home/ai-settings-draft.ts")
         if (name === "@/components/home/compress-page-view")
@@ -1064,4 +1065,85 @@ test("工作台与设置分类的放弃操作在导航前调用草稿清除接�
   tree = settingsHarness.render(SettingsPage, settingsProps)
   assert.equal(discarded, 2)
   assert.equal(find(tree, (node) => node.type === "Tabs").props.value, "engine")
+})
+
+test("批次在页面隐藏期间换任务并完成，返回页面恢复最新结果和可用输入", async (t) => {
+  enableClock(t)
+  const testWindow = globalThis.window
+  Object.assign(globalThis.window, {
+    addEventListener() {},
+    removeEventListener() {},
+    matchMedia: () => ({ matches: true }),
+  })
+  const oldFrame = globalThis.requestAnimationFrame
+  const oldCancelFrame = globalThis.cancelAnimationFrame
+  globalThis.requestAnimationFrame = () => 1
+  globalThis.cancelAnimationFrame = () => {}
+  let latest = null
+  let sequence = 0
+  const harness = sourceHarness({
+    "@tauri-apps/api/webview": {
+      getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }),
+    },
+    "@/lib/dictionary": {
+      isDesktopRuntime: () => true,
+      countDictionary: async () => 0,
+    },
+    "@/lib/settings": { getSettings: async () => ({}) },
+    "@/lib/sensitive-clipboard": {},
+    "@/lib/recovery": {
+      getRecoveryCapabilities: async () => ({ methods: [] }),
+      analyzeArchive: async (path) => ({
+        archivePath: path,
+        suggestedOutputDirectory: path + ".out",
+      }),
+      startRecovery: async ({ archivePath }) => {
+        latest = {
+          taskId: `batch-${++sequence}`,
+          archivePath,
+          running: true,
+          completed: false,
+        }
+        return latest
+      },
+      getRecoveryStatus: async (id) =>
+        !id || latest?.taskId === id ? latest : null,
+      openOutputDirectory: async () => {},
+    },
+  })
+  t.after(() => {
+    const currentWindow = globalThis.window
+    globalThis.window = testWindow
+    harness.hide()
+    globalThis.window = currentWindow
+    globalThis.requestAnimationFrame = oldFrame
+    globalThis.cancelAnimationFrame = oldCancelFrame
+  })
+  const { ExtractPage } = harness.load("src/components/home/extract-page.tsx")
+  const render = () =>
+    harness.render(ExtractPage, { onOpenEngineSettings() {} })
+  render()
+  await settle()
+  const { recoveryQueue } = harness.load("src/lib/recovery-queue-session.ts")
+  recoveryQueue.enqueue(["C:\\first.zip", "C:\\second.zip"])
+  const completion = recoveryQueue.start({})
+  await settle()
+  let view = render()
+  assert.equal(view.props.task.taskId, "batch-1")
+  assert.equal(view.props.running, true)
+  harness.hide()
+  for (let item = 1; item <= 2; item++) {
+    latest = { ...latest, running: false, completed: true, success: true }
+    t.mock.timers.tick(700)
+    await settle()
+  }
+  await completion
+  render()
+  await settle()
+  view = render()
+  assert.equal(view.props.task.taskId, "batch-2")
+  assert.equal(view.props.task.completed, true)
+  assert.equal(view.props.running, false)
+  assert.equal(view.props.busy, false)
+  assert.equal(view.props.queueContent.props.disabled, false)
 })
