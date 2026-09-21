@@ -216,7 +216,7 @@ export function CompressPageView({
       >
         <WorkbenchPageHeader title="创建归档" titleHidden />
 
-        <div className="grid min-h-0 flex-1 grid-rows-[minmax(11rem,0.85fr)_minmax(0,1.15fr)] gap-3 lg:grid-cols-[minmax(18rem,0.85fr)_minmax(0,1.4fr)] lg:grid-rows-1">
+        <div className="grid min-h-0 flex-1 grid-rows-[minmax(11rem,0.85fr)_minmax(0,1.15fr)] gap-3 min-[960px]:grid-cols-[minmax(18rem,0.85fr)_minmax(0,1.4fr)] min-[960px]:grid-rows-1">
           <Card
             size="sm"
             className={cn(
