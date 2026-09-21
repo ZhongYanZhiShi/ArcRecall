@@ -32,6 +32,7 @@ export type SettingsCategory = "ai" | "engine" | "app" | "data"
 
 export type SettingsPageHandle = {
   saveAiChanges: () => Promise<boolean>
+  discardAiChanges: () => void
 }
 
 const CATEGORIES: {
@@ -170,6 +171,7 @@ export const SettingsPage = React.forwardRef<
   React.useImperativeHandle(ref, () => ({
     saveAiChanges: async () =>
       (await aiSettingsPanelRef.current?.saveUnsavedChanges()) ?? true,
+    discardAiChanges: () => aiSettingsPanelRef.current?.discardUnsavedChanges(),
   }))
 
   return (
@@ -271,6 +273,7 @@ export const SettingsPage = React.forwardRef<
               disabled={leaveSaveBusy}
               onClick={() => {
                 if (pendingSettingsLeave) {
+                  aiSettingsPanelRef.current?.discardUnsavedChanges()
                   completeSettingsLeave(pendingSettingsLeave)
                 }
               }}

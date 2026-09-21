@@ -205,12 +205,15 @@ export default function Page() {
     }
     const target = pendingNav
     setNavSaveBusy(true)
-    const saved = await settingsPageRef.current?.saveAiChanges()
-    setNavSaveBusy(false)
-    if (saved !== false) {
-      setPendingNav(null)
-      setSettingsAiDirty(false)
-      completeDockNavChange(target)
+    try {
+      const saved = await settingsPageRef.current?.saveAiChanges()
+      if (saved !== false) {
+        setPendingNav(null)
+        setSettingsAiDirty(false)
+        completeDockNavChange(target)
+      }
+    } finally {
+      setNavSaveBusy(false)
     }
   }, [completeDockNavChange, navSaveBusy, pendingNav])
 
@@ -345,6 +348,7 @@ export default function Page() {
                   return
                 }
                 const target = pendingNav
+                settingsPageRef.current?.discardAiChanges()
                 setPendingNav(null)
                 setSettingsAiDirty(false)
                 completeDockNavChange(target)

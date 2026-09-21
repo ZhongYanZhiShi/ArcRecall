@@ -86,6 +86,7 @@ import {
 
 export type AiSettingsPanelHandle = {
   saveUnsavedChanges: () => Promise<boolean>
+  discardUnsavedChanges: () => void
 }
 
 type AiSettingsPanelProps = {
@@ -160,11 +161,14 @@ export const AiSettingsPanel = React.forwardRef<
     requestDraftAction,
     handleSavePendingDraft,
     saveUnsavedChanges,
+    discardUnsavedChanges,
   } = controller
 
-  React.useImperativeHandle(ref, () => ({ saveUnsavedChanges }), [
-    saveUnsavedChanges,
-  ])
+  React.useImperativeHandle(
+    ref,
+    () => ({ saveUnsavedChanges, discardUnsavedChanges }),
+    [saveUnsavedChanges, discardUnsavedChanges]
+  )
 
   return (
     <div className="flex flex-col gap-2">

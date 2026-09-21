@@ -68,6 +68,18 @@ function sourceHarness(overrides) {
     useCallback(fn, deps) {
       return memo(() => fn, deps)
     },
+    forwardRef(render) {
+      return (props) => render(props, props.ref)
+    },
+    useImperativeHandle(ref, create, deps) {
+      effect(() => {
+        if (!ref) return
+        ref.current = create()
+        return () => {
+          ref.current = null
+        }
+      }, deps)
+    },
     useEffect: effect,
     useLayoutEffect: effect,
   }
@@ -95,6 +107,8 @@ function sourceHarness(overrides) {
       (name) => {
         if (name in mocks) return mocks[name]
         if (name.startsWith("@/lib/")) return load(`src/${name.slice(2)}.ts`)
+        if (name === "@/components/home/ai-settings-draft")
+          return load("src/components/home/ai-settings-draft.ts")
         if (name === "@/components/home/compress-page-view")
           return load("src/components/home/compress-page-view.tsx")
         if (name === "@/components/home/log-presentation")
@@ -917,4 +931,137 @@ test("历史明文按绝对期限隐藏，Activity 清理后异步结果不能�
   tree = harness.render(HistoryPage)
   assert.equal(passwordCell(tree).props.revealed, null)
   harness.hide()
+})
+
+test("放弃 AI 草稿立即清除密钥和提示词更改，重新读取失败也不会恢复草稿", async (t) => {
+  const previousWindow = globalThis.window
+  globalThis.window = { addEventListener() {}, removeEventListener() {} }
+  let failReload = false
+  const dirtyStates = []
+  const saved = {
+    profiles: [
+      {
+        id: "local",
+        name: "已保存配置",
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        model: "saved-model",
+        hasApiKey: true,
+      },
+    ],
+    activeProfileId: "local",
+    renamePrompt: "已保存提示词",
+  }
+  const harness = sourceHarness({
+    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@tauri-apps/api/core": {
+      invoke: async (command) => {
+        assert.equal(command, "ai_profiles_list")
+        if (failReload) throw new Error("读取失败")
+        return structuredClone(saved)
+      },
+    },
+  })
+  t.after(() => {
+    harness.hide()
+    globalThis.window = previousWindow
+  })
+  const { useAiSettingsController } = harness.load(
+    "src/components/home/use-ai-settings-controller.ts"
+  )
+  const onDirtyChange = (dirty) => dirtyStates.push(dirty)
+  const render = () =>
+    harness.render(useAiSettingsController, { onDirtyChange })
+  render()
+  await settle()
+  let controller = render()
+  controller.setDraft((draft) => ({
+    ...draft,
+    name: "未保存配置",
+    apiKey: "synthetic-secret",
+    clearApiKey: true,
+  }))
+  controller.setPrompt("未保存提示词")
+  controller = render()
+  assert.equal(dirtyStates.at(-1), true)
+  controller.discardUnsavedChanges()
+  controller = render()
+  assert.equal(controller.draft.name, "已保存配置")
+  assert.equal(controller.draft.apiKey, "")
+  assert.equal(controller.draft.clearApiKey, false)
+  assert.equal(controller.prompt, "已保存提示词")
+  assert.equal(dirtyStates.at(-1), false)
+
+  harness.hide()
+  failReload = true
+  render()
+  await settle()
+  controller = render()
+  assert.equal(controller.draft.apiKey, "")
+  assert.equal(controller.profileDirty, false)
+  assert.equal(controller.promptDirty, false)
+  assert.match(controller.profileFeedback.message, /读取失败/)
+  controller.setDraft((draft) => ({ ...draft, name: "再次编辑" }))
+  render()
+  assert.equal(dirtyStates.at(-1), true)
+})
+
+test("工作台与设置分类的放弃操作在导航前调用草稿清除接口", (t) => {
+  const previousWindow = globalThis.window
+  globalThis.window = {
+    matchMedia: () => ({ matches: true }),
+    requestIdleCallback: () => 1,
+    cancelIdleCallback() {},
+  }
+  const names = [
+    "ExtractPage",
+    "CompressPage",
+    "DictionaryPage",
+    "HistoryPage",
+    "LogsPage",
+    "SettingsPage",
+  ]
+  const pageHarness = sourceHarness({
+    "next/dynamic": { default: () => names.shift(), __esModule: true },
+  })
+  const settingsHarness = sourceHarness({})
+  t.after(() => {
+    pageHarness.hide()
+    settingsHarness.hide()
+    globalThis.window = previousWindow
+  })
+  const Page = pageHarness.load("src/app/page.tsx").default
+  let tree = pageHarness.render(Page)
+  const shell = () => find(tree, (node) => node.type === "AppShell")
+  shell().props.onNavChange("settings")
+  tree = pageHarness.render(Page)
+  const settings = find(tree, (node) => node.type === "SettingsPage")
+  let discarded = 0
+  settings.props.ref.current = { discardAiChanges: () => discarded++ }
+  settings.props.onAiDirtyChange(true)
+  tree = pageHarness.render(Page)
+  shell().props.onNavChange("logs")
+  tree = pageHarness.render(Page)
+  assert.equal(shell().props.activeNav, "settings")
+  button(tree, "放弃更改").props.onClick()
+  tree = pageHarness.render(Page)
+  assert.equal(discarded, 1)
+  assert.equal(shell().props.activeNav, "logs")
+
+  const { SettingsPage } = settingsHarness.load(
+    "src/components/home/settings-page.tsx"
+  )
+  const settingsProps = { initialCategory: "ai", onDatabaseRestored() {} }
+  tree = settingsHarness.render(SettingsPage, settingsProps)
+  const panel = find(tree, (node) => node.type === "AiSettingsPanel")
+  panel.props.ref.current = { discardUnsavedChanges: () => discarded++ }
+  panel.props.onDirtyChange(true)
+  tree = settingsHarness.render(SettingsPage, settingsProps)
+  find(tree, (node) => node.type === "Tabs").props.onValueChange("engine")
+  tree = settingsHarness.render(SettingsPage, settingsProps)
+  assert.equal(find(tree, (node) => node.type === "Tabs").props.value, "ai")
+  button(tree, "放弃更改").props.onClick()
+  tree = settingsHarness.render(SettingsPage, settingsProps)
+  assert.equal(discarded, 2)
+  assert.equal(find(tree, (node) => node.type === "Tabs").props.value, "engine")
 })

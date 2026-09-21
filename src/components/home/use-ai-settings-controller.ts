@@ -351,6 +351,21 @@ export function useAiSettingsController({
     return !promptDirty || handleSaveRenameSettings(activeProfileId)
   }
 
+  const discardUnsavedChanges = () => {
+    if (settings) {
+      applySettings(settings, draft.id)
+    } else {
+      setDraft(newProfileDraft("ollama"))
+      setPrompt("")
+    }
+    setModels([])
+    setProfileFeedback(null)
+    setPromptFeedback(null)
+    setInvalidField(null)
+    setPendingDraftAction(null)
+    setDeleteOpen(false)
+  }
+
   React.useEffect(() => {
     onDirtyChange?.(hasUnsavedChanges)
     return () => onDirtyChange?.(false)
@@ -403,6 +418,7 @@ export function useAiSettingsController({
     requestDraftAction,
     handleSavePendingDraft,
     saveUnsavedChanges,
+    discardUnsavedChanges,
   }
 }
 
