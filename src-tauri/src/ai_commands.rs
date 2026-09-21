@@ -1,8 +1,9 @@
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arc_recall_core::{
     AiClientConfig, AiConnectionTestResult, AiModelInfo, AiProfile, AiProviderKind, AiSettings,
-    generate_archive_name, list_ai_models, test_ai_connection, validate_ai_base_url,
+    SettingsStore, generate_archive_name, list_ai_models, test_ai_connection, validate_ai_base_url,
 };
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -114,49 +115,36 @@ pub(crate) fn ai_profile_upsert(
         profile.model = profile.provider.default_model().into();
     }
 
-    let previous_settings = {
-        let store = state.settings.lock().map_err(|error| error.to_string())?;
-        let mut settings = store.load().map_err(|error| error.to_string())?;
-        let previous_settings = settings.clone();
-        if let Some(existing) = settings
-            .ai
-            .profiles
-            .iter_mut()
-            .find(|candidate| candidate.id == id)
-        {
-            *existing = profile;
-        } else {
-            if settings.ai.profiles.len() >= MAX_AI_PROFILES {
-                return Err(format!("最多可保存 {MAX_AI_PROFILES} 个 AI 配置。"));
+    update_ai_settings_with_credentials(
+        &state.settings,
+        |settings| {
+            if let Some(existing) = settings
+                .profiles
+                .iter_mut()
+                .find(|candidate| candidate.id == id)
+            {
+                *existing = profile;
+            } else {
+                if settings.profiles.len() >= MAX_AI_PROFILES {
+                    return Err(format!("最多可保存 {MAX_AI_PROFILES} 个 AI 配置。"));
+                }
+                settings.profiles.push(profile);
             }
-            settings.ai.profiles.push(profile);
-        }
-        if request.make_active || settings.ai.active_profile_id.is_empty() {
-            settings.ai.active_profile_id = id.clone();
-        }
-        store.save(&settings).map_err(|error| error.to_string())?;
-        previous_settings
-    };
-
-    let credential_result = if clear_api_key {
-        delete_ai_api_key(&id)
-    } else if let Some(api_key) = requested_api_key.as_deref() {
-        set_ai_api_key(&id, api_key)
-    } else {
-        Ok(())
-    };
-    if let Err(credential_error) = credential_result {
-        let rollback_result = state
-            .settings
-            .lock()
-            .map_err(|error| error.to_string())?
-            .save(&previous_settings)
-            .map_err(|error| error.to_string());
-        return Err(match rollback_result {
-            Ok(()) => format!("{credential_error} 配置更改已回滚，可修复凭据存储后重试。"),
-            Err(rollback_error) => format!("{credential_error} 同时无法回滚配置：{rollback_error}"),
-        });
-    }
+            if request.make_active || settings.active_profile_id.is_empty() {
+                settings.active_profile_id = id.clone();
+            }
+            Ok(())
+        },
+        || {
+            if clear_api_key {
+                delete_ai_api_key(&id)
+            } else if let Some(api_key) = requested_api_key.as_deref() {
+                set_ai_api_key(&id, api_key)
+            } else {
+                Ok(())
+            }
+        },
+    )?;
     write_log(
         &state.logger,
         LogLevel::Info,
@@ -177,41 +165,25 @@ pub(crate) fn ai_profile_delete(
     if profile_id.is_empty() {
         return Err("AI 配置标识不能为空。".into());
     }
-    let previous_settings = {
-        let store = state.settings.lock().map_err(|error| error.to_string())?;
-        let mut settings = store.load().map_err(|error| error.to_string())?;
-        let previous_settings = settings.clone();
-        let original_count = settings.ai.profiles.len();
-        settings
-            .ai
-            .profiles
-            .retain(|profile| profile.id != profile_id);
-        if settings.ai.profiles.len() == original_count {
-            return Err("未找到要删除的 AI 配置。".into());
-        }
-        if settings.ai.active_profile_id == profile_id {
-            settings.ai.active_profile_id = settings
-                .ai
-                .profiles
-                .first()
-                .map(|profile| profile.id.clone())
-                .unwrap_or_default();
-        }
-        store.save(&settings).map_err(|error| error.to_string())?;
-        previous_settings
-    };
-    if let Err(credential_error) = delete_ai_api_key(profile_id) {
-        let rollback_result = state
-            .settings
-            .lock()
-            .map_err(|error| error.to_string())?
-            .save(&previous_settings)
-            .map_err(|error| error.to_string());
-        return Err(match rollback_result {
-            Ok(()) => format!("{credential_error} 配置删除已回滚，可稍后重试。"),
-            Err(rollback_error) => format!("{credential_error} 同时无法回滚配置：{rollback_error}"),
-        });
-    }
+    update_ai_settings_with_credentials(
+        &state.settings,
+        |settings| {
+            let original_count = settings.profiles.len();
+            settings.profiles.retain(|profile| profile.id != profile_id);
+            if settings.profiles.len() == original_count {
+                return Err("未找到要删除的 AI 配置。".into());
+            }
+            if settings.active_profile_id == profile_id {
+                settings.active_profile_id = settings
+                    .profiles
+                    .first()
+                    .map(|profile| profile.id.clone())
+                    .unwrap_or_default();
+            }
+            Ok(())
+        },
+        || delete_ai_api_key(profile_id),
+    )?;
     write_log(
         &state.logger,
         LogLevel::Info,
@@ -221,6 +193,27 @@ pub(crate) fn ai_profile_delete(
         [("profile_id".into(), profile_id.into())],
     );
     load_ai_settings_view(&state)
+}
+
+fn update_ai_settings_with_credentials(
+    settings_store: &Mutex<SettingsStore>,
+    update: impl FnOnce(&mut AiSettings) -> Result<(), String>,
+    update_credentials: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    // Keep other settings writers out until the credential operation commits or
+    // rolls back; restoring a whole snapshot after unlocking would lose their edits.
+    let store = settings_store.lock().map_err(|error| error.to_string())?;
+    let previous = store.load().map_err(|error| error.to_string())?;
+    let mut settings = previous.clone();
+    update(&mut settings.ai)?;
+    store.save(&settings).map_err(|error| error.to_string())?;
+    if let Err(credential_error) = update_credentials() {
+        return Err(match store.save(&previous) {
+            Ok(()) => format!("{credential_error} 配置更改已回滚，可修复凭据存储后重试。"),
+            Err(rollback_error) => format!("{credential_error} 同时无法回滚配置：{rollback_error}"),
+        });
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -459,7 +452,79 @@ fn next_ai_profile_id() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::is_safe_ai_profile_id;
+    use super::*;
+    use arc_recall_core::{AppLogLevel, SettingsUpdate};
+    use std::sync::mpsc;
+
+    #[test]
+    fn failed_credentials_roll_back_before_another_settings_writer_can_commit() {
+        let directory = tempfile::tempdir().unwrap();
+        let store =
+            Mutex::new(SettingsStore::open(directory.path().join("settings.json")).unwrap());
+        let original_prompt = store.lock().unwrap().load().unwrap().ai.rename_prompt;
+        let (start_sender, start_receiver) = mpsc::channel();
+        let (checked_sender, checked_receiver) = mpsc::channel();
+        std::thread::scope(|scope| {
+            let store_for_writer = &store;
+            let writer = scope.spawn(move || {
+                start_receiver.recv().unwrap();
+                checked_sender
+                    .send(store_for_writer.try_lock().is_err())
+                    .unwrap();
+                store_for_writer
+                    .lock()
+                    .unwrap()
+                    .update_preferences(SettingsUpdate::LogLevel(AppLogLevel::Debug))
+                    .unwrap();
+            });
+            let error = update_ai_settings_with_credentials(
+                &store,
+                |settings| {
+                    settings.rename_prompt = "new AI prompt".into();
+                    Ok(())
+                },
+                || {
+                    start_sender.send(()).unwrap();
+                    assert!(checked_receiver.recv().unwrap());
+                    Err("synthetic credential failure".into())
+                },
+            )
+            .unwrap_err();
+            assert!(error.contains("配置更改已回滚"));
+            writer.join().unwrap();
+        });
+        let settings = store.lock().unwrap().load().unwrap();
+        assert_eq!(settings.ai.rename_prompt, original_prompt);
+        assert_eq!(settings.logging.level, AppLogLevel::Debug);
+    }
+
+    #[test]
+    fn successful_credentials_keep_ai_changes_and_invalid_updates_skip_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let store =
+            Mutex::new(SettingsStore::open(directory.path().join("settings.json")).unwrap());
+        update_ai_settings_with_credentials(
+            &store,
+            |settings| {
+                settings.rename_prompt = "saved AI prompt".into();
+                Ok(())
+            },
+            || Ok(()),
+        )
+        .unwrap();
+        assert!(
+            update_ai_settings_with_credentials(
+                &store,
+                |_| Err("invalid update".into()),
+                || panic!("invalid settings must not change credentials"),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            store.lock().unwrap().load().unwrap().ai.rename_prompt,
+            "saved AI prompt"
+        );
+    }
 
     #[test]
     fn validates_ai_profile_identifiers() {
