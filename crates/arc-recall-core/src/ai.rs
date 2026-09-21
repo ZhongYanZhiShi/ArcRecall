@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::Read;
 use std::net::IpAddr;
 use std::time::Duration;
@@ -425,8 +426,9 @@ fn non_empty_string(value: String) -> Option<String> {
 }
 
 fn sort_and_deduplicate_models(models: &mut Vec<AiModelInfo>) {
+    let mut seen = HashSet::new();
+    models.retain(|model| seen.insert(model.id.clone()));
     models.sort_by_key(|model| model.id.to_lowercase());
-    models.dedup_by(|left, right| left.id == right.id);
 }
 
 fn merge_model_metadata(models: &mut [AiModelInfo], metadata: &[AiModelInfo]) {
@@ -458,8 +460,8 @@ fn parse_chat_response(body: &str) -> Result<String, AiError> {
     parsed
         .choices
         .into_iter()
-        .find_map(|choice| choice.message.content)
-        .filter(|content| !content.trim().is_empty())
+        .filter_map(|choice| choice.message.content)
+        .find(|content| !content.trim().is_empty())
         .ok_or_else(|| AiError::InvalidGeneratedName("AI 未返回可用名称。".into()))
 }
 
@@ -643,6 +645,23 @@ mod tests {
     }
 
     #[test]
+    fn model_ids_are_unique_even_when_case_variants_separate_duplicates() {
+        let models = parse_models_response(
+            r#"{"data":[{"id":"alpha","owned_by":"first"},{"id":"Alpha"},{"id":"alpha","owned_by":"duplicate"},{"id":"zeta"}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "Alpha", "zeta"]
+        );
+        assert_eq!(models[0].owned_by, "first");
+    }
+
+    #[test]
     fn parses_ollama_model_size_and_parameters() {
         let models = parse_ollama_models_response(
             r#"{
@@ -728,7 +747,7 @@ mod tests {
     #[test]
     fn parses_first_non_empty_chat_choice() {
         let content = parse_chat_response(
-            r#"{"choices":[{"message":{"content":null}},{"message":{"content":"result"}}]}"#,
+            r#"{"choices":[{"message":{"content":null}},{"message":{"content":""}},{"message":{"content":"  \n "}},{"message":{"content":"result"}}]}"#,
         )
         .unwrap();
         assert_eq!(content, "result");
