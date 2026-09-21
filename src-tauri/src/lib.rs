@@ -336,11 +336,25 @@ fn current_time_ms() -> u64 {
 
 /// Data root: `{LocalAppData}/ArcRecall` (not the reverse-domain identifier).
 fn resolve_app_paths(app: &AppHandle) -> Result<AppPaths, String> {
-    let local = app
-        .path()
-        .local_data_dir()
-        .map_err(|e| format!("resolve local data dir: {e}"))?;
-    let paths = AppPaths::from_root(local.join(APP_DATA_FOLDER_NAME));
+    // Native development tests need an isolated store before setup opens any data.
+    // Release builds always use the platform's normal application data directory.
+    #[cfg(debug_assertions)]
+    let test_root = std::env::var_os("ARC_RECALL_TEST_DATA_ROOT").map(PathBuf::from);
+    #[cfg(not(debug_assertions))]
+    let test_root: Option<PathBuf> = None;
+
+    let root = if let Some(root) = test_root {
+        if !root.is_absolute() {
+            return Err("开发测试数据目录必须为绝对路径。".into());
+        }
+        root
+    } else {
+        app.path()
+            .local_data_dir()
+            .map_err(|e| format!("resolve local data dir: {e}"))?
+            .join(APP_DATA_FOLDER_NAME)
+    };
+    let paths = AppPaths::from_root(root);
     paths
         .ensure_dirs()
         .map_err(|e| format!("create app data dirs: {e}"))?;
