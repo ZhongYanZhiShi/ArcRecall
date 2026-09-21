@@ -314,9 +314,7 @@ impl SettingsStore {
 
     pub fn load(&self) -> Result<AppSettings, SettingsError> {
         if !self.path.is_file() {
-            let defaults = AppSettings::default();
-            self.save_without_backup(&defaults)?;
-            return Ok(defaults);
+            return self.recover_settings();
         }
 
         match read_settings(&self.path) {
@@ -561,6 +559,27 @@ mod tests {
         assert_eq!(
             reopened.load().unwrap().engine.hashcat_path,
             "previous-hashcat"
+        );
+    }
+
+    #[test]
+    fn load_recovers_a_primary_file_removed_after_the_store_was_opened() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let store = SettingsStore::open(&path).unwrap();
+        let mut previous = store.load().unwrap();
+        previous.engine.hashcat_path = "previous-hashcat".into();
+        store.save(&previous).unwrap();
+        let mut latest = previous.clone();
+        latest.engine.hashcat_path = "latest-hashcat".into();
+        store.save(&latest).unwrap();
+        fs::remove_file(&path).unwrap();
+
+        assert_eq!(store.load().unwrap(), previous);
+        assert_eq!(read_settings(&path).unwrap(), previous);
+        assert_eq!(
+            read_settings(&settings_backup_path(&path)).unwrap(),
+            previous
         );
     }
 
