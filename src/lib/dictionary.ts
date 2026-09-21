@@ -294,11 +294,8 @@ export async function importDictionaryFile(
     await consume(decoder.decode())
     options.signal?.throwIfAborted()
     if (!discardingOversizedLine && pendingParts.length > 0) {
-      if (pendingBytes > MAX_DICTIONARY_CANDIDATE_BYTES) {
-        recordInvalidLine()
-      } else {
-        await pushCompletedLine("")
-      }
+      // Apply the same CR trimming and byte limit as newline-terminated rows.
+      await pushCompletedLine("")
     }
     await flush()
     report()

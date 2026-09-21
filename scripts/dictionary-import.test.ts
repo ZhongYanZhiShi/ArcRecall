@@ -175,6 +175,23 @@ test("无换行结尾的 CRLF 字典不会把回车写入候选", async () => {
   assert.equal(result.entries[0]?.value, "final-candidate")
 })
 
+test("达到字节上限且以 CR 结尾的最后一行仍可导入", async () => {
+  const candidate = "b".repeat(MAX_DICTIONARY_CANDIDATE_BYTES)
+  const summary = await importDictionaryFile(
+    new File([candidate, "\r"], "limit-cr-no-newline.txt")
+  )
+
+  assert.deepEqual(summary, {
+    submittedCount: 1,
+    addedCount: 1,
+    duplicateCount: 0,
+    invalidCount: 0,
+  })
+  const result = await listDictionary({ searchText: candidate })
+  assert.equal(result.entries[0]?.value, candidate)
+  assert.equal(result.entries[0]?.byteCount, MAX_DICTIONARY_CANDIDATE_BYTES)
+})
+
 test("超过 64 KiB 的 ASCII 前缀后仍能正确导入 GB18030", async () => {
   const file = new File(
     [

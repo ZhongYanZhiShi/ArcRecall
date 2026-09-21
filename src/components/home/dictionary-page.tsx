@@ -362,6 +362,7 @@ export function DictionaryPage() {
   }
 
   const toggleSelect = (id: number, checked: boolean) => {
+    if (isBusy || operationBusy.current) return
     setSelectedIds((prev) => {
       const next = new Set(prev)
       if (checked) {
@@ -633,7 +634,8 @@ export function DictionaryPage() {
                         <TableRow
                           key={entry.id}
                           data-state={selected ? "selected" : undefined}
-                          className="cursor-pointer"
+                          aria-disabled={isBusy || undefined}
+                          className={isBusy ? undefined : "cursor-pointer"}
                           onClick={() => toggleSelect(entry.id, !selected)}
                         >
                           <TableCell
@@ -758,6 +760,9 @@ export function DictionaryPage() {
                   type="file"
                   accept=".txt,.dic,.lst,text/plain"
                   className="sr-only"
+                  tabIndex={-1}
+                  aria-label="导入候选字典文件"
+                  disabled={isBusy}
                   onChange={(event) => {
                     const file = event.target.files?.[0] ?? null
                     event.target.value = ""
