@@ -74,6 +74,16 @@ impl CompressionTaskHandle {
             .map(|status| status.running)
             .map_err(|error| error.to_string())
     }
+
+    fn request_cancel(&self) -> Result<bool, String> {
+        let mut status = self.status.lock().map_err(|error| error.to_string())?;
+        if !status.running {
+            return Ok(false);
+        }
+        self.cancellation.cancel();
+        status.message = "正在停止 7-Zip 并清理临时归档…".into();
+        Ok(true)
+    }
 }
 
 const fn default_compression_level() -> u8 {
@@ -351,14 +361,8 @@ pub(crate) fn compression_cancel(
     let Some(task) = current.as_ref().filter(|task| task.id == task_id) else {
         return Ok(false);
     };
-    let status = task.status.lock().map_err(|error| error.to_string())?;
-    if !status.running {
+    if !task.request_cancel()? {
         return Ok(false);
-    }
-    drop(status);
-    task.cancellation.cancel();
-    if let Ok(mut status) = task.status.lock() {
-        status.message = "正在停止 7-Zip 并清理临时归档…".into();
     }
     write_log(
         &state.logger,
@@ -432,7 +436,45 @@ fn next_compression_task_id() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_compression_password, validate_permanent_compression_password};
+    use super::*;
+
+    #[test]
+    fn cancellation_preserves_completed_compression_result() {
+        let status = Arc::new(Mutex::new(CompressionTaskStatus {
+            task_id: "test".into(),
+            phase: CompressionPhase::Compressing,
+            running: true,
+            completed: false,
+            success: false,
+            cancelled: false,
+            message: "正在压缩".into(),
+            processed_source_count: 0,
+            total_source_count: 1,
+            started_at_ms: 0,
+            elapsed_ms: 0,
+            output_path: "archive.7z".into(),
+        }));
+        let task = CompressionTaskHandle {
+            id: "test".into(),
+            cancellation: CancellationToken::default(),
+            status: Arc::clone(&status),
+        };
+        assert!(task.request_cancel().unwrap());
+        assert!(task.cancellation.is_cancelled());
+        {
+            let mut status = status.lock().unwrap();
+            status.phase = CompressionPhase::Completed;
+            status.running = false;
+            status.completed = true;
+            status.success = true;
+            status.message = "压缩完成。".into();
+        }
+        assert!(!task.request_cancel().unwrap());
+        let status = status.lock().unwrap();
+        assert_eq!(status.message, "压缩完成。");
+        assert_eq!(status.phase, CompressionPhase::Completed);
+        assert!(status.success);
+    }
 
     #[test]
     fn supplied_compression_password_overrides_the_permanent_password() {

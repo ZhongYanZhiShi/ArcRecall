@@ -642,14 +642,8 @@ pub(crate) fn recovery_cancel(state: State<'_, AppState>, task_id: String) -> Re
     let Some(task) = current.as_ref().filter(|task| task.id == task_id) else {
         return Ok(false);
     };
-    let status = task.status.lock().map_err(|error| error.to_string())?;
-    if !status.running {
+    if !task.request_cancel()? {
         return Ok(false);
-    }
-    drop(status);
-    task.cancellation.cancel();
-    if let Ok(mut status) = task.status.lock() {
-        status.message = "正在停止外部引擎…".into();
     }
     write_log(
         &state.logger,

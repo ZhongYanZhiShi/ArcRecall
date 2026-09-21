@@ -26,6 +26,16 @@ impl RecoveryTaskHandle {
             .map(|status| status.running)
             .map_err(|error| error.to_string())
     }
+
+    pub(super) fn request_cancel(&self) -> Result<bool, String> {
+        let mut status = self.status.lock().map_err(|error| error.to_string())?;
+        if !status.running {
+            return Ok(false);
+        }
+        self.cancellation.cancel();
+        status.message = "正在停止外部引擎…".into();
+        Ok(true)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -331,6 +341,31 @@ mod tests {
             scan_interrupted: false,
             budget_limit_reached: false,
         }
+    }
+
+    #[test]
+    fn cancellation_preserves_completed_recovery_result() {
+        let status = Arc::new(Mutex::new(test_recovery_status()));
+        let task = RecoveryTaskHandle {
+            id: "test".into(),
+            cancellation: CancellationToken::default(),
+            status: Arc::clone(&status),
+        };
+        assert!(task.request_cancel().unwrap());
+        assert!(task.cancellation.is_cancelled());
+        {
+            let mut status = status.lock().unwrap();
+            status.phase = RecoveryPhase::Completed;
+            status.running = false;
+            status.completed = true;
+            status.success = true;
+            status.message = "恢复完成。".into();
+        }
+        assert!(!task.request_cancel().unwrap());
+        let status = status.lock().unwrap();
+        assert_eq!(status.message, "恢复完成。");
+        assert_eq!(status.phase, RecoveryPhase::Completed);
+        assert!(status.success);
     }
 
     #[test]
