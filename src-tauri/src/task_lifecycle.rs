@@ -8,6 +8,7 @@ use arc_recall_core::CancellationToken;
 #[derive(Default)]
 struct LifecycleState {
     closing: bool,
+    updating: bool,
     next_id: u64,
     tasks: BTreeMap<u64, CancellationToken>,
 }
@@ -25,6 +26,9 @@ impl TaskLifecycle {
         if state.closing {
             return Err("应用正在退出，无法启动新任务。".into());
         }
+        if state.updating {
+            return Err("应用正在安装更新，无法启动新任务。".into());
+        }
         state.next_id += 1;
         let id = state.next_id;
         let cancellation = CancellationToken::default();
@@ -34,6 +38,16 @@ impl TaskLifecycle {
             id,
             cancellation,
         })
+    }
+
+    /// Atomically exclude task starts while an idle application installs an update.
+    pub(crate) fn reserve_update(self: &Arc<Self>) -> Result<UpdateLease, String> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.closing || state.updating || !state.tasks.is_empty() {
+            return Err("请等待当前任务完成后再安装更新。".into());
+        }
+        state.updating = true;
+        Ok(UpdateLease(Arc::clone(self)))
     }
 
     /// Returns true only for the first shutdown request.
@@ -53,9 +67,23 @@ impl TaskLifecycle {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         drop(
             self.finished
-                .wait_while(state, |state| !state.tasks.is_empty())
+                .wait_while(state, |state| !state.tasks.is_empty() || state.updating)
                 .unwrap_or_else(|error| error.into_inner()),
         );
+    }
+}
+
+pub(crate) struct UpdateLease(Arc<TaskLifecycle>);
+
+impl Drop for UpdateLease {
+    fn drop(&mut self) {
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.updating = false;
+        self.0.finished.notify_all();
     }
 }
 
@@ -197,6 +225,22 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    #[test]
+    fn update_requires_idle_app_and_excludes_new_tasks_until_released() {
+        let lifecycle = Arc::new(TaskLifecycle::default());
+        let task = lifecycle.begin().unwrap();
+        assert!(lifecycle.reserve_update().is_err());
+        assert!(!task.cancellation.is_cancelled());
+        drop(task);
+        let update = lifecycle.reserve_update().unwrap();
+        assert!(lifecycle.begin().is_err());
+        assert!(lifecycle.reserve_update().is_err());
+        drop(update);
+        assert!(lifecycle.begin().is_ok());
+        lifecycle.request_shutdown();
+        assert!(lifecycle.reserve_update().is_err());
+    }
 
     #[test]
     fn shutdown_cancels_preparing_tasks_and_waits_for_cleanup() {

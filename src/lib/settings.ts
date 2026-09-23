@@ -25,6 +25,7 @@ export type LoggingSettings = {
 }
 
 export type AppSettings = {
+  autoUpdate?: boolean
   version?: number
   engine?: EngineSettings
   logging?: LoggingSettings
@@ -193,6 +194,7 @@ export async function getSettings(): Promise<AppSettings> {
 }
 
 export type SettingsUpdate =
+  | { kind: "autoUpdate"; value: boolean }
   | { kind: "logLevel"; value: AppLogLevel }
   | { kind: "logMaxDiskMib"; value: number }
   | { kind: "recoveryComputeMode"; value: RecoveryComputeMode }
@@ -205,6 +207,9 @@ export async function updateSettings(
     return invoke<AppSettings>("settings_update", { update })
   const settings = await getSettings()
   switch (update.kind) {
+    case "autoUpdate":
+      settings.autoUpdate = update.value
+      break
     case "logLevel":
       settings.logging!.level = update.value
       break

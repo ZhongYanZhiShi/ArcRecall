@@ -1048,7 +1048,10 @@ mod tests {
     #[test]
     fn redacts_absolute_paths_but_not_urls_or_separator_text() {
         assert_eq!(
-            sanitize_text(concat!(r"failed at C:\", "Users", r"\alice\archive.7z"), 512),
+            sanitize_text(
+                concat!(r"failed at C:\", "Users", r"\alice\archive.7z"),
+                512
+            ),
             "[路径信息已隐藏]"
         );
         assert_eq!(
@@ -1056,7 +1059,10 @@ mod tests {
             "[路径信息已隐藏]"
         );
         assert_eq!(
-            sanitize_text(concat!(r#"{"path":"/"#, "home", r#"/alice/archive.7z"}"#), 512),
+            sanitize_text(
+                concat!(r#"{"path":"/"#, "home", r#"/alice/archive.7z"}"#),
+                512
+            ),
             "[路径信息已隐藏]"
         );
         assert_eq!(

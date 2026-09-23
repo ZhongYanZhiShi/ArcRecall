@@ -10,6 +10,7 @@ mod logging;
 mod recovery_commands;
 mod task_coordination;
 mod task_lifecycle;
+mod update_commands;
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -52,6 +53,9 @@ use recovery_commands::{
 use serde::{Deserialize, Serialize};
 use task_lifecycle::{RecoverySession, TaskLifecycle};
 use tauri::{AppHandle, Manager, State};
+use update_commands::{
+    AppUpdater, app_update_check, app_update_download, app_update_install, app_update_status,
+};
 
 const MIB_BYTES: u64 = 1024 * 1024;
 
@@ -365,6 +369,8 @@ fn resolve_app_paths(app: &AppHandle) -> Result<AppPaths, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(AppUpdater::default())
         .setup(|app| {
             let paths = resolve_app_paths(app.handle())?;
             let recovery_session = RecoverySession::create(&paths.temp)?;
@@ -440,6 +446,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            app_update_status,
+            app_update_check,
+            app_update_download,
+            app_update_install,
             health,
             clipboard_clear_if_matches,
             log_write,

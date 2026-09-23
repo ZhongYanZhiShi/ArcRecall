@@ -68,6 +68,9 @@ src-tauri/gen/
 src-tauri/WixTools/
 src-tauri/resources/engine-bundle/
 src-tauri/*.log
+src-tauri/tauri.updater.release.conf.json
+# Update signing private keys must never enter version control.
+*.key
 *.msi
 *.nsis.zip
 *.AppImage

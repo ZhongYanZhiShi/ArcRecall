@@ -153,6 +153,45 @@ pnpm desktop:build
 
 ## 发布版本
 
+### 检查与自动更新
+
+Windows x64 正式版可在“设置 → 应用”检查更新、查看版本说明、下载并安装更新。
+每次启动都会检查 GitHub Releases 的最新正式版，发现新版本时显示提示。
+“自动更新”默认关闭，开启后会自动下载并校验签名，同时每 6 小时再次检查。
+下载完成后显示提示，由用户点击“安装更新并重启”；恢复、压缩、
+引擎安装或数据恢复等任务运行期间无法安装更新。本机设置、字典和历史保留。
+下载暂存在当前进程内存中，退出后需要重新下载；关闭自动更新不会取消已经开始的下载。
+预发布版本不会进入此正式版更新通道。
+
+### 首次配置更新签名
+
+发布工作流需要以下 GitHub 仓库配置（Settings → Secrets and variables → Actions）：
+
+- Variable `TAURI_UPDATER_PUBLIC_KEY`：Tauri 生成的 `.pub` 文件完整内容。
+- Secret `TAURI_SIGNING_PRIVATE_KEY`：对应私钥文件完整内容。
+- Secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：生成私钥时设置的密码；未设置密码时留空。
+
+在仓库外生成并妥善备份密钥，发布后应一直使用同一对密钥：
+
+```powershell
+pnpm exec tauri signer generate -w "$env:USERPROFILE/.tauri/arc-recall.key"
+```
+
+工作流会验证配置、嵌入公钥，上传签名安装包、`.sig` 和 `latest.json`。缺少密钥时发布会失败，
+不会生成无法更新的正式版。更新机制遵循 [Tauri updater 文档](https://v2.tauri.app/plugin/updater/)。
+普通开发和本地构建无需密钥，更新入口会显示未启用更新通道。首次采用此功能时，旧版用户
+需要手动安装一次带更新功能的正式版；之后即可从应用内升级。
+
+本地构建可更新的完整安装包时，将上述三个值设置为同名环境变量，再执行：
+
+```powershell
+pnpm engine-bundle:prepare
+./scripts/prepare-updater-config.ps1
+pnpm exec tauri build --config src-tauri/tauri.updater.release.conf.json
+```
+
+### 发布流程
+
 仓库中的 GitHub Actions 会在推送语义化版本标签后自动构建 Windows x64 完整安装包、
 生成发布说明并创建 GitHub Release。发布前请确保 `package.json`、
 `src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 中的版本号一致，然后执行：

@@ -66,6 +66,13 @@ jobs:
           "version=$releaseVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "is_prerelease=$isPrerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+      - name: Configure signed updates
+        shell: pwsh
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: ./scripts/prepare-updater-config.ps1
+
       - name: Set up pnpm
         uses: pnpm/action-setup@v6.0.8
 
@@ -101,6 +108,8 @@ jobs:
         uses: tauri-apps/tauri-action@action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: ArcRecall ${{ env.RELEASE_TAG }}
@@ -109,6 +118,7 @@ jobs:
           prerelease: ${{ steps.version.outputs.is_prerelease }}
           retryAttempts: 2
           tauriScript: pnpm exec tauri
-          args: --config src-tauri/tauri.windows.full.conf.json
+          args: --config src-tauri/tauri.updater.release.conf.json
           releaseAssetNamePattern: ArcRecall_[version]_[arch][setup][ext]
-          uploadUpdaterJson: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true

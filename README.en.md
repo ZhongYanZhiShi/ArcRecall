@@ -185,6 +185,45 @@ pnpm desktop:build
 
 ## Releasing
 
+### Application updates
+
+Signed Windows x64 releases support checking, downloading, and installing updates under
+Settings → Application. Every launch checks the latest stable GitHub release and notifies users
+when an update is available. Automatic updates are opt-in: when enabled, the app downloads and
+verifies updates and repeats the check every six hours. Users
+choose when to install and restart. Installation is blocked while native tasks are active.
+Settings, dictionaries, and history are preserved. Downloads remain in memory until exit;
+they must be downloaded again after restarting. Disabling automatic updates does not cancel
+an existing download. Pre-releases are excluded from the stable update channel.
+
+Before the first signed release, generate and back up a signing key outside the repository:
+
+```powershell
+pnpm exec tauri signer generate -w "$env:USERPROFILE/.tauri/arc-recall.key"
+```
+
+Configure these repository Actions values:
+
+- Variable `TAURI_UPDATER_PUBLIC_KEY`: complete contents of the generated `.pub` file.
+- Secret `TAURI_SIGNING_PRIVATE_KEY`: complete contents of its private key file.
+- Secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: the signing key password, or empty if unset.
+
+Keep the same key pair for subsequent releases. The workflow fails early if keys are missing,
+embeds the public key, and uploads the signed installer, signature, and `latest.json` using
+the [Tauri updater](https://v2.tauri.app/plugin/updater/). Development and unsigned local builds
+need no keys and show that updates are unavailable. Existing users must manually install
+the first release that includes this feature.
+
+For a signed local full build, set the same three environment variables, then run:
+
+```powershell
+pnpm engine-bundle:prepare
+./scripts/prepare-updater-config.ps1
+pnpm exec tauri build --config src-tauri/tauri.updater.release.conf.json
+```
+
+### Release workflow
+
 The repository's GitHub Actions workflow builds the full Windows x64 installer,
 generates release notes, and creates a GitHub Release whenever a semantic version
 tag is pushed. Before releasing, make sure the versions in `package.json`,

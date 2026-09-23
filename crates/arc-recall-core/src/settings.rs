@@ -16,6 +16,7 @@ const LEGACY_AI_RENAME_PROMPT: &str = "在保留原意的前提下，将用户�
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 pub enum SettingsUpdate {
+    AutoUpdate(bool),
     LogLevel(AppLogLevel),
     LogMaxDiskMib(u16),
     RecoveryComputeMode(RecoveryComputeMode),
@@ -214,6 +215,9 @@ impl AiSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    /// Opt in to background checks and signed update downloads.
+    #[serde(default)]
+    pub auto_update: bool,
     #[serde(default = "default_settings_version")]
     pub version: u32,
     #[serde(default)]
@@ -230,6 +234,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             version: CURRENT_SETTINGS_VERSION,
+            auto_update: false,
             engine: EngineSettings::default(),
             logging: LoggingSettings::default(),
             ai: AiSettings::default(),
@@ -274,6 +279,7 @@ impl SettingsStore {
     pub fn update_preferences(&self, update: SettingsUpdate) -> Result<AppSettings, SettingsError> {
         let mut settings = self.load()?;
         match update {
+            SettingsUpdate::AutoUpdate(value) => settings.auto_update = value,
             SettingsUpdate::LogLevel(value) => settings.logging.level = value,
             SettingsUpdate::LogMaxDiskMib(value) => {
                 settings.logging.max_disk_mib = value;
@@ -446,6 +452,27 @@ pub struct DatabaseInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_updates_are_opt_in_and_persist_without_changing_other_preferences() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"engine":{"hashcatPath":"test-engine"}}"#).unwrap();
+        let store = super::SettingsStore::open(&path).unwrap();
+        let before = store.load().unwrap();
+        assert!(!before.auto_update);
+        store
+            .update_preferences(super::SettingsUpdate::AutoUpdate(true))
+            .unwrap();
+        let mut after = super::SettingsStore::open(&path).unwrap().load().unwrap();
+        assert!(after.auto_update);
+        after.auto_update = false;
+        assert_eq!(before, after);
+        store
+            .update_preferences(super::SettingsUpdate::AutoUpdate(false))
+            .unwrap();
+        assert!(!store.load().unwrap().auto_update);
+    }
 
     #[test]
     fn preference_updates_preserve_installed_paths_and_other_preferences() {
@@ -720,7 +747,11 @@ mod tests {
 
     #[test]
     fn resolve_tools_directory_uses_default_when_empty() {
-        let default = PathBuf::from(concat!(r"C:\", "Users", r"\me\AppData\Local\ArcRecall\tools"));
+        let default = PathBuf::from(concat!(
+            r"C:\",
+            "Users",
+            r"\me\AppData\Local\ArcRecall\tools"
+        ));
         assert_eq!(resolve_tools_directory(&default, ""), default);
         assert_eq!(
             resolve_tools_directory(&default, r"D:\Shared\ArcTools"),

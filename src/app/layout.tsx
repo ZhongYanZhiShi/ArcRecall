@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 
 import { ThemeProvider } from "@/components/theme-provider"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { UpdateProvider } from "@/components/update-provider"
 
 import "./globals.css"
 
@@ -20,7 +21,9 @@ export default function RootLayout({
     <html lang="zh-CN" suppressHydrationWarning className="antialiased">
       <body>
         <ThemeProvider>
-          <TooltipProvider>{children}</TooltipProvider>
+          <TooltipProvider>
+            <UpdateProvider>{children}</UpdateProvider>
+          </TooltipProvider>
         </ThemeProvider>
       </body>
     </html>

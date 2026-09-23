@@ -42,6 +42,9 @@ function sourceHarness(overrides) {
     return slots[index].value
   }
   const React = {
+    createContext() {
+      return { Provider: "ContextProvider" }
+    },
     useSyncExternalStore(_subscribe, getSnapshot) {
       return getSnapshot()
     },
@@ -159,6 +162,141 @@ const button = (tree, text) =>
     (node) =>
       node.type === "Button" && [node.props.children].flat().includes(text)
   )
+
+test("自动更新启动与定时检查不会自动安装，重复操作不会并发提交", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] })
+  const calls = []
+  const checking = deferred()
+  let pending = false
+  const harness = sourceHarness({
+    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/settings": {},
+    "@tauri-apps/api/core": {
+      invoke: async (command, args) => {
+        calls.push([command, args])
+        if (command === "app_update_status")
+          return { phase: "idle", version: null }
+        if (pending) await checking.promise
+      },
+    },
+  })
+  t.after(() => harness.hide())
+  const Provider = harness.load(
+    "src/components/update-provider.tsx"
+  ).UpdateProvider
+  harness.render(Provider)
+  t.mock.timers.tick(0)
+  await settle()
+  assert.ok(
+    calls.some(
+      ([command, args]) =>
+        command === "app_update_check" && args.reason === "startup"
+    )
+  )
+  pending = true
+  const context = harness.render(Provider).props.value
+  const first = context.check()
+  const second = context.download()
+  await settle()
+  assert.equal(
+    calls.filter(([command]) => command === "app_update_download").length,
+    0
+  )
+  checking.resolve()
+  await Promise.all([first, second])
+  pending = false
+  t.mock.timers.tick(6 * 60 * 60 * 1000)
+  await settle()
+  assert.equal(
+    calls.filter(
+      ([command, args]) =>
+        command === "app_update_check" && args.reason === "scheduled"
+    ).length,
+    1
+  )
+  assert.equal(
+    calls.filter(([command]) => command === "app_update_install").length,
+    0
+  )
+})
+
+test("关闭自动更新后每次重启仍检查并提示新版本，不自动下载", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] })
+  const checks = []
+  for (let launch = 0; launch < 2; launch += 1) {
+    const harness = sourceHarness({
+      "@/lib/dictionary": { isDesktopRuntime: () => true },
+      "@/lib/settings": {},
+      "@tauri-apps/api/core": {
+        invoke: async (command, args) => {
+          if (command === "app_update_status")
+            return { phase: "available", version: "0.2.0", autoUpdate: false }
+          checks.push([command, args])
+        },
+      },
+    })
+    const Provider = harness.load(
+      "src/components/update-provider.tsx"
+    ).UpdateProvider
+    harness.render(Provider)
+    t.mock.timers.tick(0)
+    await settle()
+    const tree = harness.render(Provider)
+    const notice = find(tree, (node) => node.props?.role === "status")
+    assert.match(notice.props.children[0].props.children, /发现新版本 0.2.0/)
+    button(tree, "知道了").props.onClick()
+    assert.equal(
+      find(harness.render(Provider), (node) => node.props?.role === "status"),
+      null
+    )
+    harness.hide()
+  }
+  assert.deepEqual(checks, [
+    ["app_update_check", { reason: "startup" }],
+    ["app_update_check", { reason: "startup" }],
+  ])
+})
+
+test("自动更新偏好保存失败时不开始下载，安装失败保留已下载版本并允许重试", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] })
+  const calls = []
+  const ready = { phase: "ready", version: "0.2.0", autoUpdate: false }
+  const harness = sourceHarness({
+    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/settings": {
+      updateSettings: async () => {
+        throw new Error("disk full")
+      },
+    },
+    "@tauri-apps/api/core": {
+      invoke: async (command) => {
+        calls.push(command)
+        if (command === "app_update_status") return ready
+        if (command === "app_update_install") throw new Error("task running")
+      },
+    },
+  })
+  t.after(() => harness.hide())
+  const Provider = harness.load(
+    "src/components/update-provider.tsx"
+  ).UpdateProvider
+  await harness.render(Provider).props.value.setAutomatic(true)
+  assert.equal(calls.length, 0)
+  assert.match(
+    harness.render(Provider).props.value.error,
+    /保存自动更新设置失败/
+  )
+  await harness.render(Provider).props.value.install()
+  const context = harness.render(Provider).props.value
+  assert.equal(context.status.phase, "ready")
+  assert.equal(context.busy, false)
+  assert.match(context.error, /task running/)
+  await context.install()
+  assert.equal(
+    calls.filter((command) => command === "app_update_install").length,
+    2
+  )
+})
 
 test("恢复数据库后重建字典和历史视图，保留其他工作台状态", (t) => {
   const previousWindow = globalThis.window

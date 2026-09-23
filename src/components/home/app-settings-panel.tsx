@@ -2,6 +2,7 @@
 
 import { CircleAlert, RefreshCw } from "lucide-react"
 import * as React from "react"
+import { AppUpdatePanel } from "@/components/home/app-update-panel"
 
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -177,6 +178,7 @@ export function AppSettingsPanel() {
 
   return (
     <div className="flex flex-col gap-2">
+      <AppUpdatePanel />
       {loadError ? (
         <Alert variant="warning">
           <CircleAlert />
