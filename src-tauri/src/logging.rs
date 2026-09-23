@@ -447,7 +447,7 @@ impl LogStore {
                 let metadata = file.metadata().map_err(|error| error.to_string())?;
                 let byte_count = metadata.len();
                 let modified_at = metadata.modified().ok();
-                let mut last_byte = [b'\n'];
+                let mut last_byte = *b"\n";
                 if byte_count > 0 {
                     file.seek(SeekFrom::Start(byte_count - 1))
                         .map_err(|error| error.to_string())?;
