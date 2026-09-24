@@ -285,7 +285,6 @@ pub(crate) async fn recovery_start(
                     "正在后台计算完整归档指纹并查找本机历史密码。",
                 );
                 let (preferred_password, fingerprint_sha256) = resolve_preferred_recovery_password(
-                    None,
                     &analysis_for_history,
                     &history_database_path,
                     &cancellation,
@@ -657,14 +656,10 @@ pub(crate) fn recovery_cancel(state: State<'_, AppState>, task_id: String) -> Re
 }
 
 fn resolve_preferred_recovery_password(
-    manual_password: Option<String>,
     analysis: &ArchiveAnalysis,
     database_path: &Path,
     cancellation: &CancellationToken,
 ) -> Result<(Option<String>, Option<String>), RecoveryError> {
-    if manual_password.is_some() {
-        return Ok((manual_password, None));
-    }
     let fingerprint = fingerprint_archive_sha256_with_cancellation(analysis, cancellation)?;
     let store = RecoveryHistoryStore::open(database_path)
         .map_err(|error| RecoveryError::Message(format!("打开恢复历史失败：{error}")))?;
@@ -732,7 +727,7 @@ mod tests {
         let cancellation = CancellationToken::default();
         let started = std::time::Instant::now();
         let (password, fingerprint) =
-            resolve_preferred_recovery_password(None, &analysis, &database, &cancellation).unwrap();
+            resolve_preferred_recovery_password(&analysis, &database, &cancellation).unwrap();
         assert!(
             password.is_some(),
             "a matching local history password is required"
@@ -848,7 +843,6 @@ mod tests {
         assert_eq!(report.saved_count, 1);
 
         let (resolved, resolved_fingerprint) = resolve_preferred_recovery_password(
-            None,
             &analysis,
             &database,
             &CancellationToken::default(),

@@ -27,10 +27,7 @@ import {
 import { uniqueArchivePaths } from "@/lib/recovery-queue"
 import { recoveryQueue } from "@/lib/recovery-queue-session"
 import { RecoveryQueuePanel } from "@/components/home/recovery-queue-panel"
-import {
-  createRecoveryTaskSubscription,
-  recoveryTaskAttachmentId,
-} from "@/lib/recovery-task-attachment"
+import { createRecoveryTaskSubscription } from "@/lib/recovery-task-attachment"
 import { copySensitiveText } from "@/lib/sensitive-clipboard"
 import { getSettings, updateSettings } from "@/lib/settings"
 import { useDesktopTask } from "@/hooks/use-desktop-task"
@@ -89,7 +86,7 @@ export function ExtractPage({
       onError: (reason) => setError(toErrorMessage(reason)),
       onReattach: (latest) => {
         setComputeMode(latest.computeMode ?? "gpuPreferred")
-        setReattachedTaskId(recoveryTaskAttachmentId(latest))
+        setReattachedTaskId(latest.taskId)
       },
       onSettled: refreshDictionaryCount,
     })

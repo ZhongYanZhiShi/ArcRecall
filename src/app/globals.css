@@ -163,38 +163,13 @@
     animation: ar-page-enter 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
-  .animate-page-enter-right {
-    animation: ar-page-enter-right 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  .animate-page-enter-left {
-    animation: ar-page-enter-left 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  /* 方案 1：交叉淡入 */
-  .animate-crossfade-in {
-    animation: ar-crossfade-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  .animate-crossfade-out {
-    animation: ar-crossfade-out 200ms cubic-bezier(0.4, 0, 1, 1) both;
-  }
-
-  /* 方案 2：单层水平滑入（无旧页叠层，避免重影） */
+  /* 单层水平滑入（无旧页叠层，避免重影） */
   .animate-slide-in-from-right {
     animation: ar-slide-in-from-right 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .animate-slide-in-from-left {
     animation: ar-slide-in-from-left 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  .animate-dock-enter {
-    animation: ar-dock-enter 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  .animate-fade-up {
-    animation: ar-fade-up 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .animate-reveal-down {
@@ -222,36 +197,6 @@
     );
     background-size: 220% 100%;
     animation: ar-progress-live 1.8s linear infinite;
-  }
-
-  .stagger-1 {
-    animation-delay: 40ms;
-  }
-  .stagger-2 {
-    animation-delay: 90ms;
-  }
-  .stagger-3 {
-    animation-delay: 140ms;
-  }
-  .stagger-4 {
-    animation-delay: 190ms;
-  }
-
-  .transition-dock {
-    transition:
-      background-color 200ms cubic-bezier(0.22, 1, 0.36, 1),
-      color 200ms cubic-bezier(0.22, 1, 0.36, 1),
-      transform 200ms cubic-bezier(0.22, 1, 0.36, 1),
-      box-shadow 200ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  .transition-surface {
-    transition:
-      background-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
-      border-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
-      box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1),
-      transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
-      color 220ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .app-canvas {
@@ -288,46 +233,6 @@
   }
 }
 
-@keyframes ar-page-enter-right {
-  from {
-    opacity: 0;
-    transform: translateX(18px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes ar-page-enter-left {
-  from {
-    opacity: 0;
-    transform: translateX(-18px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes ar-crossfade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes ar-crossfade-out {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
-}
-
 /* 位移为主、透明度变化很轻，避免与背景“糊成双影” */
 @keyframes ar-slide-in-from-right {
   from {
@@ -348,28 +253,6 @@
   to {
     opacity: 1;
     transform: translateX(0);
-  }
-}
-
-@keyframes ar-dock-enter {
-  from {
-    opacity: 0;
-    transform: translateY(14px) scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes ar-fade-up {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
   }
 }
 
@@ -434,25 +317,13 @@
 
 @media (prefers-reduced-motion: reduce) {
   .animate-page-enter,
-  .animate-page-enter-right,
-  .animate-page-enter-left,
-  .animate-crossfade-in,
-  .animate-crossfade-out,
   .animate-slide-in-from-right,
   .animate-slide-in-from-left,
-  .animate-dock-enter,
-  .animate-fade-up,
   .animate-reveal-down,
   .animate-task-card-enter,
   .animate-status-chip-enter,
   .animate-success-pop,
   .progress-live {
     animation: none !important;
-  }
-
-  .transition-dock,
-  .transition-surface {
-    transition: none !important;
-    transform: none !important;
   }
 }

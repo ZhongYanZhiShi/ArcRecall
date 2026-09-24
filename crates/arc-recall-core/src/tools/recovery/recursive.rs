@@ -389,7 +389,7 @@ pub fn recover_and_extract_recursive_lazy(
             );
 
             match nested_result {
-                Ok(mut result) if result.success => {
+                Ok(result) if result.success => {
                     if let Err(error) = output_transaction.commit() {
                         pending_archive_paths.retain(|path| path != &nested.archive_path);
                         skipped_archive_paths.push(nested.archive_path.clone());
@@ -405,7 +405,6 @@ pub fn recover_and_extract_recursive_lazy(
                         ));
                         continue;
                     }
-                    result.output_directory = nested_output.clone();
                     pending_archive_paths.retain(|path| path != &nested.archive_path);
                     completed_archive_paths.push(nested.archive_path.clone());
                     state.extracted_nested_archives =

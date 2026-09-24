@@ -422,8 +422,6 @@ export function useAiSettingsController({
   }
 }
 
-export type AiSettingsController = ReturnType<typeof useAiSettingsController>
-
 function toErrorMessage(reason: unknown) {
   return reason instanceof Error ? reason.message : String(reason ?? "未知错误")
 }
