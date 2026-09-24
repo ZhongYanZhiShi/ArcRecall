@@ -477,16 +477,6 @@ mod tests {
     }
 
     #[test]
-    fn supplied_compression_password_overrides_the_permanent_password() {
-        let resolved = resolve_compression_password(Some("本次密码".into()), true, || {
-            Ok(Some("永久密码".into()))
-        })
-        .expect("resolve password");
-
-        assert_eq!(resolved.as_deref(), Some("本次密码"));
-    }
-
-    #[test]
     fn permanent_compression_password_is_reused_when_no_password_is_supplied() {
         let resolved = resolve_compression_password(None, true, || Ok(Some("永久密码".into())))
             .expect("resolve password");
@@ -519,9 +509,9 @@ mod tests {
     #[test]
     fn explicit_or_unencrypted_jobs_do_not_load_saved_credentials() {
         assert_eq!(
-            resolve_compression_password(Some("temporary".into()), true, || panic!("unused"))
+            resolve_compression_password(Some("本次密码".into()), true, || panic!("unused"))
                 .unwrap(),
-            Some("temporary".into())
+            Some("本次密码".into())
         );
         assert_eq!(
             resolve_compression_password(None, false, || panic!("unused")).unwrap(),

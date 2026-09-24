@@ -676,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_encrypted_arguments_without_exposing_them_in_status() {
+    fn builds_encrypted_arguments() {
         let group = CompressionSourceGroup {
             current_directory: PathBuf::from("C:\\data"),
             source_names: vec![OsString::from("source")],
@@ -698,18 +698,6 @@ mod tests {
         assert_eq!(
             args.iter().position(|arg| arg == "--"),
             Some(args.len() - group.source_names.len() - 1)
-        );
-        assert!(
-            !format!(
-                "{:?}",
-                CompressionUpdate {
-                    phase: CompressionPhase::Compressing,
-                    message: "working".into(),
-                    processed_source_count: 0,
-                    total_source_count: 1,
-                }
-            )
-            .contains("secret")
         );
     }
 

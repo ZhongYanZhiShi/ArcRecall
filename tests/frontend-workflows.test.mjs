@@ -526,12 +526,11 @@ test("数据库恢复必须先预览确认，并阻止不可解密密码的恢�
   }
 })
 
-test("扫描上限保存、错误处理和解密方式切换保留其他设置", async (t) => {
-  let saved = {
+test("扫描上限和解密方式提交单项更新，校验和保存失败保留编辑", async (t) => {
+  const saved = {
     recovery: { computeMode: "cpuOnly" },
-    engine: { hashcatPath: "existing-engine" },
   }
-  let writes = 0
+  const updates = []
   let rejectSave = false
   const harness = sourceHarness({
     "@/lib/recovery": {
@@ -546,7 +545,7 @@ test("扫描上限保存、错误处理和解密方式切换保留其他设置",
       getJohnPerlStatus: async () => ({}),
       getSettings: async () => structuredClone(saved),
       updateSettings: async (update) => {
-        writes += 1
+        updates.push(structuredClone(update))
         if (rejectSave) throw new Error("disk unavailable")
         const field =
           update.kind === "recoveryComputeMode"
@@ -575,35 +574,33 @@ test("扫描上限保存、错误处理和解密方式切换保留其他设置",
     card().onSaveScanLimit()
     await settle()
     assert.equal(card().messageError, true)
-    assert.equal(writes, 0)
+    assert.equal(updates.length, 0)
   }
   card().onScanLimitChange("0")
   card().onSaveScanLimit()
   await settle()
-  assert.deepEqual(saved.recovery, {
-    computeMode: "cpuOnly",
-    scanMaxFilesPerDirectory: 0,
-  })
-  assert.equal(saved.engine.hashcatPath, "existing-engine")
-  saved.engine.hashcatPath = "newly-installed-engine"
+  assert.deepEqual(updates, [{ kind: "scanMaxFilesPerDirectory", value: 0 }])
   card().onChange("gpuPreferred")
   await settle()
-  assert.equal(saved.engine.hashcatPath, "newly-installed-engine")
-  assert.deepEqual(saved.recovery, {
-    computeMode: "gpuPreferred",
-    scanMaxFilesPerDirectory: 0,
-  })
+  assert.deepEqual(updates, [
+    { kind: "scanMaxFilesPerDirectory", value: 0 },
+    { kind: "recoveryComputeMode", value: "gpuPreferred" },
+  ])
   rejectSave = true
   card().onScanLimitChange("25")
   card().onSaveScanLimit()
   await settle()
+  assert.equal(updates.length, 3)
+  assert.deepEqual(updates[2], { kind: "scanMaxFilesPerDirectory", value: 25 })
   assert.equal(card().scanLimitValue, "25")
   assert.equal(card().messageError, true)
-  assert.equal(saved.recovery.scanMaxFilesPerDirectory, 0)
+  assert.match(card().message, /disk unavailable/)
   rejectSave = false
   card().onSaveScanLimit()
   await settle()
-  assert.equal(saved.recovery.scanMaxFilesPerDirectory, 25)
+  assert.equal(updates.length, 4)
+  assert.deepEqual(updates[3], { kind: "scanMaxFilesPerDirectory", value: 25 })
+  assert.equal(card().messageError, false)
   assert.equal(card().scanLimitValue, "25")
 })
 

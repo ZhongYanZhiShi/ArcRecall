@@ -877,13 +877,7 @@ fn seven_zip_recovers_disguised_two_part_archive_from_task_workspace() {
             .map(|archive| archive.volume_count),
         Some(2)
     );
-    assert!(!fs::read_dir(dir.path()).unwrap().any(|entry| {
-        entry
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".arcrecall-volumes-")
-    }));
+    assert!(!job.work_directory.join("split-volumes").exists());
 }
 
 #[test]
