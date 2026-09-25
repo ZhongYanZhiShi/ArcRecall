@@ -225,9 +225,10 @@ pnpm exec tauri build --config src-tauri/tauri.updater.release.conf.json
 ### Release workflow
 
 The repository's GitHub Actions workflow builds the full Windows x64 installer,
-generates release notes, and creates a GitHub Release whenever a semantic version
-tag is pushed. Before releasing, make sure the versions in `package.json`,
-`src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` match, then run:
+reads `.github/release-notes/vX.Y.Z.md`, and creates a GitHub Release whenever a
+semantic version tag is pushed. Before releasing, make sure the release notes
+file exists and the versions in `package.json`, `src-tauri/tauri.conf.json`, and
+`src-tauri/Cargo.toml` match, then run:
 
 ```powershell
 git tag v0.1.0

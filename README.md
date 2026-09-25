@@ -193,8 +193,8 @@ pnpm exec tauri build --config src-tauri/tauri.updater.release.conf.json
 ### 发布流程
 
 仓库中的 GitHub Actions 会在推送语义化版本标签后自动构建 Windows x64 完整安装包、
-生成发布说明并创建 GitHub Release。发布前请确保 `package.json`、
-`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 中的版本号一致，然后执行：
+读取 `.github/release-notes/vX.Y.Z.md` 并创建 GitHub Release。发布前请确保发布说明文件存在，
+且 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 中的版本号一致，然后执行：
 
 ```powershell
 git tag v0.1.0

@@ -104,6 +104,20 @@ jobs:
       - name: Prepare bundled recovery engines
         run: pnpm engine-bundle:prepare
 
+      - name: Load release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $notesPath = ".github/release-notes/$env:RELEASE_TAG.md"
+          if (-not (Test-Path -LiteralPath $notesPath -PathType Leaf)) {
+            throw "Missing release notes for $env:RELEASE_TAG at $notesPath."
+          }
+          $delimiter = [guid]::NewGuid().ToString('N')
+          "body<<$delimiter" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Get-Content -Raw -LiteralPath $notesPath | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $delimiter | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Build installer and create GitHub Release
         uses: tauri-apps/tauri-action@action-v1.0.0
         env:
@@ -113,7 +127,7 @@ jobs:
         with:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: ArcRecall ${{ env.RELEASE_TAG }}
-          generateReleaseNotes: true
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: ${{ steps.version.outputs.is_prerelease }}
           retryAttempts: 2
