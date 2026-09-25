@@ -215,8 +215,8 @@ impl AiSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
-    /// Opt in to background checks and signed update downloads.
-    #[serde(default)]
+    /// Enable scheduled checks and signed update downloads.
+    #[serde(default = "default_auto_update")]
     pub auto_update: bool,
     #[serde(default = "default_settings_version")]
     pub version: u32,
@@ -234,7 +234,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             version: CURRENT_SETTINGS_VERSION,
-            auto_update: false,
+            auto_update: default_auto_update(),
             engine: EngineSettings::default(),
             logging: LoggingSettings::default(),
             ai: AiSettings::default(),
@@ -253,6 +253,10 @@ impl AppSettings {
 
 const fn default_settings_version() -> u32 {
     CURRENT_SETTINGS_VERSION
+}
+
+const fn default_auto_update() -> bool {
+    true
 }
 
 fn default_ai_rename_prompt() -> String {
@@ -454,24 +458,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn automatic_updates_are_opt_in_and_persist_without_changing_other_preferences() {
+    fn automatic_updates_default_on_and_toggle_without_changing_other_preferences() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         std::fs::write(&path, r#"{"engine":{"hashcatPath":"test-engine"}}"#).unwrap();
         let store = super::SettingsStore::open(&path).unwrap();
         let before = store.load().unwrap();
-        assert!(!before.auto_update);
-        store
-            .update_preferences(super::SettingsUpdate::AutoUpdate(true))
-            .unwrap();
-        let mut after = super::SettingsStore::open(&path).unwrap().load().unwrap();
-        assert!(after.auto_update);
-        after.auto_update = false;
-        assert_eq!(before, after);
+        assert!(before.auto_update);
         store
             .update_preferences(super::SettingsUpdate::AutoUpdate(false))
             .unwrap();
-        assert!(!store.load().unwrap().auto_update);
+        let mut after = super::SettingsStore::open(&path).unwrap().load().unwrap();
+        assert!(!after.auto_update);
+        after.auto_update = true;
+        assert_eq!(before, after);
+        store
+            .update_preferences(super::SettingsUpdate::AutoUpdate(true))
+            .unwrap();
+        assert!(store.load().unwrap().auto_update);
     }
 
     #[test]

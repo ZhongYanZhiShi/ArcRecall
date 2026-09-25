@@ -189,8 +189,8 @@ pnpm desktop:build
 
 Signed Windows x64 releases support checking, downloading, and installing updates under
 Settings → Application. Every launch checks the latest stable GitHub release and notifies users
-when an update is available. Automatic updates are opt-in: when enabled, the app downloads and
-verifies updates and repeats the check every six hours. Users
+when an update is available. Automatic downloads are enabled by default and can be turned off;
+when enabled, the app downloads and verifies updates and repeats the check every six hours. Users
 choose when to install and restart. Installation is blocked while native tasks are active.
 Settings, dictionaries, and history are preserved. Downloads remain in memory until exit;
 they must be downloaded again after restarting. Disabling automatic updates does not cancel

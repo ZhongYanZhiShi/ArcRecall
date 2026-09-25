@@ -66,8 +66,8 @@ export function AppUpdatePanel() {
           <FieldContent>
             <FieldLabel htmlFor="auto-update">自动更新</FieldLabel>
             <FieldDescription id="auto-update-description">
-              每次启动都会检查更新。开启后自动下载，并每 6
-              小时再次检查；安装重启前会等待你的操作。
+              每次启动都会检查更新。此选项默认开启；开启时自动下载，并每 6
+              小时再次检查。安装更新仍需你确认。
             </FieldDescription>
           </FieldContent>
           <Switch
