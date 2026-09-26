@@ -60,8 +60,12 @@ export function ExtractPage({
   const [analysis, setAnalysis] = React.useState<ArchiveAnalysis | null>(null)
   const [knownPassword, setKnownPassword] = React.useState("")
   const [showKnownPassword, setShowKnownPassword] = React.useState(false)
-  const [showRecoveredPassword, setShowRecoveredPassword] =
-    React.useState(false)
+  const [passwordTaskId, setPasswordTaskId] = React.useState<string | null>(
+    null
+  )
+  const [selectedQueueItemId, setSelectedQueueItemId] = React.useState<
+    number | null
+  >(null)
   const [passwordCopied, setPasswordCopied] = React.useState(false)
   const [reattachedTaskId, setReattachedTaskId] = React.useState<string | null>(
     null
@@ -77,19 +81,39 @@ export function ExtractPage({
       .then(setDictionaryCount)
       .catch(() => setDictionaryCount(isDesktopRuntime() ? null : 0))
   }, [])
-  const { task, setTask, running, runningRef } =
-    useDesktopTask<RecoveryTaskStatus>({
-      enabled: isDesktopRuntime() && !queue.running,
-      getStatus: getRecoveryStatus,
-      initialPollDelayMs: 350,
-      pollIntervalMs: 700,
-      onError: (reason) => setError(toErrorMessage(reason)),
-      onReattach: (latest) => {
-        setComputeMode(latest.computeMode ?? "gpuPreferred")
-        setReattachedTaskId(latest.taskId)
-      },
-      onSettled: refreshDictionaryCount,
+  const {
+    task: activeTask,
+    setTask,
+    running,
+    runningRef,
+  } = useDesktopTask<RecoveryTaskStatus>({
+    enabled: isDesktopRuntime() && !queue.running,
+    getStatus: getRecoveryStatus,
+    initialPollDelayMs: 350,
+    pollIntervalMs: 700,
+    onError: (reason) => setError(toErrorMessage(reason)),
+    onReattach: (latest) => {
+      setComputeMode(latest.computeMode ?? "gpuPreferred")
+      setReattachedTaskId(latest.taskId)
+    },
+    onSettled: refreshDictionaryCount,
+  })
+  const selectedTask = queue.items.find(
+    (item) => item.id === selectedQueueItemId
+  )?.task
+  const task = selectedTask ?? activeTask
+  const showRecoveredPassword = Boolean(task && passwordTaskId === task.taskId)
+  const setShowRecoveredPassword: React.Dispatch<
+    React.SetStateAction<boolean>
+  > = (update) => {
+    setPasswordTaskId((previous) => {
+      const visible =
+        typeof update === "function"
+          ? update(previous === task?.taskId)
+          : update
+      return visible ? (task?.taskId ?? null) : null
     })
+  }
   const openedTasks = React.useRef(new Set<string>())
   const autoOpenTasks = React.useRef(new Set<string>())
   const analysisRequestId = React.useRef(0)
@@ -148,12 +172,13 @@ export function ExtractPage({
       setBusy(true)
       setError(null)
       setRepairMessage(null)
+      setSelectedQueueItemId(null)
       setTask(null)
       setReattachedTaskId(null)
       setAnalysis(null)
       setKnownPassword("")
       setShowKnownPassword(false)
-      setShowRecoveredPassword(false)
+      setPasswordTaskId(null)
       setPasswordCopied(false)
       try {
         const next = await analyzeArchive(normalizedPath)
@@ -358,7 +383,8 @@ export function ExtractPage({
         computeMode,
       })
       autoOpenTasks.current.add(started.taskId)
-      setShowRecoveredPassword(false)
+      setSelectedQueueItemId(null)
+      setPasswordTaskId(null)
       setPasswordCopied(false)
       setReattachedTaskId(null)
       setTask(started)
@@ -405,18 +431,18 @@ export function ExtractPage({
   )
 
   const handleCancel = React.useCallback(async () => {
-    if (!task?.running) {
+    if (!activeTask?.running) {
       return
     }
     try {
-      await cancelRecovery(task.taskId)
+      await cancelRecovery(activeTask.taskId)
       setTask((current) =>
         current ? { ...current, message: "正在停止外部引擎…" } : current
       )
     } catch (reason) {
       setError(toErrorMessage(reason))
     }
-  }, [setTask, task])
+  }, [setTask, activeTask])
 
   const handleCopyPassword = React.useCallback(async () => {
     if (!task?.recoveredPassword) {
@@ -472,7 +498,8 @@ export function ExtractPage({
       return
     }
     setAnalysis(null)
-    setShowRecoveredPassword(false)
+    setSelectedQueueItemId(null)
+    setPasswordTaskId(null)
     setPasswordCopied(false)
     void recoveryQueue.start({
       outputDirectory: outputMode === "custom" ? outputDir : null,
@@ -526,7 +553,7 @@ export function ExtractPage({
       setShowRecoveredPassword={setShowRecoveredPassword}
       passwordCopied={passwordCopied}
       task={task}
-      reattachedTaskId={reattachedTaskId}
+      reattachedTaskId={selectedTask?.taskId ?? reattachedTaskId}
       dictionaryCount={dictionaryCount}
       analyzingPath={analyzingPath}
       busy={busy || queue.running}
@@ -548,9 +575,8 @@ export function ExtractPage({
             const item = queue.items.find((candidate) => candidate.id === id)
             if (item?.task) {
               setAnalysis(null)
-              setReattachedTaskId(item.task.taskId)
-              setTask(item.task)
-              setShowRecoveredPassword(false)
+              setSelectedQueueItemId(id)
+              setPasswordTaskId(null)
               setPasswordCopied(false)
               requestAnimationFrame(() => {
                 taskResultRef.current?.focus({ preventScroll: true })

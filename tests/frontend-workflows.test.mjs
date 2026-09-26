@@ -1340,3 +1340,114 @@ test("历史页面每次恢复都刷新，隐藏前的迟到响应不能覆盖�
   tree = harness.render(HistoryPage)
   assert.equal(row().props.entry.id, 3)
 })
+
+test("批次轮询保留选中详情，新任务密码默认隐藏且执行状态独立", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] })
+  const oldWindow = globalThis.window
+  const oldFrame = globalThis.requestAnimationFrame
+  const oldCancelFrame = globalThis.cancelAnimationFrame
+  globalThis.window = {
+    addEventListener() {},
+    removeEventListener() {},
+    matchMedia: () => ({ matches: true }),
+  }
+  globalThis.requestAnimationFrame = () => 1
+  globalThis.cancelAnimationFrame = () => {}
+  let latest = null,
+    sequence = 0
+  const harness = sourceHarness({
+    "@tauri-apps/api/webview": {
+      getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }),
+    },
+    "@/lib/dictionary": {
+      isDesktopRuntime: () => true,
+      countDictionary: async () => 0,
+    },
+    "@/lib/settings": { getSettings: async () => ({}) },
+    "@/lib/sensitive-clipboard": {},
+    "@/lib/recovery": {
+      getRecoveryCapabilities: async () => ({ methods: [] }),
+      analyzeArchive: async (path) => ({
+        archivePath: path,
+        suggestedOutputDirectory: path + ".out",
+      }),
+      startRecovery: async ({ archivePath }) =>
+        (latest = {
+          taskId: `batch-${++sequence}`,
+          archivePath,
+          running: true,
+          completed: false,
+        }),
+      getRecoveryStatus: async (id) =>
+        !id || latest?.taskId === id ? latest : null,
+      openOutputDirectory: async () => {},
+    },
+  })
+  t.after(() => {
+    harness.hide()
+    globalThis.window = oldWindow
+    globalThis.requestAnimationFrame = oldFrame
+    globalThis.cancelAnimationFrame = oldCancelFrame
+  })
+  const { ExtractPage } = harness.load("src/components/home/extract-page.tsx")
+  const render = () =>
+    harness.render(ExtractPage, { onOpenEngineSettings() {} })
+  render()
+  await settle()
+  const { recoveryQueue } = harness.load("src/lib/recovery-queue-session.ts")
+  recoveryQueue.enqueue(["C:\\first.zip", "C:\\second.zip"])
+  const completion = recoveryQueue.start({})
+  await settle()
+  let view = render()
+  latest = {
+    ...latest,
+    running: false,
+    completed: true,
+    success: true,
+    recoveredPassword: "synthetic-first",
+    rootExtractionCompleted: true,
+  }
+  t.mock.timers.tick(700)
+  await settle()
+  view = render()
+  assert.equal(view.props.task.taskId, "batch-2")
+  assert.equal(view.props.task.recoveredPassword, undefined)
+  view.props.queueContent.props.onView(recoveryQueue.getSnapshot().items[0].id)
+  view = render()
+  assert.equal(view.props.task.taskId, "batch-1")
+  assert.equal(view.props.task.completed, true)
+  view.props.setShowRecoveredPassword(true)
+  view = render()
+  latest = { ...latest, elapsedMs: 1400 }
+  t.mock.timers.tick(700)
+  await settle()
+  view = render()
+  assert.equal(view.props.task.taskId, "batch-1")
+  assert.equal(view.props.showRecoveredPassword, true)
+  assert.equal(view.props.running, true)
+  latest = {
+    ...latest,
+    running: false,
+    completed: true,
+    success: true,
+    recoveredPassword: "synthetic-second",
+    rootExtractionCompleted: true,
+  }
+  t.mock.timers.tick(700)
+  await settle()
+  await completion
+  view = render()
+  assert.equal(view.props.task.taskId, "batch-1")
+  assert.equal(view.props.running, false)
+  view.props.queueContent.props.onView(recoveryQueue.getSnapshot().items[1].id)
+  view = render()
+  assert.equal(view.props.task.taskId, "batch-2")
+  assert.equal(view.props.showRecoveredPassword, false)
+  assert.equal(view.props.task.recoveredPassword, "synthetic-second")
+  harness.hide()
+  view = render()
+  await settle()
+  view = render()
+  assert.equal(view.props.task.taskId, "batch-2")
+  assert.equal(view.props.showRecoveredPassword, false)
+})
