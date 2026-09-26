@@ -77,7 +77,7 @@ pub(super) fn recover_with_dictionary(
     let mut hashcat_attempted = false;
     if let Some(records) = records.as_ref() {
         if tools.hashcat.is_file() {
-            let hashcat_probe = probe_hashcat_devices(&tools.hashcat);
+            let hashcat_probe = probe_hashcat_devices(&tools.hashcat, Some(cancellation))?;
             let device_plan = hashcat_device_plan(compute_mode, hashcat_probe.availability);
             if device_plan.is_empty() {
                 fallback_reasons.push(hashcat_probe.unavailable_message(compute_mode));
@@ -395,7 +395,11 @@ pub(super) fn hashcat_device_plan(
 }
 
 pub fn probe_recovery_capabilities(tools: &RecoveryToolPaths) -> RecoveryCapabilities {
-    let hashcat_probe = probe_hashcat_devices(&tools.hashcat);
+    let hashcat_probe =
+        probe_hashcat_devices(&tools.hashcat, None).unwrap_or_else(|error| HashcatDeviceProbe {
+            availability: HashcatDeviceAvailability::default(),
+            failure: Some(error.to_string()),
+        });
     let hashcat_gpu = hashcat_probe.availability.gpu;
     let hashcat_cpu = hashcat_probe.availability.cpu;
     let john_available = tools.john_tools_directory.join("john.exe").is_file();
@@ -454,31 +458,45 @@ pub fn probe_recovery_capabilities(tools: &RecoveryToolPaths) -> RecoveryCapabil
     }
 }
 
-fn probe_hashcat_devices(hashcat: &Path) -> HashcatDeviceProbe {
+fn probe_hashcat_devices(
+    hashcat: &Path,
+    cancellation: Option<&CancellationToken>,
+) -> Result<HashcatDeviceProbe, RecoveryError> {
+    if let Some(cancellation) = cancellation {
+        ensure_not_cancelled(cancellation)?;
+    }
     if !hashcat.is_file() {
-        return HashcatDeviceProbe {
+        return Ok(HashcatDeviceProbe {
             availability: HashcatDeviceAvailability::default(),
             failure: Some("Hashcat 尚未安装。".into()),
-        };
+        });
     }
     let mut request = ProcessRequest::new(hashcat);
     request.args = vec![OsString::from("-I")];
     request.current_dir = hashcat.parent().map(Path::to_path_buf);
     request.timeout = Duration::from_secs(15);
     request.max_output_bytes = 512 * 1024;
-    match run_process(&request, None) {
+    run_hashcat_probe(&request, cancellation)
+}
+
+fn run_hashcat_probe(
+    request: &ProcessRequest,
+    cancellation: Option<&CancellationToken>,
+) -> Result<HashcatDeviceProbe, RecoveryError> {
+    match run_process(request, cancellation) {
         Ok(output) => {
             let combined = format!("{}\n{}", output.stdout, output.stderr);
             let (gpu, cpu) = parse_hashcat_device_types(&combined);
-            HashcatDeviceProbe {
+            Ok(HashcatDeviceProbe {
                 availability: HashcatDeviceAvailability { gpu, cpu },
                 failure: None,
-            }
+            })
         }
-        Err(error) => HashcatDeviceProbe {
+        Err(super::super::runner::ProcessRunnerError::Cancelled) => Err(RecoveryError::Cancelled),
+        Err(error) => Ok(HashcatDeviceProbe {
             availability: HashcatDeviceAvailability::default(),
             failure: Some(format!("Hashcat 计算设备探测失败：{error}")),
-        },
+        }),
     }
 }
 
@@ -1080,6 +1098,46 @@ pub(super) fn decode_password(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_device_probe_is_not_reported_as_unavailable_hardware() {
+        let cancellation = CancellationToken::default();
+        cancellation.cancel();
+        assert!(matches!(
+            probe_hashcat_devices(Path::new("missing-hashcat"), Some(&cancellation)),
+            Err(RecoveryError::Cancelled)
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn device_probe_cancels_a_running_native_process() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("started");
+        let mut request = ProcessRequest::new("powershell.exe");
+        request.current_dir = Some(directory.path().to_path_buf());
+        request.args = ["-NoProfile", "-NonInteractive", "-Command",
+            "[IO.File]::WriteAllText((Join-Path (Get-Location) 'started'), 'ready'); Start-Sleep -Seconds 30"]
+            .map(OsString::from).to_vec();
+        request.timeout = Duration::from_secs(15);
+        let cancellation = CancellationToken::default();
+        let token = cancellation.clone();
+        let worker = std::thread::spawn(move || {
+            let started = Instant::now();
+            while !marker.exists() && started.elapsed() < Duration::from_secs(10) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let child_started = marker.exists();
+            let cancelled_at = Instant::now();
+            token.cancel();
+            (child_started, cancelled_at)
+        });
+        let result = run_hashcat_probe(&request, Some(&cancellation));
+        let (child_started, cancelled_at) = worker.join().unwrap();
+        assert!(child_started, "native probe did not start");
+        assert!(matches!(result, Err(RecoveryError::Cancelled)));
+        assert!(cancelled_at.elapsed() < Duration::from_secs(3));
+    }
     use crate::tools::probe_john_perl;
 
     #[test]
