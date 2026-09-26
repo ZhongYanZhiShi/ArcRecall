@@ -372,18 +372,27 @@ impl DictionaryCandidateStore {
 
     /// Create a consistent SQLite snapshot, including committed WAL contents.
     ///
-    /// `VACUUM INTO` requires the destination to be absent and leaves the live
-    /// database untouched.
+    /// Build beside the destination, then publish without replacing an existing
+    /// backup. An interrupted VACUUM must never leave a final-looking backup.
     pub fn backup(&self, destination: impl AsRef<Path>) -> Result<u64, DictionaryError> {
         let destination = destination.as_ref();
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        let parent = destination
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent)?;
+        let temporary = tempfile::NamedTempFile::new_in(parent)?;
         let _guard = self.write_lock.lock().expect("dictionary write lock");
         self.with_connection(|conn| {
-            conn.execute("VACUUM INTO ?1;", [destination.display().to_string()])?;
-            Ok(std::fs::metadata(destination)?.len())
-        })
+            conn.execute("VACUUM INTO ?1;", [temporary.path().display().to_string()])?;
+            Ok(())
+        })?;
+        temporary.as_file().sync_all()?;
+        let byte_count = temporary.as_file().metadata()?.len();
+        temporary
+            .persist_noclobber(destination)
+            .map_err(|error| DictionaryError::Io(error.error))?;
+        Ok(byte_count)
     }
 
     /// Read a single candidate text by id (for tests / diagnostics).
@@ -507,6 +516,27 @@ mod tests {
 
         assert!(size > 0);
         assert_eq!(backup.count().unwrap(), 2);
+        let check: String = Connection::open(&backup_path)
+            .unwrap()
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(check, "ok");
+    }
+
+    #[test]
+    fn backup_never_replaces_an_existing_file_or_publishes_a_failed_snapshot() {
+        let (dir, store) = temp_db();
+        let exports = dir.path().join("exports");
+        std::fs::create_dir(&exports).unwrap();
+        let existing = exports.join("existing.db");
+        std::fs::write(&existing, b"previous-backup").unwrap();
+        assert!(store.backup(&existing).is_err());
+        assert_eq!(std::fs::read(&existing).unwrap(), b"previous-backup");
+        std::fs::write(&store.path, b"not a database").unwrap();
+        let failed = exports.join("failed.db");
+        assert!(store.backup(&failed).is_err());
+        assert!(!failed.exists());
+        assert_eq!(std::fs::read_dir(exports).unwrap().count(), 1);
     }
 
     #[test]

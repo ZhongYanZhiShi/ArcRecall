@@ -185,9 +185,12 @@ pub(crate) struct DatabaseBackupResult {
 pub(crate) async fn database_backup(
     state: State<'_, AppState>,
 ) -> Result<DatabaseBackupResult, String> {
+    let lease = state.lifecycle.begin()?;
     let created_at_ms = current_time_ms();
     let exports = state.paths.exports.clone();
     let result = run_dictionary(Arc::clone(&state.dictionary), move |store| {
+        // Keep the lease inside the worker even if the awaiting IPC future is dropped.
+        let _lease = lease;
         let destination = unique_database_backup_path(&exports, created_at_ms)?;
         let byte_count = store
             .backup(&destination)
@@ -419,6 +422,91 @@ mod tests {
     use super::*;
     use crate::credential_protection::{protect_history_password, unprotect_history_password};
     use arc_recall_core::{RecoveryHistoryRecord, RecoveryHistoryStore};
+
+    #[test]
+    fn backup_command_blocks_updates_and_shutdown_until_native_worker_finishes() {
+        use crate::logging::LogStore;
+        use crate::task_lifecycle::{RecoverySession, TaskLifecycle};
+        use arc_recall_core::{AppPaths, SettingsStore};
+        use std::sync::atomic::AtomicBool;
+        use std::time::{Duration, Instant};
+        use tauri::Manager;
+
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::from_root(directory.path());
+        paths.ensure_dirs().unwrap();
+        let dictionary = Arc::new(Mutex::new(
+            DictionaryCandidateStore::open(&paths.database).unwrap(),
+        ));
+        dictionary
+            .lock()
+            .unwrap()
+            .add_candidates(["backup-fixture"])
+            .unwrap();
+        let lifecycle = Arc::new(TaskLifecycle::default());
+        let state = AppState {
+            history: Arc::new(Mutex::new(
+                RecoveryHistoryStore::open(&paths.database).unwrap(),
+            )),
+            settings: Mutex::new(SettingsStore::open(&paths.settings).unwrap()),
+            logger: Arc::new(LogStore::new(&paths.logs).unwrap()),
+            recovery_session: RecoverySession::create(&paths.temp).unwrap(),
+            paths,
+            resource_dir: directory.path().to_path_buf(),
+            dictionary: Arc::clone(&dictionary),
+            prepared_restore: Mutex::new(None),
+            recovery_task: Mutex::new(None),
+            compression_task: Mutex::new(None),
+            archive_task_starting: AtomicBool::new(false),
+            lifecycle: Arc::clone(&lifecycle),
+            exit_ready: AtomicBool::new(false),
+            seven_zip_cache: Arc::new(Mutex::new(None)),
+        };
+        // Only the window runtime is mocked; the command, worker, lifecycle and SQLite are real.
+        let app = tauri::test::mock_builder()
+            .manage(state)
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let update = lifecycle.reserve_update().unwrap();
+        assert!(tauri::async_runtime::block_on(database_backup(app.state())).is_err());
+        drop(update);
+
+        let guard = dictionary.lock().unwrap();
+        let handle = app.handle().clone();
+        let backup =
+            tauri::async_runtime::spawn(async move { database_backup(handle.state()).await });
+        let start = Instant::now();
+        loop {
+            if lifecycle.reserve_update().is_err() {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "backup did not acquire its lease"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(lifecycle.request_shutdown());
+        let waiting = Arc::clone(&lifecycle);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let shutdown = std::thread::spawn(move || {
+            waiting.wait_until_finished();
+            sender.send(()).unwrap();
+        });
+        assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
+        drop(guard);
+        let result = tauri::async_runtime::block_on(backup).unwrap().unwrap();
+        receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        shutdown.join().unwrap();
+        assert!(result.byte_count > 0);
+        assert_eq!(
+            DictionaryCandidateStore::open(result.path)
+                .unwrap()
+                .count()
+                .unwrap(),
+            1
+        );
+    }
 
     #[test]
     fn sqlite_restore_round_trips_real_dpapi_history_and_preserves_old_data_backup() {
