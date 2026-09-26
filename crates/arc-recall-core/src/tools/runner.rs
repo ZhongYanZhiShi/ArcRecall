@@ -40,13 +40,17 @@ impl ManagedChild {
     }
 
     fn kill(&mut self) -> io::Result<()> {
-        self.terminate_descendants();
-        self.child.kill()
+        let descendants = self.terminate_descendants();
+        // Still try the direct child if job termination failed, but preserve the
+        // job error: killing only the parent does not guarantee tree cleanup.
+        let child = self.child.kill();
+        descendants.and(child)
     }
 
-    fn terminate_descendants(&self) {
+    fn terminate_descendants(&self) -> io::Result<()> {
         #[cfg(windows)]
-        self.job.terminate();
+        self.job.terminate()?;
+        Ok(())
     }
 }
 
@@ -233,13 +237,13 @@ fn run_process_impl(
             return Err(ProcessRunnerError::Output(error));
         }
         if cancellation.is_some_and(CancellationToken::is_cancelled) {
-            let _ = child.kill();
+            child.kill().map_err(ProcessRunnerError::Wait)?;
             let _ = child.wait();
             join_output(stdout_reader, stderr_reader)?;
             return Err(ProcessRunnerError::Cancelled);
         }
         if started.elapsed() >= request.timeout {
-            let _ = child.kill();
+            child.kill().map_err(ProcessRunnerError::Wait)?;
             let _ = child.wait();
             join_output(stdout_reader, stderr_reader)?;
             return Err(ProcessRunnerError::TimedOut(request.timeout.as_secs()));
@@ -250,7 +254,9 @@ fn run_process_impl(
         }
     };
 
-    child.terminate_descendants();
+    child
+        .terminate_descendants()
+        .map_err(ProcessRunnerError::Wait)?;
     let (stdout, stderr) = join_output(stdout_reader, stderr_reader)?;
     for line in receiver.try_iter() {
         on_stdout(&line);
@@ -488,7 +494,8 @@ mod tests {
         use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
         use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
         use windows_sys::Win32::System::Threading::{
-            OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+            WaitForSingleObject,
         };
 
         let temp = tempfile::tempdir().unwrap();
@@ -516,17 +523,35 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(25));
         };
-        let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        let raw = unsafe {
+            OpenProcess(
+                PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                pid,
+            )
+        };
         assert!(
             !raw.is_null(),
             "descendant should be running before cancellation"
         );
         let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
-        let _ = process.kill();
+        assert!(
+            process.job.contains(&handle).unwrap(),
+            "descendant must belong to the managed job"
+        );
+        assert_eq!(
+            unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) },
+            windows_sys::Win32::Foundation::WAIT_TIMEOUT,
+            "descendant must still be alive before cancellation"
+        );
+        process
+            .kill()
+            .expect("terminating the job and child should succeed");
         process.wait().unwrap();
         assert_eq!(
             unsafe { WaitForSingleObject(handle.as_raw_handle(), 2_000) },
             WAIT_OBJECT_0
         );
+        process.kill().expect("repeated termination should succeed");
     }
 }

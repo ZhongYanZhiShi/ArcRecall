@@ -72,9 +72,48 @@ impl ProcessJob {
         Err(io::Error::other("无法找到外部进程的主线程"))
     }
 
-    pub(super) fn terminate(&self) {
-        unsafe {
-            TerminateJobObject(self.0.as_raw_handle(), 1);
+    pub(super) fn terminate(&self) -> io::Result<()> {
+        if unsafe { TerminateJobObject(self.0.as_raw_handle(), 1) } == 0 {
+            return Err(io::Error::last_os_error());
         }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn contains(&self, process: &impl AsRawHandle) -> io::Result<bool> {
+        use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+
+        let mut in_job = 0;
+        if unsafe { IsProcessInJob(process.as_raw_handle(), self.0.as_raw_handle(), &mut in_job) }
+            == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(in_job != 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::Foundation::{DuplicateHandle, ERROR_ACCESS_DENIED};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    #[test]
+    fn termination_reports_os_errors() {
+        let job = ProcessJob::new().unwrap();
+        let current = unsafe { GetCurrentProcess() };
+        let mut raw = std::ptr::null_mut();
+        // A valid handle without termination rights exercises the real API's
+        // failure path without closing or fabricating an owned handle.
+        assert_ne!(
+            unsafe { DuplicateHandle(current, job.0.as_raw_handle(), current, &mut raw, 0, 0, 0) },
+            0
+        );
+        let restricted = ProcessJob(unsafe { OwnedHandle::from_raw_handle(raw) });
+        assert_eq!(
+            restricted.terminate().unwrap_err().raw_os_error(),
+            Some(ERROR_ACCESS_DENIED as i32)
+        );
     }
 }
