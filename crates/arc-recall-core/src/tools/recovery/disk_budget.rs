@@ -3,7 +3,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use super::RecoveryError;
+use super::super::runner::CancellationToken;
+use super::{RecoveryError, ensure_not_cancelled};
 
 pub const DEFAULT_TASK_MAX_BYTES: u64 = 100 * 1024 * 1024 * 1024;
 pub const DEFAULT_TASK_MAX_ENTRIES: u64 = 100_000;
@@ -107,14 +108,29 @@ pub(super) fn directory_usage(
     path: &Path,
     max_bytes: u64,
     max_entries: u64,
-) -> io::Result<(u64, u64)> {
+    cancellation: &CancellationToken,
+) -> Result<(u64, u64), RecoveryError> {
+    directory_usage_checked(path, max_bytes, max_entries, || {
+        ensure_not_cancelled(cancellation)
+    })
+}
+
+fn directory_usage_checked(
+    path: &Path,
+    max_bytes: u64,
+    max_entries: u64,
+    mut check_cancelled: impl FnMut() -> Result<(), RecoveryError>,
+) -> Result<(u64, u64), RecoveryError> {
+    check_cancelled()?;
     if !path.exists() {
         return Ok((0, 0));
     }
     let mut pending = vec![path.to_path_buf()];
     let (mut bytes, mut entries) = (0u64, 0u64);
     while let Some(directory) = pending.pop() {
+        check_cancelled()?;
         for entry in fs::read_dir(directory)? {
+            check_cancelled()?;
             let entry = entry?;
             let meta = fs::symlink_metadata(entry.path())?;
             entries = entries.saturating_add(1);
@@ -131,7 +147,9 @@ pub(super) fn directory_usage(
                 pending.push(entry.path());
             }
             if bytes > max_bytes || entries > max_entries {
-                return Err(io::Error::other("实时展开量已超过任务磁盘预算"));
+                return Err(RecoveryError::BudgetExceeded(
+                    "实时展开量已超过任务磁盘预算".into(),
+                ));
             }
         }
     }
@@ -155,11 +173,44 @@ mod tests {
     #[test]
     fn actual_output_enforces_bytes_and_entries() {
         let directory = tempfile::tempdir().unwrap();
+        let cancellation = CancellationToken::default();
         fs::write(directory.path().join("a"), [0; 12]).unwrap();
-        assert!(directory_usage(directory.path(), 11, 10).is_err());
-        assert!(directory_usage(directory.path(), 100, 0).is_err());
-        assert_eq!(directory_usage(directory.path(), 12, 1).unwrap(), (12, 1));
+        assert!(matches!(
+            directory_usage(directory.path(), 11, 10, &cancellation),
+            Err(RecoveryError::BudgetExceeded(_))
+        ));
+        assert!(matches!(
+            directory_usage(directory.path(), 100, 0, &cancellation),
+            Err(RecoveryError::BudgetExceeded(_))
+        ));
+        assert_eq!(
+            directory_usage(directory.path(), 12, 1, &cancellation).unwrap(),
+            (12, 1)
+        );
         #[cfg(windows)]
         assert!(available_space(directory.path()).unwrap().unwrap() > 0);
+    }
+
+    #[test]
+    fn directory_scan_stops_during_traversal_and_before_io_when_cancelled() {
+        let directory = tempfile::tempdir().unwrap();
+        for index in 0..20 {
+            fs::write(directory.path().join(index.to_string()), [0; 12]).unwrap();
+        }
+        let cancellation = CancellationToken::default();
+        let mut checks = 0;
+        let result = directory_usage_checked(directory.path(), u64::MAX, u64::MAX, || {
+            checks += 1;
+            if checks == 5 {
+                cancellation.cancel();
+            }
+            ensure_not_cancelled(&cancellation)
+        });
+        assert!(matches!(result, Err(RecoveryError::Cancelled)));
+        assert_eq!(checks, 5);
+        assert!(matches!(
+            directory_usage(&directory.path().join("missing"), 0, 0, &cancellation),
+            Err(RecoveryError::Cancelled)
+        ));
     }
 }

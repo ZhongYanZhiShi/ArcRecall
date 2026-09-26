@@ -46,8 +46,9 @@ completion summary explain skipped directories.
 Each recovery task shares a cumulative extraction budget of 100 GiB and 100,000
 files or directories. LZ4 decoding and split-volume copy fallbacks also count
 toward the byte budget. Windows checks available disk space before extraction,
-then checks actual output and remaining space every 500 ms while reserving at
-least 256 MiB. The budget can be briefly exceeded between checks; reaching it
+then periodically checks actual output and remaining space while reserving at
+least 256 MiB. Each completed check is followed by a delay of at least 500 ms,
+and scans can be cancelled. The budget can be briefly exceeded between checks; reaching it
 stops recursion and preserves completed output. Other platforms enforce the
 cumulative budget but currently do not query available disk space.
 

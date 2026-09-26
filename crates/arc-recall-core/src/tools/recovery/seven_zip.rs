@@ -149,7 +149,12 @@ pub(super) fn extract_with_password(
     )?;
     let (remaining_bytes, remaining_entries) = input.disk_budget.remaining();
     super::disk_budget::check_free_space(&job.output_directory, declared.total_bytes)?;
-    let baseline = super::disk_budget::directory_usage(&job.output_directory, u64::MAX, u64::MAX)?;
+    let baseline = super::disk_budget::directory_usage(
+        &job.output_directory,
+        u64::MAX,
+        u64::MAX,
+        cancellation,
+    )?;
     // Reserve before spawning. Failed extractions still count conservatively.
     input
         .disk_budget
@@ -187,27 +192,32 @@ pub(super) fn extract_with_password(
             if last_check.elapsed() < Duration::from_millis(500) {
                 return Ok(());
             }
-            last_check = std::time::Instant::now();
             let result =
                 super::disk_budget::check_free_space(&job.output_directory, 0).and_then(|_| {
                     super::disk_budget::directory_usage(
                         &job.output_directory,
                         baseline.0.saturating_add(remaining_bytes),
                         baseline.1.saturating_add(remaining_entries),
+                        cancellation,
                     )
                     .map(|_| ())
-                    .map_err(RecoveryError::Io)
                 });
+            // A slow scan must still leave time before the next scan.
+            last_check = std::time::Instant::now();
             if let Err(error) = result {
+                if matches!(error, RecoveryError::Cancelled) {
+                    // Let the runner terminate the child with its cancellation error.
+                    return Ok(());
+                }
                 let message = error.to_string();
-                limit_error = Some(message.clone());
+                limit_error = Some(error);
                 return Err(std::io::Error::other(message));
             }
             Ok(())
         },
     );
-    if let Some(message) = limit_error {
-        return Err(RecoveryError::BudgetExceeded(message));
+    if let Some(error) = limit_error {
+        return Err(error);
     }
     let output = output.map_err(|error| match error {
         super::super::runner::ProcessRunnerError::Cancelled => RecoveryError::Cancelled,
@@ -220,8 +230,8 @@ pub(super) fn extract_with_password(
         &job.output_directory,
         baseline.0.saturating_add(remaining_bytes),
         baseline.1.saturating_add(remaining_entries),
-    )
-    .map_err(|error| RecoveryError::BudgetExceeded(error.to_string()))?;
+        cancellation,
+    )?;
     input.disk_budget.consume(
         actual
             .0
