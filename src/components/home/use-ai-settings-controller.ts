@@ -40,11 +40,27 @@ export function useAiSettingsController({
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const [settings, setSettings] = React.useState<AiSettings | null>(null)
-  const [draft, setDraft] = React.useState<ProfileDraft>(() =>
+  const [draft, setDraftState] = React.useState<ProfileDraft>(() =>
     newProfileDraft("ollama")
   )
   const [models, setModels] = React.useState<AiModelInfo[]>([])
-  const [prompt, setPrompt] = React.useState("")
+  const [prompt, setPromptState] = React.useState("")
+  const [loading, setLoading] = React.useState(true)
+  const draftRevision = React.useRef(0)
+  const setDraft = React.useCallback(
+    (update: React.SetStateAction<ProfileDraft>) => {
+      draftRevision.current += 1
+      setDraftState(update)
+    },
+    []
+  )
+  const setPrompt = React.useCallback(
+    (update: React.SetStateAction<string>) => {
+      draftRevision.current += 1
+      setPromptState(update)
+    },
+    []
+  )
   const [busyScope, setBusyScope] = React.useState<"profile" | "prompt" | null>(
     null
   )
@@ -58,31 +74,37 @@ export function useAiSettingsController({
   const [invalidField, setInvalidField] =
     React.useState<InvalidProfileField | null>(null)
 
-  const busy = busyScope !== null
+  const busy = loading || busyScope !== null
   const profileBusy = busyScope === "profile"
   const promptBusy = busyScope === "prompt"
 
   const applySettings = React.useCallback(
     (next: AiSettings, preferredId?: string | null, syncPrompt = true) => {
+      draftRevision.current += 1
       setSettings(next)
       if (syncPrompt) {
-        setPrompt(next.renamePrompt)
+        setPromptState(next.renamePrompt)
       }
       const selected =
         next.profiles.find((profile) => profile.id === preferredId) ??
         next.profiles.find((profile) => profile.id === next.activeProfileId) ??
         next.profiles[0]
-      setDraft(selected ? profileToDraft(selected) : newProfileDraft("ollama"))
+      setDraftState(
+        selected ? profileToDraft(selected) : newProfileDraft("ollama")
+      )
     },
     []
   )
 
   React.useEffect(() => {
     let disposed = false
+    const revision = draftRevision.current
     void listAiProfiles()
       .then((next) => {
         if (!disposed) {
-          applySettings(next)
+          // Activity resumes this effect. A refresh must not replace edits made
+          // after its request started, even after the initial loading screen.
+          if (draftRevision.current === revision) applySettings(next)
         }
       })
       .catch((reason) => {
@@ -92,6 +114,9 @@ export function useAiSettingsController({
             message: `读取 AI 配置失败：${toErrorMessage(reason)}`,
           })
         }
+      })
+      .finally(() => {
+        if (!disposed) setLoading(false)
       })
     return () => {
       disposed = true

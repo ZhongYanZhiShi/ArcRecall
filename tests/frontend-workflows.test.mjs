@@ -1451,3 +1451,100 @@ test("批次轮询保留选中详情，新任务密码默认隐藏且执行状�
   assert.equal(view.props.task.taskId, "batch-2")
   assert.equal(view.props.showRecoveredPassword, false)
 })
+
+test("AI 初次加载期间阻止编辑操作，完成或失败后解除加载状态", async (t) => {
+  const oldWindow = globalThis.window
+  globalThis.window = { addEventListener() {}, removeEventListener() {} }
+  t.after(() => {
+    globalThis.window = oldWindow
+  })
+  for (const fails of [false, true]) {
+    let resolve, reject
+    const pending = new Promise((done, fail) => {
+      resolve = done
+      reject = fail
+    })
+    let saves = 0
+    const harness = sourceHarness({
+      "@/lib/ai": {
+        AI_PROVIDER_DEFAULTS: {
+          ollama: {
+            label: "Ollama",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            model: "",
+          },
+        },
+        listAiProfiles: () => pending,
+        upsertAiProfile: async () => {
+          saves++
+        },
+      },
+    })
+    const { useAiSettingsController } = harness.load(
+      "src/components/home/use-ai-settings-controller.ts"
+    )
+    const render = () => harness.render(useAiSettingsController, {})
+    let current = render()
+    assert.equal(current.busy, true)
+    await current.handleSaveProfile()
+    assert.equal(saves, 0)
+    if (fails) reject(new Error("read unavailable"))
+    else resolve({ profiles: [], activeProfileId: "", renamePrompt: "saved" })
+    await settle()
+    current = render()
+    assert.equal(current.busy, false)
+    if (fails) assert.match(current.profileFeedback.message, /read unavailable/)
+    current.setDraft((d) => ({
+      ...d,
+      name: "new-unsaved-name",
+      model: "chosen-model",
+    }))
+    await settle()
+    current = render()
+    assert.equal(current.draft.name, "new-unsaved-name")
+    assert.equal(current.draft.model, "chosen-model")
+    harness.hide()
+  }
+})
+
+test("AI 页面恢复后的迟到配置不覆盖正在编辑的草稿和提示词", async (t) => {
+  const oldWindow = globalThis.window
+  globalThis.window = { addEventListener() {}, removeEventListener() {} }
+  const refresh = deferred()
+  const saved = { profiles: [], activeProfileId: "", renamePrompt: "saved" }
+  let reads = 0
+  const harness = sourceHarness({
+    "@/lib/ai": {
+      AI_PROVIDER_DEFAULTS: {
+        ollama: {
+          label: "Ollama",
+          baseUrl: "http://127.0.0.1:11434/v1",
+          model: "",
+        },
+      },
+      listAiProfiles: () =>
+        ++reads === 1 ? Promise.resolve(saved) : refresh.promise,
+    },
+  })
+  t.after(() => {
+    harness.hide()
+    globalThis.window = oldWindow
+  })
+  const { useAiSettingsController } = harness.load(
+    "src/components/home/use-ai-settings-controller.ts"
+  )
+  const render = () => harness.render(useAiSettingsController, {})
+  render()
+  await settle()
+  assert.equal(render().busy, false)
+  harness.hide()
+  let current = render()
+  current.setDraft((draft) => ({ ...draft, name: "unsaved" }))
+  current.setPrompt("unsaved prompt")
+  refresh.resolve({ ...saved, renamePrompt: "stale refresh" })
+  await settle()
+  current = render()
+  assert.equal(reads, 2)
+  assert.equal(current.draft.name, "unsaved")
+  assert.equal(current.prompt, "unsaved prompt")
+})
