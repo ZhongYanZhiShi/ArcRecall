@@ -95,7 +95,7 @@ export function AppShell({
           onPreload={onNavPreload}
         />
         <a
-          href="https://github.com/ZhongYanZhiShi/arc-recall"
+          href="https://github.com/ZhongYanZhiShi/ArcRecall"
           target="_blank"
           rel="noopener noreferrer"
           aria-label="打开 ArcRecall 的 GitHub 仓库"

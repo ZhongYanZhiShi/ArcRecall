@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ZhongYanZhiShi/arc-recall.git"
+    "url": "git+https://github.com/ZhongYanZhiShi/ArcRecall.git"
   },
   "type": "module",
   "scripts": {

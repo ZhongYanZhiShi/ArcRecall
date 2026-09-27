@@ -76,7 +76,7 @@ Hashcat 的完成比例是当前引擎尝试的进度，切换模式或处理下
 ## 项目结构
 
 ```text
-arc-recall/
+ArcRecall/
 ├─ src/            # Next.js 界面
 ├─ src-tauri/      # Tauri 2 桌面壳与 IPC 适配层
 ├─ crates/
@@ -98,8 +98,8 @@ arc-recall/
 克隆仓库：
 
 ```powershell
-git clone https://github.com/ZhongYanZhiShi/arc-recall.git
-cd arc-recall
+git clone https://github.com/ZhongYanZhiShi/ArcRecall.git
+cd ArcRecall
 ```
 
 安装依赖并验证基础构建：
@@ -213,7 +213,7 @@ pnpm dlx shadcn@latest add <component>
 
 ## 参与贡献
 
-欢迎通过 [Issues](https://github.com/ZhongYanZhiShi/arc-recall/issues) 提交问题或建议，也欢迎发起 [Pull Request](https://github.com/ZhongYanZhiShi/arc-recall/pulls)。
+欢迎通过 [Issues](https://github.com/ZhongYanZhiShi/ArcRecall/issues) 提交问题或建议，也欢迎发起 [Pull Request](https://github.com/ZhongYanZhiShi/ArcRecall/pulls)。
 
 提交改动前，请先阅读[贡献指南](./CONTRIBUTING.md)，并运行与改动范围对应的检查。
 

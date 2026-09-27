@@ -100,7 +100,7 @@ are redacted before persistence.
 ## Repository structure
 
 ```text
-arc-recall/
+ArcRecall/
 ├─ src/            # Next.js UI
 ├─ src-tauri/      # Tauri 2 desktop shell and IPC adapters
 ├─ crates/
@@ -122,8 +122,8 @@ The test command requires `--experimental-strip-types` and does not support Node
 Clone the repository:
 
 ```powershell
-git clone https://github.com/ZhongYanZhiShi/arc-recall.git
-cd arc-recall
+git clone https://github.com/ZhongYanZhiShi/ArcRecall.git
+cd ArcRecall
 ```
 
 Install dependencies and verify the base build:
@@ -248,7 +248,7 @@ pnpm dlx shadcn@latest add <component>
 
 ## Contributing
 
-Issues and suggestions are welcome through [GitHub Issues](https://github.com/ZhongYanZhiShi/arc-recall/issues). Contributions can be submitted as [Pull Requests](https://github.com/ZhongYanZhiShi/arc-recall/pulls).
+Issues and suggestions are welcome through [GitHub Issues](https://github.com/ZhongYanZhiShi/ArcRecall/issues). Contributions can be submitted as [Pull Requests](https://github.com/ZhongYanZhiShi/ArcRecall/pulls).
 
 Before submitting changes, read the [contribution guide](./CONTRIBUTING.en.md) and run the checks relevant to your changes.
 
