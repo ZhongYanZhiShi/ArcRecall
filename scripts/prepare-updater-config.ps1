@@ -1,10 +1,10 @@
 $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($env:TAURI_UPDATER_PUBLIC_KEY)) {
-    throw 'Set the TAURI_UPDATER_PUBLIC_KEY repository variable to the contents of your Tauri .pub file.'
+    throw 'Set the TAURI_UPDATER_PUBLIC_KEY environment variable to the contents of your Tauri .pub file.'
 }
 if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
-    throw 'Set the TAURI_SIGNING_PRIVATE_KEY repository secret before publishing signed updates.'
+    throw 'Set the TAURI_SIGNING_PRIVATE_KEY environment variable to your private key path or contents before publishing signed updates.'
 }
 
 $publicKey = $env:TAURI_UPDATER_PUBLIC_KEY.Trim()
