@@ -184,9 +184,7 @@ pnpm build
 pnpm desktop:build
 ```
 
-## Releasing
-
-### Application updates
+## Application updates
 
 Signed Windows x64 releases support checking, downloading, and installing updates under
 Settings → Application. Every launch checks the latest stable GitHub release and notifies users
@@ -196,49 +194,6 @@ choose when to install and restart. Installation is blocked while native tasks a
 Settings, dictionaries, and history are preserved. Downloads remain in memory until exit;
 they must be downloaded again after restarting. Disabling automatic updates does not cancel
 an existing download. Pre-releases are excluded from the stable update channel.
-
-Before the first signed release, generate and back up a signing key outside the repository:
-
-```powershell
-pnpm exec tauri signer generate -w "$env:USERPROFILE/.tauri/arc-recall.key"
-```
-
-Configure these repository Actions values:
-
-- Variable `TAURI_UPDATER_PUBLIC_KEY`: complete contents of the generated `.pub` file.
-- Secret `TAURI_SIGNING_PRIVATE_KEY`: complete contents of its private key file.
-- Secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: the signing key password, or empty if unset.
-
-Keep the same key pair for subsequent releases. The workflow fails early if keys are missing,
-embeds the public key, and uploads the signed installer, signature, and `latest.json` using
-the [Tauri updater](https://v2.tauri.app/plugin/updater/). Development and unsigned local builds
-need no keys and show that updates are unavailable. Existing users must manually install
-the first release that includes this feature.
-
-For a signed local full build, set the same three environment variables, then run:
-
-```powershell
-pnpm engine-bundle:prepare
-./scripts/prepare-updater-config.ps1
-pnpm exec tauri build --config src-tauri/tauri.updater.release.conf.json
-```
-
-### Release workflow
-
-The repository's GitHub Actions workflow builds the full Windows x64 installer,
-reads `.github/release-notes/vX.Y.Z.md`, and creates a GitHub Release whenever a
-semantic version tag is pushed. Before releasing, make sure the release notes
-file exists and the versions in `package.json`, `src-tauri/tauri.conf.json`, and
-`src-tauri/Cargo.toml` match, then run:
-
-```powershell
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-You can also run the `Release` workflow manually from GitHub Actions with an
-existing version tag. Pre-release tags such as `v0.2.0-beta.1` are published as
-GitHub pre-releases automatically.
 
 Add a shadcn/ui component:
 
