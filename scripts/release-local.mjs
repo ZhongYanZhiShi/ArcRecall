@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import {
   copyFileSync,
   existsSync,
@@ -17,17 +18,22 @@ const TARGET = "x86_64-pc-windows-msvc"
 const PLATFORM = "windows-x86_64"
 const ROOT = fileURLToPath(new URL("../", import.meta.url))
 
-export function parseArguments(args) {
+export function parseArguments(args, { requireTag = true } = {}) {
   const options = { tag: "", dryRun: false, help: false }
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--") continue
     if (args[i] === "--help") options.help = true
     else if (args[i] === "--dry-run") options.dryRun = true
+    else if (args[i] === "--publish" && !options.publish) options.publish = true
+    else if (args[i] === "--package-only" && !options.packageOnly)
+      options.packageOnly = true
     else if (args[i] === "--tag" && !options.tag && args[i + 1]) {
       options.tag = args[++i]
     } else throw new Error(`未知或不完整的参数：${args[i]}`)
   }
-  if (!options.help) versionFromTag(options.tag)
+  if (options.publish && options.packageOnly)
+    throw new Error("--package-only 不能与 --publish 同时使用。")
+  if (!options.help && (requireTag || options.tag)) versionFromTag(options.tag)
   return options
 }
 
@@ -198,6 +204,8 @@ export function releaseLocal(options, dependencies = {}) {
     JSON.parse(readFileSync(path.join(root, relative), "utf8"))
   const version = versionFromTag(options.tag)
   const prerelease = version.includes("-")
+  if (options.publish && options.packageOnly)
+    throw new Error("本地打包模式不能正式发布。")
   assertPlatform(
     dependencies.platform ?? process.platform,
     dependencies.arch ?? process.arch
@@ -214,19 +222,21 @@ export function releaseLocal(options, dependencies = {}) {
     "-Command",
     "$PSVersionTable.PSVersion.ToString()",
   ])
-  const login = read("gh", ["api", "user", "--jq", ".login"])
-  if (login.toLowerCase() !== OWNER.toLowerCase()) {
-    throw new Error(
-      `当前 GitHub 登录账号不是发布者 ${OWNER}。请先使用 gh auth login / gh auth switch 切换。`
-    )
-  }
-  const origin = read("git", ["remote", "get-url", "origin"])
-  if (
-    !/^((git@github\.com:)|(https:\/\/github\.com\/))ZhongYanZhiShi\/ArcRecall(?:\.git)?$/i.test(
-      origin
-    )
-  ) {
-    throw new Error(`origin 必须指向 github.com/${REPOSITORY}。`)
+  if (!options.packageOnly) {
+    const login = read("gh", ["api", "user", "--jq", ".login"])
+    if (login.toLowerCase() !== OWNER.toLowerCase()) {
+      throw new Error(
+        `当前 GitHub 登录账号不是发布者 ${OWNER}。请先使用 gh auth login / gh auth switch 切换。`
+      )
+    }
+    const origin = read("git", ["remote", "get-url", "origin"])
+    if (
+      !/^((git@github\.com:)|(https:\/\/github\.com\/))ZhongYanZhiShi\/ArcRecall(?:\.git)?$/i.test(
+        origin
+      )
+    ) {
+      throw new Error(`origin 必须指向 github.com/${REPOSITORY}。`)
+    }
   }
   const assertSource = () => {
     if (read("git", ["status", "--porcelain", "--untracked-files=normal"])) {
@@ -235,6 +245,7 @@ export function releaseLocal(options, dependencies = {}) {
       )
     }
     const commit = read("git", ["rev-parse", "HEAD"])
+    if (options.packageOnly) return commit
     if (
       commit !== read("git", ["rev-parse", `refs/tags/${options.tag}^{commit}`])
     ) {
@@ -286,9 +297,13 @@ export function releaseLocal(options, dependencies = {}) {
 
   const installerName = `ArcRecall_${version}_x64-setup.exe`
   const signatureName = `${installerName}.sig`
-  const initialRelease = getRelease(read, options.tag)
-  assertDraft(initialRelease, options.tag)
-  log(`源码：${commit}；发布者：${login}；目标：${REPOSITORY} 的草稿 Release。`)
+  const initialRelease = options.packageOnly
+    ? null
+    : getRelease(read, options.tag)
+  if (!options.packageOnly) assertDraft(initialRelease, options.tag)
+  log(
+    `源码：${commit}；目标：${options.packageOnly ? "仅生成本地发布文件" : options.publish ? "上传完整附件后自动发布" : "上传草稿"}。`
+  )
   if (options.dryRun) {
     log("预检查通过。未构建、未创建草稿、未上传文件。")
     return
@@ -297,17 +312,28 @@ export function releaseLocal(options, dependencies = {}) {
   run("pnpm", ["install", "--frozen-lockfile"])
   for (const check of ["format:check", "lint", "typecheck", "test"])
     run("pnpm", [check])
+  // Both checks and builds use their own cache, leaving running development apps alone.
+  const targetDirectory = path.join(root, "target", "local-release")
+  const cargoEnvironment = { env: { CARGO_TARGET_DIR: targetDirectory } }
   run("cargo", ["fmt", "--all", "--", "--check"])
-  run("cargo", [
-    "clippy",
-    "--workspace",
-    "--all-targets",
-    "--all-features",
-    "--",
-    "-D",
-    "warnings",
-  ])
-  run("cargo", ["test", "--workspace", "--all-targets", "--all-features"])
+  run(
+    "cargo",
+    [
+      "clippy",
+      "--workspace",
+      "--all-targets",
+      "--all-features",
+      "--",
+      "-D",
+      "warnings",
+    ],
+    cargoEnvironment
+  )
+  run(
+    "cargo",
+    ["test", "--workspace", "--all-targets", "--all-features"],
+    cargoEnvironment
+  )
   run("pnpm", ["engine-bundle:prepare"])
   run("powershell.exe", [
     "-NoProfile",
@@ -318,7 +344,6 @@ export function releaseLocal(options, dependencies = {}) {
   ])
 
   // Keep reusable Cargo output separate from development, and reject stale installers.
-  const targetDirectory = path.join(root, "target", "local-release")
   const installer = path.join(
     targetDirectory,
     TARGET,
@@ -348,7 +373,36 @@ export function releaseLocal(options, dependencies = {}) {
   if (assertSource() !== commit)
     throw new Error("构建期间源码发生变化，拒绝上传。")
 
-  // Recheck after a long build so another publisher cannot silently replace the draft.
+  const outputRoot = path.join(root, "artifacts")
+  mkdirSync(outputRoot, { recursive: true })
+  const output = mkdtempSync(
+    path.join(
+      outputRoot,
+      `${options.packageOnly ? "package" : "release"}-${options.tag}-`
+    )
+  )
+  copyFileSync(installer, path.join(output, installerName))
+  copyFileSync(`${installer}.sig`, path.join(output, signatureName))
+  const manifestPath = path.join(output, "latest.json")
+  const writeManifest = (previous) =>
+    writeFileSync(
+      manifestPath,
+      JSON.stringify(
+        mergeUpdaterManifest(previous, {
+          version,
+          notes,
+          signature,
+          assetName: installerName,
+        }),
+        null,
+        2
+      ) + "\n"
+    )
+  writeManifest(undefined)
+  log(`已生成安装包、签名及 latest.json：${output}`)
+  if (options.packageOnly) return output
+
+  // Preserve complete local artifacts even if the subsequent upload fails.
   const currentRelease = getRelease(read, options.tag)
   assertDraft(currentRelease, options.tag)
   if (JSON.stringify(currentRelease) !== JSON.stringify(initialRelease)) {
@@ -356,16 +410,11 @@ export function releaseLocal(options, dependencies = {}) {
       "构建期间 Release 已变化，请检查草稿后重试；不要同时发布同一版本。"
     )
   }
-  const outputRoot = path.join(root, "artifacts")
-  mkdirSync(outputRoot, { recursive: true })
-  const output = mkdtempSync(path.join(outputRoot, `release-${options.tag}-`))
-  copyFileSync(installer, path.join(output, installerName))
-  copyFileSync(`${installer}.sig`, path.join(output, signatureName))
-  const manifestPath = path.join(output, "latest.json")
   const hasManifest = currentRelease?.assets.some(
     (asset) => asset.name === "latest.json"
   )
   if (hasManifest) {
+    const previousManifestPath = path.join(output, "previous-latest.json")
     run("gh", [
       "release",
       "download",
@@ -375,25 +424,11 @@ export function releaseLocal(options, dependencies = {}) {
       "--pattern",
       "latest.json",
       "--output",
-      manifestPath,
+      previousManifestPath,
     ])
+    writeManifest(JSON.parse(readFileSync(previousManifestPath, "utf8")))
+    rmSync(previousManifestPath)
   }
-  const previous = hasManifest
-    ? JSON.parse(readFileSync(manifestPath, "utf8"))
-    : undefined
-  writeFileSync(
-    manifestPath,
-    JSON.stringify(
-      mergeUpdaterManifest(previous, {
-        version,
-        notes,
-        signature,
-        assetName: installerName,
-      }),
-      null,
-      2
-    ) + "\n"
-  )
   if (!currentRelease) {
     run("gh", [
       "release",
@@ -409,6 +444,12 @@ export function releaseLocal(options, dependencies = {}) {
       notesPath,
       ...(prerelease ? ["--prerelease"] : []),
     ])
+  }
+  const draft = options.publish ? getRelease(read, options.tag) : null
+  if (options.publish) {
+    if (!draft?.id || (currentRelease && draft.id !== currentRelease.id))
+      throw new Error("无法确认待上传的草稿，已停止发布。")
+    assertDraft(draft, options.tag)
   }
   run("gh", [
     "release",
@@ -428,8 +469,58 @@ export function releaseLocal(options, dependencies = {}) {
     REPOSITORY,
     ...(hasManifest ? ["--clobber"] : []),
   ])
+  if (options.publish) {
+    const uploaded = getRelease(read, options.tag)
+    if (
+      !draft?.id ||
+      uploaded?.id !== draft.id ||
+      !uploaded.draft ||
+      uploaded.prerelease !== prerelease ||
+      assertSource() !== commit
+    ) {
+      throw new Error("上传期间草稿或源码已变化，未执行正式发布。")
+    }
+    // GitHub computes digests for uploaded assets; require all three exact files.
+    for (const name of [installerName, signatureName, "latest.json"]) {
+      const contents = readFileSync(path.join(output, name))
+      const assets = uploaded.assets.filter((asset) => asset.name === name)
+      const digest = `sha256:${createHash("sha256").update(contents).digest("hex")}`
+      if (
+        assets.length !== 1 ||
+        assets[0].state !== "uploaded" ||
+        assets[0].size !== contents.length ||
+        assets[0].digest !== digest
+      ) {
+        throw new Error(
+          `草稿附件 ${name} 未通过完整性校验，保留草稿，未正式发布。`
+        )
+      }
+    }
+    run("gh", [
+      "release",
+      "edit",
+      options.tag,
+      "--repo",
+      REPOSITORY,
+      "--draft=false",
+      "--verify-tag",
+      `--latest=${!prerelease}`,
+    ])
+    const published = getRelease(read, options.tag)
+    if (
+      published?.id !== draft.id ||
+      published.draft !== false ||
+      published.prerelease !== prerelease
+    )
+      throw new Error("未能确认正式发布结果，请检查 GitHub Release 状态。")
+    log(
+      `已${prerelease ? "发布预发布版本" : "正式发布"}：https://github.com/${REPOSITORY}/releases/tag/${options.tag}`
+    )
+    return output
+  }
   log(`已上传到草稿，尚未正式发布。本地产物：${output}`)
   log(`请在 https://github.com/${REPOSITORY}/releases 核对资产并手动发布。`)
+  return output
 }
 
 if (
@@ -440,7 +531,7 @@ if (
     const options = parseArguments(process.argv.slice(2))
     if (options.help) {
       console.log(
-        "用法：pnpm release:local --tag vX.Y.Z [--dry-run]\n只在本机运行；默认上传草稿，正式发布由你在 GitHub 确认。\n当前支持 Windows x64；M1/macOS ARM64 暂待原生适配。\n签名环境变量：\n  TAURI_UPDATER_PUBLIC_KEY：.pub 文件完整内容\n  TAURI_SIGNING_PRIVATE_KEY：私钥文件绝对路径或完整内容\n  TAURI_SIGNING_PRIVATE_KEY_PASSWORD：私钥密码，无密码时留空"
+        "用法：pnpm release:local --tag vX.Y.Z [--dry-run] [--publish | --package-only]\n默认上传草稿；--publish 在附件校验通过后自动发布；--package-only 仅生成安装包、签名和 latest.json。\n本地打包推荐使用 pnpm package，自动读取当前版本并隐藏输入密码。\n当前支持 Windows x64；M1/macOS ARM64 暂待原生适配。\n签名环境变量：\n  TAURI_UPDATER_PUBLIC_KEY：.pub 文件完整内容\n  TAURI_SIGNING_PRIVATE_KEY：私钥文件绝对路径或完整内容\n  TAURI_SIGNING_PRIVATE_KEY_PASSWORD：私钥密码，无密码时留空"
       )
     } else releaseLocal(options)
   } catch (error) {

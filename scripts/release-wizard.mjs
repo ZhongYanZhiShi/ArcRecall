@@ -144,8 +144,7 @@ export async function releaseWizard(options, dependencies = {}) {
   ).version
   const suggested = suggestedVersion(current)
   const input =
-    options.tag ??
-    ((await ask(`新版本号 [${suggested}]：`)).trim() || suggested)
+    options.tag || (await ask(`新版本号 [${suggested}]：`)).trim() || suggested
   const tag = input.startsWith("v") ? input : `v${input}`
   const version = versionFromTag(tag)
   const comparison = compareVersions(version, current)
@@ -203,7 +202,7 @@ export async function releaseWizard(options, dependencies = {}) {
     )
   }
   log(
-    `\n${resume ? "继续发布" : "准备发布"} ${tag} → ${REPOSITORY}（草稿）\n${notes}`
+    `\n${resume ? "继续发布" : "准备发布"} ${tag} → ${REPOSITORY}（${options.publish ? "上传校验后自动发布" : "草稿"}）\n${notes}`
   )
   log(
     resume
@@ -286,7 +285,7 @@ export async function releaseWizard(options, dependencies = {}) {
     ])
     const publish = dependencies.release ?? releaseLocal
     publish(
-      { tag },
+      { tag, publish: Boolean(options.publish) },
       {
         root,
         execute: command,
@@ -298,7 +297,7 @@ export async function releaseWizard(options, dependencies = {}) {
     )
   } catch (error) {
     log(
-      `流程已停止，保留现有文件、提交和标签。修复错误并确保工作区干净后，可运行 pnpm release --tag ${tag} 继续；草稿已有附件时需先检查。`
+      `流程已停止，保留现有文件、提交和标签。修复错误并确保工作区干净后，可运行 pnpm release --tag ${tag}${options.publish ? " --publish" : ""} 继续；草稿已有附件时需先检查，也可在 GitHub 手动发布完整草稿。`
     )
     throw error
   }
@@ -313,10 +312,12 @@ if (
     const args = process.argv.slice(2).filter((arg) => arg !== "--")
     if (args.includes("--help")) {
       console.log(
-        "用法：pnpm release [--tag vX.Y.Z]\n输入版本号和更新说明，确认后自动提交版本文件、推送 main 和标签、检查、打包、上传草稿。\n要求：Windows x64、干净的 main 分支、维护者 GitHub 登录和已有签名密钥。\n默认读取 ~/.tauri/arc-recall.key 及 .pub；密码隐藏输入；可沿用 TAURI_* 环境变量。\n失败后使用同一个 --tag 重试；不会移动标签、覆盖同名附件或正式发布。"
+        "用法：pnpm release [--tag vX.Y.Z] [--publish]\n输入版本号和更新说明，确认后自动提交版本文件、推送 main 和标签、检查、打包、生成 latest.json 并上传草稿。\n--publish：完整附件上传并校验通过后，自动正式发布；预发布版本不会标记为 Latest。\n仅本地打包请使用 pnpm package。\n要求：Windows x64、干净的 main 分支、维护者 GitHub 登录和已有签名密钥。\n默认读取 ~/.tauri/arc-recall.key 及 .pub；密码隐藏输入；可沿用 TAURI_* 环境变量。\n失败后使用同一个 --tag 重试；不会移动标签或覆盖同名附件。"
       )
     } else {
-      const options = args.length ? parseArguments(args) : {}
+      const options = parseArguments(args, { requireTag: false })
+      if (options.packageOnly)
+        throw new Error("仅本地打包请使用 pnpm package。")
       if (options.dryRun)
         throw new Error(
           "预检查请使用 pnpm release:local --tag vX.Y.Z --dry-run。"

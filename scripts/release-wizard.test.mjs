@@ -70,6 +70,8 @@ function fixture(t, overrides = {}) {
     "y",
   ]
   let published = 0
+  const releaseOptions = []
+  const messages = []
   let confirmHook = overrides.confirmHook
   const command = (program, args, options) => {
     calls.push({ program, args })
@@ -94,6 +96,8 @@ function fixture(t, overrides = {}) {
     write,
     calls,
     initial,
+    releaseOptions,
+    messages,
     get published() {
       return published
     },
@@ -107,7 +111,7 @@ function fixture(t, overrides = {}) {
           TAURI_UPDATER_PUBLIC_KEY: "fixture-public",
           TAURI_SIGNING_PRIVATE_KEY: "fixture-private",
         },
-        log: () => {},
+        log: (message) => messages.push(message),
         ask: async (question) => {
           if (question.startsWith("开始执行") && confirmHook) {
             confirmHook({ git, write })
@@ -116,7 +120,9 @@ function fixture(t, overrides = {}) {
           assert.ok(answers.length, `Unexpected prompt: ${question}`)
           return answers.shift()
         },
-        release: ({ tag }) => {
+        release: (options) => {
+          const { tag } = options
+          releaseOptions.push(options)
           published++
           const head = git(["rev-parse", "HEAD"])
           assert.equal(git(["status", "--porcelain"]), "")
@@ -193,6 +199,19 @@ test("直接回车采用建议版本号", async (t) => {
   await f.run({})
   assert.equal(f.published, 1)
   assert.ok(f.git(["tag", "--list", "v0.1.2"]))
+})
+
+test("向导默认上传草稿，只有显式指定 publish 才传递自动发布", async (t) => {
+  for (const publish of [false, true]) {
+    const f = fixture(t)
+    await f.run({ tag: "v0.1.2", publish })
+    assert.equal(f.releaseOptions[0].publish, publish)
+    assert.ok(
+      f.messages.some((message) =>
+        message.includes(publish ? "上传校验后自动发布" : "（草稿）")
+      )
+    )
+  }
 })
 
 test("取消不修改文件、创建提交或标签", async (t) => {

@@ -3,14 +3,27 @@
 # Run in a child PowerShell so signing credentials do not persist in the caller.
 Push-Location (Join-Path $PSScriptRoot '..')
 try {
+    $packageOnly = $args -contains '--package-only'
+    $entry = if ($packageOnly) { 'release-local.mjs' } else { 'release-wizard.mjs' }
+    $entryArgs = @($args)
     if ($args -contains '--help') {
-        & node (Join-Path $PSScriptRoot 'release-wizard.mjs') @args
+        & node (Join-Path $PSScriptRoot $entry) @entryArgs
         exit $LASTEXITCODE
+    }
+    if ($packageOnly) {
+        if ($args -contains '--publish' -or $args -contains '--tag') {
+            throw 'pnpm package 只打包当前版本；新版本发布请使用 pnpm release。'
+        }
+        $version = (Get-Content -Raw -LiteralPath 'package.json' | ConvertFrom-Json).version
+        $entryArgs += @('--tag', "v$version")
     }
 
     $changes = & git status --porcelain --untracked-files=normal
     if ($LASTEXITCODE -ne 0) { throw '无法读取 Git 状态。' }
-    if ($changes) { throw '请先提交业务代码和发布脚本，再运行 pnpm release；不会自动提交无关改动。' }
+    if ($changes) { throw '请先提交业务代码和打包发布脚本，再运行命令；不会自动提交无关改动。' }
+
+    . (Join-Path $PSScriptRoot 'prepare-release-environment.ps1')
+    Initialize-ReleaseEnvironment
 
     if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
         $keyPath = Join-Path $env:USERPROFILE '.tauri/arc-recall.key'
@@ -35,7 +48,7 @@ try {
         $secret.Dispose()
     }
 
-    & node (Join-Path $PSScriptRoot 'release-wizard.mjs') @args
+    & node (Join-Path $PSScriptRoot $entry) @entryArgs
     exit $LASTEXITCODE
 } catch {
     Write-Host $_.Exception.Message -ForegroundColor Red

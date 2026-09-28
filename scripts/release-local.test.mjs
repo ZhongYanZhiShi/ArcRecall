@@ -1,8 +1,10 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs"
@@ -47,8 +49,11 @@ function fixture(t, overrides = {}) {
   )
   const calls = []
   let releaseReads = 0
-  const execute = (command, args) => {
-    calls.push({ command, args })
+  let remoteRelease = overrides.release
+    ? { id: 1, ...structuredClone(overrides.release) }
+    : null
+  const execute = (command, args, options) => {
+    calls.push({ command, args, options })
     if (overrides.fail?.(command, args))
       throw new Error("simulated command failure")
     if (command === "git") {
@@ -66,7 +71,7 @@ function fixture(t, overrides = {}) {
       const release =
         overrides.changedRelease && releaseReads > 1
           ? overrides.changedRelease
-          : overrides.release
+          : remoteRelease
       return JSON.stringify([release ? [release] : []])
     }
     if (command === "pnpm" && args.includes("tauri")) {
@@ -81,6 +86,35 @@ function fixture(t, overrides = {}) {
         JSON.stringify(overrides.manifest)
       )
     }
+    if (command === "gh" && args[1] === "create") {
+      remoteRelease = {
+        id: 1,
+        tag_name: tag,
+        draft: true,
+        prerelease: args.includes("--prerelease"),
+        assets: [],
+      }
+    }
+    if (command === "gh" && args[1] === "upload") {
+      for (const file of args.slice(3, args.indexOf("--repo"))) {
+        const contents = readFileSync(file)
+        const name = path.basename(file)
+        const asset = {
+          name,
+          state: "uploaded",
+          size: contents.length,
+          digest: `sha256:${createHash("sha256").update(contents).digest("hex")}`,
+        }
+        overrides.changeAsset?.(asset)
+        remoteRelease.assets = remoteRelease.assets.filter(
+          (existing) => existing.name !== name
+        )
+        remoteRelease.assets.push(asset)
+      }
+      overrides.afterUpload?.(remoteRelease)
+    }
+    if (command === "gh" && args[1] === "edit" && !overrides.unconfirmedPublish)
+      remoteRelease.draft = false
     return ""
   }
   return {
@@ -196,6 +230,139 @@ test("dry-run 只做预检查，不安装、构建或上传", (t) => {
       ({ command, args }) => command === "pnpm" && args[0] === "install"
     )
   )
+})
+
+test("自动发布参数可以单独交给向导，本地打包与自动发布不能混用", () => {
+  assert.equal(
+    parseArguments(["--publish"], { requireTag: false }).publish,
+    true
+  )
+  assert.throws(() => parseArguments(["--publish"]), /指定版本/)
+  assert.throws(
+    () => parseArguments(["--tag", TAG, "--publish", "--package-only"]),
+    /不能/
+  )
+})
+
+test("仅本地打包生成完整三件套，不要求远端标签、GitHub 登录或创建 Release", (t) => {
+  const f = fixture(t, {
+    login: "someone",
+    remoteCommit: "b".repeat(40),
+    tagCommit: "c".repeat(40),
+  })
+  const output = f.publish({ packageOnly: true })
+  assert.deepEqual(
+    readdirSync(output).sort(),
+    [ASSET, `${ASSET}.sig`, "latest.json"].sort()
+  )
+  const manifest = JSON.parse(
+    readFileSync(path.join(output, "latest.json"), "utf8")
+  )
+  assert.equal(manifest.version, VERSION)
+  assert.equal(
+    manifest.platforms["windows-x86_64"].signature,
+    "windows-signature"
+  )
+  assert.ok(!f.calls.some(({ command }) => command === "gh"))
+  assert.ok(
+    !f.calls.some(
+      ({ command, args }) =>
+        command === "git" &&
+        ["ls-remote", "push", "tag", "commit"].includes(args[0])
+    )
+  )
+  for (const check of ["clippy", "test"]) {
+    assert.equal(
+      f.calls.find(
+        ({ command, args }) => command === "cargo" && args[0] === check
+      ).options.env.CARGO_TARGET_DIR,
+      path.join(f.root, "target", "local-release")
+    )
+  }
+})
+
+test("自动发布必须等安装包、签名和清单全部上传并验证通过", (t) => {
+  const f = fixture(t)
+  f.publish({ publish: true })
+  const writes = mutations(f.calls)
+  assert.deepEqual(
+    writes.map(({ args }) => args[1]),
+    ["create", "upload", "upload", "edit"]
+  )
+  assert.ok(writes[0].args.includes("--draft"))
+  assert.ok(writes[2].args[3].endsWith("latest.json"))
+  assert.ok(writes[3].args.includes("--draft=false"))
+  assert.ok(writes[3].args.includes("--latest=true"))
+})
+
+test("自动发布 beta 保留预发布标记且不设为 Latest", (t) => {
+  const f = fixture(t, { version: "0.2.0-beta.1" })
+  f.publish({ publish: true })
+  const writes = mutations(f.calls)
+  assert.ok(writes[0].args.includes("--prerelease"))
+  assert.ok(writes.at(-1).args.includes("--latest=false"))
+})
+
+test("任一附件上传失败都不正式发布，并保留完整本地产物", (t) => {
+  for (const name of [ASSET, "latest.json"]) {
+    const f = fixture(t, {
+      fail: (command, args) =>
+        command === "gh" && args[1] === "upload" && args[3].endsWith(name),
+    })
+    assert.throws(() => f.publish({ publish: true }), /simulated/)
+    assert.ok(!mutations(f.calls).some(({ args }) => args[1] === "edit"))
+    const output = path.join(
+      f.root,
+      "artifacts",
+      readdirSync(path.join(f.root, "artifacts"))[0]
+    )
+    assert.equal(
+      JSON.parse(readFileSync(path.join(output, "latest.json"), "utf8"))
+        .version,
+      VERSION
+    )
+  }
+})
+
+test("任一远端附件哈希、大小或上传状态不正确都保留草稿", (t) => {
+  for (const name of [ASSET, `${ASSET}.sig`, "latest.json"]) {
+    for (const [field, value] of [
+      ["digest", "sha256:wrong"],
+      ["size", 0],
+      ["state", "new"],
+    ]) {
+      const f = fixture(t, {
+        changeAsset: (asset) => {
+          if (asset.name === name) asset[field] = value
+        },
+      })
+      assert.throws(() => f.publish({ publish: true }), /完整性校验/)
+      assert.ok(!mutations(f.calls).some(({ args }) => args[1] === "edit"))
+    }
+  }
+})
+
+test("上传期间草稿被替换或公开时停止自动发布", (t) => {
+  for (const afterUpload of [
+    (release) => {
+      release.id = 2
+    },
+    (release) => {
+      release.draft = false
+    },
+  ]) {
+    const f = fixture(t, { afterUpload })
+    assert.throws(() => f.publish({ publish: true }), /草稿或源码已变化/)
+    assert.ok(!mutations(f.calls).some(({ args }) => args[1] === "edit"))
+  }
+})
+
+test("dry-run 即使指定自动发布也不会上传，发布结果不确定时不报成功", (t) => {
+  const dry = fixture(t)
+  dry.publish({ publish: true, dryRun: true })
+  assert.equal(mutations(dry.calls).length, 0)
+  const uncertain = fixture(t, { unconfirmedPublish: true })
+  assert.throws(() => uncertain.publish({ publish: true }), /未能确认/)
 })
 
 for (const [version, prerelease] of [
