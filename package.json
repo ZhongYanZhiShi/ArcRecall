@@ -21,6 +21,8 @@
     "engine-bundle:prepare": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/prepare-engine-bundle.ps1",
     "release": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/release.ps1",
     "release:local": "node ./scripts/release-local.mjs",
+    "signing:remember": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/signing-password.ps1 -Action Remember",
+    "signing:forget": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/signing-password.ps1 -Action Forget",
     "lint": "eslint",
     "test": "node --experimental-strip-types --test",
     "format": "oxfmt",

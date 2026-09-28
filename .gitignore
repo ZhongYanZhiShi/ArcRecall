@@ -71,6 +71,7 @@ src-tauri/*.log
 src-tauri/tauri.updater.release.conf.json
 # Update signing private keys must never enter version control.
 *.key
+*.dpapi
 *.msi
 *.nsis.zip
 *.AppImage

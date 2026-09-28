@@ -43,9 +43,14 @@ try {
     }
 
     if ($null -eq $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
-        $secret = Read-Host '私钥密码（无密码直接回车）' -AsSecureString
-        $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password
-        $secret.Dispose()
+        . (Join-Path $PSScriptRoot 'signing-password.ps1')
+        $secret = Read-SigningPassword -PrivateKey $env:TAURI_SIGNING_PRIVATE_KEY
+        if ($null -eq $secret) {
+            Write-Host '经常打包可先运行 pnpm signing:remember，在本机加密记住密码。'
+            $secret = Read-Host '私钥密码（无密码直接回车）' -AsSecureString
+        } else { Write-Host '已读取当前 Windows 账户保存的签名密码。' }
+        try { $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password }
+        finally { $secret.Dispose() }
     }
 
     & node (Join-Path $PSScriptRoot $entry) @entryArgs
