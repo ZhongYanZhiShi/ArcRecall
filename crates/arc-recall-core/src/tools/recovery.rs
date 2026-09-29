@@ -441,6 +441,7 @@ fn recover_single_archive(
     let analysis = analyze_archive(&job.archive_path)?;
     fs::create_dir_all(&job.work_directory)?;
     let mut processing_job = job.clone();
+    processing_job.archive_path = PathBuf::from(&analysis.archive_path);
     let mut archive_bytes = analysis.file_size;
     let mut converter_archive_paths = analysis.volume_paths.clone();
     let split_materialization =

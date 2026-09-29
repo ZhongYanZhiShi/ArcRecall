@@ -8,6 +8,8 @@ use sha2::{Digest, Sha256};
 use super::super::runner::CancellationToken;
 use super::{ArchiveAnalysis, ArchiveFormat, RecoveryError, ensure_not_cancelled};
 
+mod zip_volumes;
+
 pub(super) const SEVEN_ZIP_SIGNATURE: &[u8] = b"\x37\x7a\xbc\xaf\x27\x1c";
 const RAR3_SIGNATURE: &[u8] = b"Rar!\x1a\x07\x00";
 pub(super) const RAR5_SIGNATURE: &[u8] = b"Rar!\x1a\x07\x01\x00";
@@ -32,8 +34,13 @@ pub fn analyze_archive(path: impl AsRef<Path>) -> Result<ArchiveAnalysis, Recove
         return Err(RecoveryError::NotFound(path_for_display(path)));
     }
     let absolute = path.canonicalize()?;
-    let format = detect_archive_format(&absolute)?;
-    let volume_paths = resolve_archive_volumes(&absolute, format)?;
+    let (absolute, format, volume_paths) = if let Some(zip) = zip_volumes::resolve(&absolute)? {
+        (zip.primary, ArchiveFormat::Zip, zip.paths)
+    } else {
+        let format = detect_archive_format(&absolute)?;
+        let volumes = resolve_archive_volumes(&absolute, format)?;
+        (absolute, format, volumes)
+    };
     let file_size = volume_paths.iter().try_fold(0u64, |total, volume| {
         total
             .checked_add(volume.metadata()?.len())
@@ -64,6 +71,10 @@ pub fn analyze_archive(path: impl AsRef<Path>) -> Result<ArchiveAnalysis, Recove
         volume_paths,
         suggested_output_directory: path_for_display(&suggested_output_directory),
     })
+}
+
+pub(super) fn resolve_zip_archive_path(path: &Path) -> Result<Option<PathBuf>, RecoveryError> {
+    Ok(zip_volumes::resolve(path)?.map(|zip| zip.primary))
 }
 
 pub fn fingerprint_file_sha256(path: impl AsRef<Path>) -> Result<String, RecoveryError> {
@@ -485,16 +496,14 @@ pub(super) fn materialize_split_archive(
         .volume_paths
         .iter()
         .enumerate()
-        .map(|(index, _)| {
-            directory.join(format!(
-                "archive.{}.{:03}",
-                analysis.format.extension(),
-                index + 1
-            ))
-        })
+        .map(|(index, _)| directory.join(split_volume_name(analysis, index)))
         .collect::<Vec<_>>();
     let materialization = SplitArchiveMaterialization {
-        primary_path: volume_paths[0].clone(),
+        primary_path: if is_spanned_zip(analysis) {
+            volume_paths.last().unwrap().clone()
+        } else {
+            volume_paths[0].clone()
+        },
         volume_paths,
         directory,
     };
@@ -508,6 +517,28 @@ pub(super) fn materialize_split_archive(
         materialize_volume(source, destination, cancellation, disk_budget)?;
     }
     Ok(Some(materialization))
+}
+
+fn is_spanned_zip(analysis: &ArchiveAnalysis) -> bool {
+    analysis.format == ArchiveFormat::Zip
+        && analysis
+            .volume_paths
+            .last()
+            .and_then(|p| p.extension())
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("zip") || s.eq_ignore_ascii_case("zipx"))
+}
+
+pub(super) fn split_volume_name(analysis: &ArchiveAnalysis, index: usize) -> String {
+    if is_spanned_zip(analysis) {
+        if index + 1 == analysis.volume_paths.len() {
+            "archive.zip".into()
+        } else {
+            format!("archive.z{:02}", index + 1)
+        }
+    } else {
+        format!("archive.{}.{:03}", analysis.format.extension(), index + 1)
+    }
 }
 
 fn is_standard_numbered_volume_sequence(volumes: &[PathBuf]) -> bool {

@@ -32,7 +32,7 @@ pub fn create_repaired_archive_copy(
         for (index, volume) in analysis.volume_paths.iter().enumerate() {
             let destination = staging
                 .path()
-                .join(format!("archive.{extension}.{:03}", index + 1));
+                .join(super::archive::split_volume_name(&analysis, index));
             let mut output = fs::File::create_new(destination)?;
             copy_bytes(volume, &mut output, cancellation)?;
         }

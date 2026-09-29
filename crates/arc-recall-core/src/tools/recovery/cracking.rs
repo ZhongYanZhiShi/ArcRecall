@@ -45,7 +45,12 @@ pub(super) fn recover_with_dictionary(
 ) -> Result<RecoveryResult, RecoveryError> {
     let job = input.job;
     let mut fallback_reasons = Vec::new();
-    let records = if converter_is_available(tools, format) {
+    let records = if format == ArchiveFormat::Zip && archive_paths.len() > 1 {
+        // zip2john's central-directory reader only supports single-file ZIPs.
+        // A hash obtained from one part is not evidence about the whole set.
+        fallback_reasons.push("zip2john 不支持 ZIP 分卷，改用 7-Zip CPU 对完整分卷组验密".into());
+        None
+    } else if converter_is_available(tools, format) {
         report(RecoveryUpdate::stage(
             RecoveryPhase::Converting,
             Some(converter_name(format)),

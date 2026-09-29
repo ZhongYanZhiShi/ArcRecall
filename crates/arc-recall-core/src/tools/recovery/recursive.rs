@@ -602,6 +602,7 @@ fn find_new_or_changed_archives(
         });
     }
     let mut archives = Vec::with_capacity(max_archives.min(16));
+    let mut zip_archives = HashSet::new();
     let mut scanned_files = 0u64;
     let mut last_reported = 0u64;
     let mut last_report_at = Instant::now();
@@ -619,9 +620,14 @@ fn find_new_or_changed_archives(
                 && before
                     .get(&path)
                     .is_none_or(|previous| current.has_changed_since(previous))
-                && detect_nested_archive_format(&path).is_ok()
             {
-                archives.push(path);
+                match super::archive::resolve_zip_archive_path(&path) {
+                    Ok(Some(primary)) if zip_archives.insert(primary.clone()) => {
+                        archives.push(primary)
+                    }
+                    Ok(None) if detect_nested_archive_format(&path).is_ok() => archives.push(path),
+                    _ => {}
+                }
             }
             if scanned_files == 1
                 || scanned_files.is_multiple_of(SCAN_PROGRESS_INTERVAL_FILES)

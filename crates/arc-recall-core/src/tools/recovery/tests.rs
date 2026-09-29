@@ -4,6 +4,9 @@ use std::time::Duration;
 
 use super::*;
 
+#[path = "tests/zip_volumes.rs"]
+mod zip_volumes;
+
 const SEVEN_ZIP_START_HEADER_SIZE_FOR_TEST: usize = 32;
 
 /// Read-only timing probe for large archives, including disguised split volumes.
