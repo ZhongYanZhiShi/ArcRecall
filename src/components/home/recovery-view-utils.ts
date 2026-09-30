@@ -7,13 +7,13 @@ import type {
 
 export const RECOVERY_PHASE_LABELS: Record<RecoveryPhase, string> = {
   preparing: "准备",
-  verifying: "复验",
+  verifying: "检查",
   converting: "转换",
   hashcat: "Hashcat",
   john: "John CPU",
   internal: "7-Zip CPU",
   extracting: "解压",
-  recursive: "递归解密",
+  recursive: "递归处理",
   completed: "完成",
   exhausted: "未找到密码",
   cancelled: "已取消",
@@ -21,6 +21,30 @@ export const RECOVERY_PHASE_LABELS: Record<RecoveryPhase, string> = {
 }
 
 const COUNT_FORMATTER = new Intl.NumberFormat("zh-CN")
+
+export function hasIncompleteRecursiveScan(task: RecoveryTaskStatus): boolean {
+  return Boolean(
+    task.skippedScanDirectories?.length ||
+    task.scanInterrupted ||
+    task.depthLimitReached ||
+    task.countLimitReached ||
+    task.budgetLimitReached ||
+    task.pendingArchivePaths?.length ||
+    task.skippedArchivePaths?.length
+  )
+}
+
+export function recoveryStageLabel(
+  phase: RecoveryPhase,
+  engine: string | null
+): string {
+  const label = RECOVERY_PHASE_LABELS[phase]
+  return engine &&
+    engine !== label &&
+    !(phase === "recursive" && engine === "递归解密")
+    ? `${label} · ${engine}`
+    : label
+}
 const PRE_GPU_FAILURE_PHASES = new Set<RecoveryPhase>([
   "preparing",
   "verifying",

@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use arc_recall_core::{
-    ArchiveFormat, CancellationToken, RecoveryComputeMode, RecoveryError, RecoveryPhase,
-    RecoveryUpdate, path_for_display,
+    ArchiveAnalysis, ArchiveFormat, CancellationToken, RecoveryComputeMode, RecoveryError,
+    RecoveryPhase, RecoveryTiming, RecoveryUpdate, RecursiveRecoveryResult, path_for_display,
 };
 use serde::Serialize;
 
@@ -51,6 +51,13 @@ pub(super) struct RecoveryTaskEvent {
     pub(super) attempted_count: Option<u64>,
     pub(super) total_count: Option<u64>,
     pub(super) scanned_file_count: Option<u64>,
+    pub(super) scan_progress: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct RecoveryResumeContext {
+    pub(super) analysis: ArchiveAnalysis,
+    pub(super) result: RecursiveRecoveryResult,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -106,6 +113,11 @@ pub(crate) struct RecoveryTaskStatus {
     pub(super) scan_interrupted: bool,
     pub(super) budget_limit_reached: bool,
     pub(super) events: VecDeque<RecoveryTaskEvent>,
+    pub(super) skipped_scan_directories: Vec<String>,
+    pub(super) content_directories: Vec<String>,
+    pub(super) timings: Vec<RecoveryTiming>,
+    #[serde(skip)]
+    pub(super) resume: Option<Arc<RecoveryResumeContext>>,
 }
 
 pub(super) struct RecoveryTaskCompletionGuard {
@@ -159,6 +171,18 @@ pub(super) fn append_recovery_update_event(
         .as_deref()
         .or(status.current_archive_path.as_deref())
         .map(|path| path_for_display(Path::new(path)));
+    // Coalesce only consecutive progress samples, never warnings or completion.
+    if update.scan_progress
+        && let Some(latest) = status.events.front_mut()
+        && latest.scan_progress
+        && latest.archive_path == archive_path
+        && latest.recursive_depth == update.recursive_depth.unwrap_or(status.recursive_depth)
+    {
+        latest.message = update.message.clone();
+        latest.scanned_file_count = update.scanned_file_count;
+        latest.elapsed_ms = current_time_ms().saturating_sub(status.started_at_ms);
+        return;
+    }
     push_recovery_event(
         status,
         update.phase,
@@ -170,6 +194,21 @@ pub(super) fn append_recovery_update_event(
         update.total_count,
         update.scanned_file_count,
     );
+    if let Some(latest) = status.events.front_mut() {
+        latest.scan_progress = update.scan_progress;
+    }
+}
+
+pub(super) fn accumulate_timing(status: &mut RecoveryTaskStatus, timing: RecoveryTiming) {
+    if let Some(existing) = status
+        .timings
+        .iter_mut()
+        .find(|value| value.operation == timing.operation)
+    {
+        existing.duration_ms = existing.duration_ms.saturating_add(timing.duration_ms);
+    } else {
+        status.timings.push(timing);
+    }
 }
 
 pub(super) fn append_current_recovery_event(status: &mut RecoveryTaskStatus) {
@@ -244,6 +283,7 @@ fn push_recovery_event(
         attempted_count,
         total_count,
         scanned_file_count,
+        scan_progress: false,
     });
     if status.events.len() > RECOVERY_EVENT_LIMIT {
         status.events.pop_back();
@@ -340,6 +380,10 @@ mod tests {
             pending_archive_paths: Vec::new(),
             scan_interrupted: false,
             budget_limit_reached: false,
+            skipped_scan_directories: Vec::new(),
+            content_directories: Vec::new(),
+            timings: Vec::new(),
+            resume: None,
         }
     }
 
@@ -366,6 +410,53 @@ mod tests {
         assert_eq!(status.message, "恢复完成。");
         assert_eq!(status.phase, RecoveryPhase::Completed);
         assert!(status.success);
+    }
+
+    #[test]
+    fn scan_progress_coalesces_without_hiding_warnings_or_completions() {
+        let mut status = test_recovery_status();
+        let update = |message: &str, scanned: u64, progress: bool| -> RecoveryUpdate {
+            serde_json::from_value(serde_json::json!({
+                "phase": "recursive", "message": message, "currentArchivePath": "output",
+                "recursiveDepth": 2, "scannedFileCount": scanned, "scanProgress": progress
+            }))
+            .unwrap()
+        };
+        append_recovery_update_event(&mut status, &update("first", 1, true));
+        append_recovery_update_event(&mut status, &update("latest", 128, true));
+        assert_eq!(status.events.len(), 1);
+        assert_eq!(status.events[0].scanned_file_count, Some(128));
+        append_recovery_update_event(&mut status, &update("directory skipped", 128, false));
+        append_recovery_update_event(&mut status, &update("continue", 256, true));
+        append_recovery_update_event(&mut status, &update("complete", 256, false));
+        assert_eq!(status.events.len(), 4);
+        assert_eq!(status.events[2].message, "directory skipped");
+        assert_eq!(status.events[0].message, "complete");
+        accumulate_timing(
+            &mut status,
+            RecoveryTiming {
+                operation: arc_recall_core::RecoveryOperation::Scan,
+                duration_ms: 20,
+            },
+        );
+        accumulate_timing(
+            &mut status,
+            RecoveryTiming {
+                operation: arc_recall_core::RecoveryOperation::Scan,
+                duration_ms: 30,
+            },
+        );
+        assert_eq!(status.timings[0].duration_ms, 50);
+        assert_eq!(
+            status.events.len(),
+            4,
+            "timing does not consume event history"
+        );
+        let serialized = serde_json::to_value(status).unwrap();
+        assert!(
+            serialized.get("resume").is_none(),
+            "private scan baseline is not sent over IPC"
+        );
     }
 
     #[test]

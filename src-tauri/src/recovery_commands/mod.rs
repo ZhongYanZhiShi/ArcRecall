@@ -9,9 +9,9 @@ use arc_recall_core::{
     ArchiveAnalysis, CancellationToken, DEFAULT_RECURSIVE_MAX_ARCHIVES,
     DEFAULT_RECURSIVE_MAX_DEPTH, DictionaryCandidateStore, DictionaryError, RecoveryComputeDevice,
     RecoveryComputeMode, RecoveryDictionary, RecoveryError, RecoveryHistoryStore, RecoveryJob,
-    RecoveryPhase, RecursiveRecoveryOptions, analyze_archive,
+    RecoveryOperation, RecoveryPhase, RecoveryTiming, RecursiveRecoveryOptions, analyze_archive,
     fingerprint_archive_sha256_with_cancellation, path_for_display,
-    recover_and_extract_recursive_lazy,
+    recover_and_extract_recursive_lazy, resume_recursive_scan_lazy,
 };
 use serde::Deserialize;
 use tauri::State;
@@ -22,9 +22,9 @@ use crate::history_support::{history_password_by_fingerprint, save_recovered_his
 use crate::task_coordination::TaskStartReservation;
 use crate::{AppState, current_time_ms, ensure_no_active_archive_task, write_log};
 use task::{
-    RecoveryTaskCompletionGuard, RecoveryTaskEvent, append_current_recovery_event,
-    append_recovery_update_event, catch_recovery_panic, recovery_failure_kind,
-    update_recovery_preparation,
+    RecoveryResumeContext, RecoveryTaskCompletionGuard, RecoveryTaskEvent, accumulate_timing,
+    append_current_recovery_event, append_recovery_update_event, catch_recovery_panic,
+    recovery_failure_kind, update_recovery_preparation,
 };
 
 pub(crate) use task::{RecoveryTaskHandle, RecoveryTaskStatus};
@@ -35,6 +35,8 @@ static RECOVERY_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecoveryStartRequest {
     archive_path: String,
+    #[serde(default)]
+    rescan_task_id: Option<String>,
     output_directory: Option<String>,
     known_password: Option<String>,
     #[serde(default)]
@@ -84,7 +86,7 @@ pub(crate) async fn archive_analyze(
 #[tauri::command]
 pub(crate) async fn recovery_start(
     state: State<'_, AppState>,
-    request: RecoveryStartRequest,
+    mut request: RecoveryStartRequest,
 ) -> Result<RecoveryTaskStatus, String> {
     let task_lease = state.lifecycle.begin()?;
     let cancellation = task_lease.cancellation.clone();
@@ -109,15 +111,46 @@ pub(crate) async fn recovery_start(
     );
     ensure_no_active_archive_task(&state)?;
 
-    let requested_path = PathBuf::from(&request.archive_path);
-    let (archive_path, analysis) = tauri::async_runtime::spawn_blocking(move || {
-        let path = std::fs::canonicalize(requested_path)
-            .map_err(|error| format!("无法解析归档路径：{error}"))?;
-        let analysis = analyze_archive(&path).map_err(|error| error.to_string())?;
-        Ok::<_, String>((path, analysis))
-    })
-    .await
-    .map_err(|error| error.to_string())??;
+    let resume = if let Some(task_id) = request.rescan_task_id.as_deref() {
+        let current = state
+            .recovery_task
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let handle = current
+            .as_ref()
+            .filter(|handle| handle.id == task_id)
+            .ok_or("该任务已不在当前会话中，无法补扫；请直接选择未扫描目录中的归档。")?;
+        let previous = handle.status.lock().map_err(|error| error.to_string())?;
+        let resume = previous
+            .resume
+            .clone()
+            .filter(|context| !context.result.skipped_scan_directories.is_empty())
+            .ok_or("当前任务没有可补扫目录。")?;
+        request.output_directory = Some(previous.output_directory.clone());
+        request.known_password = previous.recovered_password.clone();
+        request.avoid_output_collision = false;
+        request.compute_mode = previous.compute_mode;
+        request.recursive = true;
+        Some(resume)
+    } else {
+        None
+    };
+    let (archive_path, analysis) = if let Some(resume) = &resume {
+        (
+            PathBuf::from(&resume.analysis.archive_path),
+            resume.analysis.clone(),
+        )
+    } else {
+        let requested_path = PathBuf::from(&request.archive_path);
+        tauri::async_runtime::spawn_blocking(move || {
+            let path = std::fs::canonicalize(requested_path)
+                .map_err(|error| format!("无法解析归档路径：{error}"))?;
+            let analysis = analyze_archive(&path).map_err(|error| error.to_string())?;
+            Ok::<_, String>((path, analysis))
+        })
+        .await
+        .map_err(|error| error.to_string())??
+    };
     if cancellation.is_cancelled() {
         return Err("恢复任务已取消。".into());
     }
@@ -160,10 +193,12 @@ pub(crate) async fn recovery_start(
     let work_directory = state.recovery_session.directory().join(&task_id);
     let dictionary_path = work_directory.join("dictionary.txt");
     let started_at_ms = current_time_ms();
-    let initial_message = if manual_password.is_some() {
+    let initial_message = if resume.is_some() {
+        "补扫任务已启动，将检查此前未扫描的目录（本次不限直属文件数）。"
+    } else if manual_password.is_some() {
         "恢复任务已启动，正在优先检查免密与手动密码。"
     } else {
-        "恢复任务已启动，正在后台计算完整指纹并查找历史密码。"
+        "恢复任务已启动。"
     }
     .to_owned();
     let initial_events = VecDeque::from([RecoveryTaskEvent {
@@ -177,6 +212,7 @@ pub(crate) async fn recovery_start(
         attempted_count: None,
         total_count: None,
         scanned_file_count: None,
+        scan_progress: false,
     }]);
 
     let status = Arc::new(Mutex::new(RecoveryTaskStatus {
@@ -218,6 +254,10 @@ pub(crate) async fn recovery_start(
         pending_archive_paths: Vec::new(),
         scan_interrupted: false,
         budget_limit_reached: false,
+        skipped_scan_directories: Vec::new(),
+        content_directories: Vec::new(),
+        timings: Vec::new(),
+        resume: None,
     }));
     {
         let mut current = state
@@ -279,16 +319,26 @@ pub(crate) async fn recovery_start(
             RecoveryTaskCompletionGuard::new(Arc::clone(&status_for_worker), work_directory);
         let mut last_logged_phase = None;
         let outcome = catch_recovery_panic(|| {
-            if job.known_password.is_none() {
+            if resume.is_none() && job.known_password.is_none() {
                 update_recovery_preparation(
                     &status_for_history,
                     "正在后台计算完整归档指纹并查找本机历史密码。",
                 );
+                let fingerprint_started = std::time::Instant::now();
                 let (preferred_password, fingerprint_sha256) = resolve_preferred_recovery_password(
                     &analysis_for_history,
                     &history_database_path,
                     &cancellation,
                 )?;
+                if let Ok(mut status) = status_for_history.lock() {
+                    accumulate_timing(
+                        &mut status,
+                        RecoveryTiming {
+                            operation: RecoveryOperation::Fingerprint,
+                            duration_ms: fingerprint_started.elapsed().as_millis() as u64,
+                        },
+                    );
+                }
                 job.known_password = preferred_password;
                 precomputed_fingerprint_sha256 = fingerprint_sha256;
                 update_recovery_preparation(
@@ -300,99 +350,118 @@ pub(crate) async fn recovery_start(
                     },
                 );
             }
-            recover_and_extract_recursive_lazy(
-                &job,
-                &tools,
-                &cancellation,
-                RecursiveRecoveryOptions {
-                    enabled: initial.recursive_enabled,
-                    max_files_per_directory: scan_max_files_per_directory,
-                    max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
-                    max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
-                    compute_mode: initial.compute_mode,
-                    ..RecursiveRecoveryOptions::default()
-                },
-                precomputed_fingerprint_sha256,
-                move || {
-                    if dictionary_cancellation.is_cancelled() {
-                        return Err(RecoveryError::Cancelled);
+            let prepare_dictionary = move || {
+                if dictionary_cancellation.is_cancelled() {
+                    return Err(RecoveryError::Cancelled);
+                }
+                let store =
+                    DictionaryCandidateStore::open(dictionary_database_path).map_err(|error| {
+                        RecoveryError::Message(format!("打开全局字典失败：{error}"))
+                    })?;
+                let candidate_count = store
+                    .export_wordlist_with_cancellation(&dictionary_path, &dictionary_cancellation)
+                    .map_err(|error| match error {
+                        DictionaryError::Cancelled => RecoveryError::Cancelled,
+                        other => RecoveryError::Message(format!("准备恢复字典失败：{other}")),
+                    })?;
+                if let Ok(mut task_status) = status_for_dictionary.lock() {
+                    task_status.candidate_count = candidate_count;
+                }
+                Ok(RecoveryDictionary {
+                    path: dictionary_path,
+                    candidate_count,
+                })
+            };
+            let report = |update: arc_recall_core::RecoveryUpdate| {
+                if let Some(timing) = update.timing.clone() {
+                    if let Ok(mut status) = status_for_updates.lock() {
+                        accumulate_timing(&mut status, timing);
                     }
-                    let store = DictionaryCandidateStore::open(dictionary_database_path).map_err(
-                        |error| RecoveryError::Message(format!("打开全局字典失败：{error}")),
-                    )?;
-                    let candidate_count = store
-                        .export_wordlist_with_cancellation(
-                            &dictionary_path,
-                            &dictionary_cancellation,
-                        )
-                        .map_err(|error| match error {
-                            DictionaryError::Cancelled => RecoveryError::Cancelled,
-                            other => RecoveryError::Message(format!("准备恢复字典失败：{other}")),
-                        })?;
-                    if let Ok(mut task_status) = status_for_dictionary.lock() {
-                        task_status.candidate_count = candidate_count;
+                    return;
+                }
+                let event_update = update.clone();
+                if last_logged_phase != Some(update.phase) {
+                    write_log(
+                        &logger_for_updates,
+                        LogLevel::Debug,
+                        "recovery",
+                        "recovery.phase_changed",
+                        "恢复任务阶段已切换。",
+                        [
+                            ("task_id".into(), update_task_id.clone()),
+                            ("phase".into(), format!("{:?}", update.phase).to_lowercase()),
+                            ("engine".into(), update.engine.clone().unwrap_or_default()),
+                        ],
+                    );
+                    last_logged_phase = Some(update.phase);
+                }
+                if let Ok(mut task_status) = status_for_updates.lock() {
+                    if update.compute_device == Some(RecoveryComputeDevice::Gpu) {
+                        task_status.gpu_started = true;
                     }
-                    Ok(RecoveryDictionary {
-                        path: dictionary_path,
-                        candidate_count,
-                    })
-                },
-                |update| {
-                    let event_update = update.clone();
-                    if last_logged_phase != Some(update.phase) {
-                        write_log(
-                            &logger_for_updates,
-                            LogLevel::Debug,
-                            "recovery",
-                            "recovery.phase_changed",
-                            "恢复任务阶段已切换。",
-                            [
-                                ("task_id".into(), update_task_id.clone()),
-                                ("phase".into(), format!("{:?}", update.phase).to_lowercase()),
-                                ("engine".into(), update.engine.clone().unwrap_or_default()),
-                            ],
-                        );
-                        last_logged_phase = Some(update.phase);
+                    task_status.hashcat_progress = update.hashcat_progress;
+                    task_status.phase = update.phase;
+                    task_status.engine = update.engine;
+                    task_status.message = update.message;
+                    if let Some(attempted_count) = update.attempted_count {
+                        task_status.attempted_count = attempted_count;
                     }
-                    if let Ok(mut task_status) = status_for_updates.lock() {
-                        if update.compute_device == Some(RecoveryComputeDevice::Gpu) {
-                            task_status.gpu_started = true;
-                        }
-                        task_status.hashcat_progress = update.hashcat_progress;
-                        task_status.phase = update.phase;
-                        task_status.engine = update.engine;
-                        task_status.message = update.message;
-                        if let Some(attempted_count) = update.attempted_count {
-                            task_status.attempted_count = attempted_count;
-                        }
-                        if let Some(total_count) = update.total_count {
-                            task_status.candidate_count = total_count;
-                        }
-                        if let Some(recursive_depth) = update.recursive_depth {
-                            task_status.recursive_depth = recursive_depth;
-                        }
-                        if let Some(current_archive_path) = update.current_archive_path {
-                            task_status.current_archive_path = Some(current_archive_path);
-                        }
-                        if let Some(nested_archive_count) = update.nested_archive_count {
-                            task_status.nested_archive_count = nested_archive_count;
-                        }
-                        if let Some(extracted_count) = update.extracted_nested_archive_count {
-                            task_status.extracted_nested_archive_count = extracted_count;
-                        }
-                        if let Some(skipped_count) = update.skipped_nested_archive_count {
-                            task_status.skipped_nested_archive_count = skipped_count;
-                        }
-                        if let Some(scanned_file_count) = update.scanned_file_count {
-                            task_status.scanned_file_count = scanned_file_count;
-                        }
-                        if let Some(root_extraction_completed) = update.root_extraction_completed {
-                            task_status.root_extraction_completed = root_extraction_completed;
-                        }
-                        append_recovery_update_event(&mut task_status, &event_update);
+                    if let Some(total_count) = update.total_count {
+                        task_status.candidate_count = total_count;
                     }
-                },
-            )
+                    if let Some(recursive_depth) = update.recursive_depth {
+                        task_status.recursive_depth = recursive_depth;
+                    }
+                    if let Some(current_archive_path) = update.current_archive_path {
+                        task_status.current_archive_path = Some(current_archive_path);
+                    }
+                    if let Some(nested_archive_count) = update.nested_archive_count {
+                        task_status.nested_archive_count = nested_archive_count;
+                    }
+                    if let Some(extracted_count) = update.extracted_nested_archive_count {
+                        task_status.extracted_nested_archive_count = extracted_count;
+                    }
+                    if let Some(skipped_count) = update.skipped_nested_archive_count {
+                        task_status.skipped_nested_archive_count = skipped_count;
+                    }
+                    if let Some(scanned_file_count) = update.scanned_file_count {
+                        task_status.scanned_file_count = scanned_file_count;
+                    }
+                    if let Some(root_extraction_completed) = update.root_extraction_completed {
+                        task_status.root_extraction_completed = root_extraction_completed;
+                    }
+                    append_recovery_update_event(&mut task_status, &event_update);
+                }
+            };
+            let options = RecursiveRecoveryOptions {
+                enabled: initial.recursive_enabled,
+                max_files_per_directory: scan_max_files_per_directory,
+                max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
+                max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
+                compute_mode: initial.compute_mode,
+                ..RecursiveRecoveryOptions::default()
+            };
+            if let Some(resume) = resume {
+                resume_recursive_scan_lazy(
+                    &job,
+                    &tools,
+                    &cancellation,
+                    options,
+                    resume.result.clone(),
+                    prepare_dictionary,
+                    report,
+                )
+            } else {
+                recover_and_extract_recursive_lazy(
+                    &job,
+                    &tools,
+                    &cancellation,
+                    options,
+                    precomputed_fingerprint_sha256,
+                    prepare_dictionary,
+                    report,
+                )
+            }
         });
         // Persistence can wait on SQLite or the OS credential provider. Keep
         // status readable until it is ready to publish the final result.
@@ -424,6 +493,24 @@ pub(crate) async fn recovery_start(
             task_status.elapsed_ms = current_time_ms().saturating_sub(task_status.started_at_ms);
             match outcome {
                 Ok(result) => {
+                    task_status.resume = (result.root.success
+                        && !result.skipped_scan_directories.is_empty())
+                    .then(|| {
+                        Arc::new(RecoveryResumeContext {
+                            analysis: analysis_for_history.clone(),
+                            result: result.clone(),
+                        })
+                    });
+                    task_status.skipped_scan_directories = result
+                        .skipped_scan_directories
+                        .iter()
+                        .map(|directory| path_for_display(&directory.path))
+                        .collect();
+                    task_status.content_directories = result
+                        .content_directories
+                        .iter()
+                        .map(|path| path_for_display(path))
+                        .collect();
                     task_status.success = result.root.success
                         && !result.root.cancelled
                         && !result.budget_limit_reached;

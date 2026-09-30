@@ -39,7 +39,7 @@ use cracking::{recover_with_dictionary, validate_base_job_inputs, validate_dicti
 #[cfg(test)]
 use recursive::NestedOutputTransaction;
 use recursive::RecursiveProgressSnapshot;
-pub use recursive::recover_and_extract_recursive_lazy;
+pub use recursive::{recover_and_extract_recursive_lazy, resume_recursive_scan_lazy};
 #[cfg(test)]
 use seven_zip::{
     ArchiveExtractionBudget, archive_type_matches, parse_seven_zip_extraction_budget,
@@ -182,6 +182,43 @@ pub struct RecoveryUpdate {
     pub scanned_file_count: Option<u64>,
     pub root_extraction_completed: Option<bool>,
     pub hashcat_progress: Option<HashcatProgress>,
+    #[serde(default)]
+    pub scan_progress: bool,
+    #[serde(default)]
+    pub timing: Option<RecoveryTiming>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecoveryOperation {
+    Fingerprint,
+    Preflight,
+    Verification,
+    Extraction,
+    Scan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryTiming {
+    pub operation: RecoveryOperation,
+    pub duration_ms: u64,
+}
+
+fn timed_operation<T>(
+    operation: RecoveryOperation,
+    report: &mut impl FnMut(RecoveryUpdate),
+    work: impl FnOnce(&mut dyn FnMut(RecoveryUpdate)) -> T,
+) -> T {
+    let started = std::time::Instant::now();
+    let result = work(report);
+    let mut update = RecoveryUpdate::stage(RecoveryPhase::Preparing, None::<String>, "");
+    update.timing = Some(RecoveryTiming {
+        operation,
+        duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+    });
+    report(update);
+    result
 }
 
 impl RecoveryUpdate {
@@ -205,6 +242,8 @@ impl RecoveryUpdate {
             scanned_file_count: None,
             root_extraction_completed: None,
             hashcat_progress: None,
+            scan_progress: false,
+            timing: None,
         }
     }
 
@@ -230,11 +269,18 @@ impl RecoveryUpdate {
             scanned_file_count: None,
             root_extraction_completed: None,
             hashcat_progress: None,
+            scan_progress: false,
+            timing: None,
         }
     }
 
     fn with_root_extraction_completed(mut self) -> Self {
         self.root_extraction_completed = Some(true);
+        self
+    }
+
+    fn with_scan_progress(mut self) -> Self {
+        self.scan_progress = true;
         self
     }
 
@@ -283,6 +329,7 @@ struct RecoveryInput<'a> {
     job: &'a RecoveryJob,
     archive_bytes: u64,
     disk_budget: &'a TaskDiskBudget,
+    cached_listing: Option<&'a seven_zip::CachedArchiveListing>,
 }
 
 #[derive(Debug, Clone)]
@@ -356,6 +403,21 @@ pub struct RecursiveRecoveryResult {
     pub pending_archive_paths: Vec<PathBuf>,
     pub scan_interrupted: bool,
     pub budget_limit_reached: bool,
+    pub skipped_scan_directories: Vec<SkippedScanDirectory>,
+    pub content_directories: Vec<PathBuf>,
+    remaining_disk_budget: (u64, u64),
+    resume_baseline: std::collections::HashMap<PathBuf, recursive::FileSnapshot>,
+    pending_tasks: Vec<recursive::NestedArchiveTask>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedScanDirectory {
+    pub path: PathBuf,
+    /// Archive depth to use when processing files found in this directory.
+    pub depth: u32,
+    #[serde(skip)]
+    pub(crate) inherited_password: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -481,31 +543,46 @@ fn recover_single_archive(
         archive_bytes = fs::metadata(&processing_job.archive_path)?.len();
     }
 
+    let listing_snapshot = seven_zip::CachedArchiveListing::capture(
+        seven_zip::ArchiveExtractionBudget {
+            entry_count: 0,
+            total_bytes: 0,
+        },
+        &converter_archive_paths,
+    );
+    let listing = timed_operation(RecoveryOperation::Preflight, report, |_| {
+        validate_archive_container(
+            &processing_job.archive_path,
+            analysis.format,
+            tools,
+            cancellation,
+        )
+    })?;
+    let cached_listing = listing.and_then(|budget| listing_snapshot?.with_budget(budget));
     let processing_input = RecoveryInput {
         job: &processing_job,
         archive_bytes,
         disk_budget,
+        cached_listing: cached_listing.as_ref(),
     };
-    validate_archive_container(
-        &processing_job.archive_path,
-        analysis.format,
-        tools,
-        cancellation,
-    )?;
     ensure_not_cancelled(cancellation)?;
     report(RecoveryUpdate::stage(
         RecoveryPhase::Verifying,
         Some("7-Zip"),
         "正在检查归档是否无需密码。",
     ));
-    if verify_password(&processing_job.archive_path, "", tools, cancellation)? {
+    if timed_operation(RecoveryOperation::Verification, report, |_| {
+        verify_password(&processing_job.archive_path, "", tools, cancellation)
+    })? {
         extract_with_password(&processing_input, tools, "", cancellation, report)?;
-        return attach_recovered_archive(
-            success_result(&processing_job, None, "7-Zip", "归档无需密码，已直接解压。"),
-            &analysis,
-            precomputed_fingerprint_sha256,
-            cancellation,
-        );
+        return timed_operation(RecoveryOperation::Fingerprint, report, |_| {
+            attach_recovered_archive(
+                success_result(&processing_job, None, "7-Zip", "归档无需密码，已直接解压。"),
+                &analysis,
+                precomputed_fingerprint_sha256,
+                cancellation,
+            )
+        });
     }
 
     if let Some(password) = job
@@ -518,19 +595,23 @@ fn recover_single_archive(
             Some("7-Zip"),
             "正在验证手动输入或历史记录中的密码。",
         ));
-        if verify_password(&processing_job.archive_path, password, tools, cancellation)? {
+        if timed_operation(RecoveryOperation::Verification, report, |_| {
+            verify_password(&processing_job.archive_path, password, tools, cancellation)
+        })? {
             extract_with_password(&processing_input, tools, password, cancellation, report)?;
-            return attach_recovered_archive(
-                success_result(
-                    &processing_job,
-                    Some(password.to_owned()),
-                    "优先密码",
-                    "优先密码验证通过，归档已解压。",
-                ),
-                &analysis,
-                precomputed_fingerprint_sha256,
-                cancellation,
-            );
+            return timed_operation(RecoveryOperation::Fingerprint, report, |_| {
+                attach_recovered_archive(
+                    success_result(
+                        &processing_job,
+                        Some(password.to_owned()),
+                        "优先密码",
+                        "优先密码验证通过，归档已解压。",
+                    ),
+                    &analysis,
+                    precomputed_fingerprint_sha256,
+                    cancellation,
+                )
+            });
         }
     }
 
@@ -571,6 +652,7 @@ fn recover_single_archive(
             job: &dictionary_job,
             archive_bytes,
             disk_budget,
+            cached_listing: cached_listing.as_ref(),
         },
         tools,
         analysis.format,
@@ -579,12 +661,14 @@ fn recover_single_archive(
         compute_mode,
         report,
     )?;
-    attach_recovered_archive(
-        result,
-        &analysis,
-        precomputed_fingerprint_sha256,
-        cancellation,
-    )
+    timed_operation(RecoveryOperation::Fingerprint, report, |_| {
+        attach_recovered_archive(
+            result,
+            &analysis,
+            precomputed_fingerprint_sha256,
+            cancellation,
+        )
+    })
 }
 
 fn run_checked(

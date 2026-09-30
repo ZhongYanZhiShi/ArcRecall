@@ -464,6 +464,36 @@ export function ExtractPage({
     return () => clearTimeout(timeout)
   }, [passwordCopied])
 
+  const handleOpenDirectory = React.useCallback((path: string) => {
+    void openOutputDirectory(path).catch((reason) =>
+      setError(toErrorMessage(reason))
+    )
+  }, [])
+
+  const handleRescan = React.useCallback(async () => {
+    if (!task || task.taskId !== activeTask?.taskId || isInputLocked()) return
+    operationBusy.current = true
+    analysisRequestId.current += 1
+    setBusy(true)
+    setError(null)
+    try {
+      const started = await startRecovery({
+        archivePath: task.archivePath,
+        rescanTaskId: task.taskId,
+      })
+      setSelectedQueueItemId(null)
+      setPasswordTaskId(null)
+      setPasswordCopied(false)
+      setReattachedTaskId(null)
+      setTask(started)
+    } catch (reason) {
+      setError(toErrorMessage(reason))
+    } finally {
+      operationBusy.current = false
+      setBusy(false)
+    }
+  }, [task, activeTask?.taskId, isInputLocked, setTask])
+
   const handleOpenOutput = React.useCallback(() => {
     if (!task) {
       return
@@ -597,6 +627,15 @@ export function ExtractPage({
       handleCancel={handleCancel}
       handleCopyPassword={handleCopyPassword}
       onOpenOutput={handleOpenOutput}
+      onOpenDirectory={handleOpenDirectory}
+      onRescan={
+        !busy &&
+        !running &&
+        !queue.running &&
+        task?.taskId === activeTask?.taskId
+          ? handleRescan
+          : undefined
+      }
       onOpenEngineSettings={onOpenEngineSettings}
     />
   )

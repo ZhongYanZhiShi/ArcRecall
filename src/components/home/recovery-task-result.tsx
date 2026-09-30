@@ -22,6 +22,8 @@ import {
   pathForDisplay,
   RECOVERY_PHASE_LABELS,
   resolveTaskProgress,
+  hasIncompleteRecursiveScan,
+  recoveryStageLabel,
 } from "@/components/home/recovery-view-utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -47,6 +49,8 @@ export function RecoveryTaskResult({
   onTogglePassword,
   onCopyPassword,
   onOpenOutput,
+  onOpenDirectory,
+  onRescan,
   onOpenOptions,
   onOpenEngineSettings,
 }: {
@@ -57,15 +61,20 @@ export function RecoveryTaskResult({
   onTogglePassword: () => void
   onCopyPassword: () => void
   onOpenOutput: () => void
+  onOpenDirectory: (path: string) => void
+  onRescan?: () => void
   onOpenOptions: () => void
   onOpenEngineSettings: () => void
 }) {
+  const incompleteScan = hasIncompleteRecursiveScan(task)
+  const skippedDirectories = task.skippedScanDirectories ?? []
   const progress = resolveTaskProgress(task)
   const hasCandidateProgress =
     task.candidateCount > 0 && task.attemptedCount > 0
   const hasRecursiveProgress =
     task.recursiveEnabled &&
-    (task.phase === "recursive" ||
+    (task.completed ||
+      task.phase === "recursive" ||
       task.recursiveDepth > 0 ||
       task.nestedArchiveCount > 0 ||
       task.extractedNestedArchiveCount > 0 ||
@@ -74,7 +83,9 @@ export function RecoveryTaskResult({
   const activePhaseLabel =
     task.running && task.rootExtractionCompleted
       ? "递归处理"
-      : RECOVERY_PHASE_LABELS[task.phase]
+      : task.success && incompleteScan
+        ? "解压完成 · 扫描未完成"
+        : RECOVERY_PHASE_LABELS[task.phase]
   const recoveryHint = taskRecoveryHint(task)
   const archiveContainerFailure = isArchiveContainerFailure(task)
 
@@ -86,13 +97,15 @@ export function RecoveryTaskResult({
       aria-live="polite"
       className={cn(
         "workbench-panel animate-task-card-enter motion-safe-only shrink-0 overflow-hidden rounded-2xl border bg-card outline-none",
-        task.success
-          ? "border-success/35"
-          : task.phase === "failed"
-            ? "border-destructive/35"
-            : task.phase === "exhausted"
-              ? "border-warning/40"
-              : "border-border"
+        task.success && incompleteScan
+          ? "border-warning/40"
+          : task.success
+            ? "border-success/35"
+            : task.phase === "failed"
+              ? "border-destructive/35"
+              : task.phase === "exhausted"
+                ? "border-warning/40"
+                : "border-border"
       )}
     >
       {task.running && !(task.phase === "hashcat" && task.hashcatProgress) ? (
@@ -134,7 +147,7 @@ export function RecoveryTaskResult({
           <div className="flex items-center gap-2">
             {task.running ? (
               <Spinner />
-            ) : task.success ? (
+            ) : task.success && !incompleteScan ? (
               <Check className="animate-success-pop motion-safe-only size-4 shrink-0 text-success-foreground" />
             ) : (
               <CircleAlert
@@ -170,7 +183,7 @@ export function RecoveryTaskResult({
           {hasRecursiveProgress ? (
             <div className="mt-1 flex flex-col gap-0.5 text-xs text-muted-foreground">
               <p className="tabular-nums">
-                已扫描 {formatCount(task.scannedFileCount)} 个文件 ·
+                已检查 {formatCount(task.scannedFileCount)} 个文件（归档识别） ·
                 嵌套归档：发现 {formatCount(task.nestedArchiveCount)} · 已解开{" "}
                 {formatCount(task.extractedNestedArchiveCount)} · 跳过{" "}
                 {formatCount(task.skippedNestedArchiveCount)}
@@ -226,7 +239,28 @@ export function RecoveryTaskResult({
               ) : null}
             </div>
           ) : null}
-          <RecoveryProcessDetails key={task.taskId} task={task} />
+          {task.completed && skippedDirectories.length > 0 ? (
+            <div className="mt-2 space-y-2 rounded-lg bg-warning/10 p-3 text-xs">
+              <p className="text-warning-foreground">
+                {skippedDirectories.length}{" "}
+                个目录及其子目录尚未扫描。已解压的文件仍保留；扫描数不代表解压文件总数。
+              </p>
+              {onRescan ? (
+                <Button size="sm" variant="outline" onClick={onRescan}>
+                  补扫未扫描目录（不限文件数）
+                </Button>
+              ) : (
+                <p className="text-muted-foreground">
+                  补扫入口适用于当前会话中最近完成的任务，其他任务的目录可在详细过程中打开。
+                </p>
+              )}
+            </div>
+          ) : null}
+          <RecoveryProcessDetails
+            key={task.taskId}
+            task={task}
+            onOpenDirectory={onOpenDirectory}
+          />
           {task.recoveredPassword != null ? (
             <div className="mt-2 flex items-center gap-2">
               <code className="max-w-full truncate rounded bg-muted px-2 py-1 text-xs">
@@ -260,15 +294,28 @@ export function RecoveryTaskResult({
           ) : null}
         </div>
         {task.success || task.rootExtractionCompleted ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className="shrink-0"
-            onClick={onOpenOutput}
-          >
-            <PackageOpen data-icon="inline-start" />
-            打开输出
-          </Button>
+          <div className="flex shrink-0 flex-col gap-2">
+            {!task.running &&
+            task.contentDirectories?.length === 1 &&
+            task.contentDirectories[0] !== task.outputDirectory ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onOpenDirectory(task.contentDirectories![0])}
+              >
+                打开最终内容目录
+              </Button>
+            ) : null}
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              onClick={onOpenOutput}
+            >
+              <PackageOpen data-icon="inline-start" />
+              打开输出
+            </Button>
+          </div>
         ) : null}
       </div>
     </div>
@@ -297,7 +344,13 @@ function taskRecoveryHint(task: RecoveryTaskStatus): string | null {
   return null
 }
 
-function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
+function RecoveryProcessDetails({
+  task,
+  onOpenDirectory,
+}: {
+  task: RecoveryTaskStatus
+  onOpenDirectory: (path: string) => void
+}) {
   const [open, setOpen] = React.useState(false)
   const events = task.events ?? []
 
@@ -318,7 +371,7 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
         <ListTree className="size-3.5 shrink-0 text-muted-foreground" />
         <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
           {latest
-            ? `最近：${RECOVERY_PHASE_LABELS[latest.phase]}${latest.engine ? ` · ${latest.engine}` : ""} · ${formatCompactElapsed(latest.elapsedMs)}`
+            ? `最近：${recoveryStageLabel(latest.phase, latest.engine)} · ${formatCompactElapsed(latest.elapsedMs)}`
             : "查看已完成和待处理归档"}
         </p>
         <Button
@@ -340,7 +393,7 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
         <SheetContent side="right">
           <SheetHeader className="shrink-0 border-b border-border/80 px-5 py-4 pr-14">
             <div className="flex flex-wrap items-center gap-2">
-              <SheetTitle>解密详细过程</SheetTitle>
+              <SheetTitle>解压与扫描详细过程</SheetTitle>
               <Badge
                 variant={task.running ? "default" : "secondary"}
                 className="font-normal"
@@ -349,7 +402,7 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
               </Badge>
             </div>
             <SheetDescription className="text-xs leading-relaxed">
-              最新事件置顶，共 {events.length} 条。
+              最新事件置顶，保留最近 {events.length} 条；连续扫描进度合并显示。
             </SheetDescription>
             <div className="flex flex-wrap gap-1.5 pt-1">
               <Badge variant="outline" className="font-normal">
@@ -365,6 +418,60 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
           </SheetHeader>
 
           <ScrollArea className="min-h-0 flex-1 px-5 py-2">
+            {task.timings?.length ? (
+              <div className="space-y-1 border-b border-border py-3 text-xs">
+                <p className="font-medium">各阶段累计耗时</p>
+                {task.timings.map((timing) => (
+                  <p
+                    key={timing.operation}
+                    className="text-muted-foreground tabular-nums"
+                  >
+                    {
+                      {
+                        fingerprint: "指纹与历史查询",
+                        preflight: "归档预检",
+                        verification: "密码与完整性检查",
+                        extraction: "安全解压",
+                        scan: "目录扫描",
+                      }[timing.operation]
+                    }
+                    ：{(timing.durationMs / 1000).toFixed(2)} 秒
+                  </p>
+                ))}
+                <p className="text-muted-foreground">
+                  本次任务的各归档累计值；不含分卷准备、GPU/John
+                  搜索和历史写入等开销。
+                </p>
+              </div>
+            ) : null}
+            {[
+              { label: "未扫描目录", paths: task.skippedScanDirectories ?? [] },
+              { label: "最终内容目录", paths: task.contentDirectories ?? [] },
+            ].map(({ label, paths }) =>
+              paths.length ? (
+                <div key={label} className="border-b border-border py-3">
+                  <p className="text-xs font-medium">
+                    {label} · {paths.length}
+                  </p>
+                  <ul aria-label={label} className="mt-2 space-y-2">
+                    {paths.map((path) => (
+                      <li key={path} className="space-y-1">
+                        <p className="text-xs break-all text-muted-foreground">
+                          {pathForDisplay(path)}
+                        </p>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => onOpenDirectory(path)}
+                        >
+                          打开目录
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null
+            )}
             {task.completed && (task.completedArchivePaths?.length ?? 0) > 0 ? (
               <div className="space-y-3 border-b border-border py-3">
                 {[
@@ -444,8 +551,7 @@ function RecoveryProcessDetails({ task }: { task: RecoveryTaskStatus }) {
                             : undefined
                         }
                       >
-                        {RECOVERY_PHASE_LABELS[event.phase]}
-                        {event.engine ? ` · ${event.engine}` : ""}
+                        {recoveryStageLabel(event.phase, event.engine)}
                         {event.archivePath
                           ? ` · ${archiveNameFromPath(event.archivePath)}`
                           : ""}
@@ -490,7 +596,9 @@ function recoveryEventMetadata(event: RecoveryTaskEvent): string {
     )
   }
   if (event.scannedFileCount != null) {
-    parts.push(`累计扫描 ${formatCount(event.scannedFileCount)} 个文件`)
+    parts.push(
+      `累计检查 ${formatCount(event.scannedFileCount)} 个文件（归档识别）`
+    )
   }
   return parts.join(" · ")
 }

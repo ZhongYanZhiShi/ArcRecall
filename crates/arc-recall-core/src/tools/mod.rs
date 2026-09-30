@@ -25,12 +25,12 @@ pub use recovery::{
     ArchiveAnalysis, ArchiveFormat, DEFAULT_RECURSIVE_MAX_ARCHIVES, DEFAULT_RECURSIVE_MAX_DEPTH,
     DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY, HashcatProgress, RecoveredArchive, RecoveryCapabilities,
     RecoveryComputeDevice, RecoveryComputeMode, RecoveryDictionary, RecoveryError, RecoveryJob,
-    RecoveryMethodCapability, RecoveryPhase, RecoveryResult, RecoveryToolPaths, RecoveryUpdate,
-    RecursiveRecoveryOptions, RecursiveRecoveryResult, analyze_archive,
-    create_repaired_archive_copy, detect_archive_format, fingerprint_archive_sha256,
-    fingerprint_archive_sha256_with_cancellation, fingerprint_file_sha256, path_for_display,
-    probe_recovery_capabilities, recover_and_extract, recover_and_extract_lazy,
-    recover_and_extract_recursive_lazy,
+    RecoveryMethodCapability, RecoveryOperation, RecoveryPhase, RecoveryResult, RecoveryTiming,
+    RecoveryToolPaths, RecoveryUpdate, RecursiveRecoveryOptions, RecursiveRecoveryResult,
+    SkippedScanDirectory, analyze_archive, create_repaired_archive_copy, detect_archive_format,
+    fingerprint_archive_sha256, fingerprint_archive_sha256_with_cancellation,
+    fingerprint_file_sha256, path_for_display, probe_recovery_capabilities, recover_and_extract,
+    recover_and_extract_lazy, recover_and_extract_recursive_lazy, resume_recursive_scan_lazy,
 };
 pub use runner::{
     CancellationToken, ProcessOutput, ProcessRequest, ProcessRunnerError, run_process,

@@ -113,10 +113,22 @@ export type RecoveryTaskStatus = {
   pendingArchivePaths?: string[]
   scanInterrupted?: boolean
   budgetLimitReached?: boolean
+  skippedScanDirectories?: string[]
+  contentDirectories?: string[]
+  timings?: {
+    operation:
+      | "fingerprint"
+      | "preflight"
+      | "verification"
+      | "extraction"
+      | "scan"
+    durationMs: number
+  }[]
   events: RecoveryTaskEvent[]
 }
 
 export type RecoveryStartRequest = {
+  rescanTaskId?: string
   archivePath: string
   outputDirectory?: string | null
   knownPassword?: string | null

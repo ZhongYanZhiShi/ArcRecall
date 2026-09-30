@@ -609,25 +609,28 @@ fn run_internal_dictionary(
         {
             continue;
         }
-        let verified = match verify_password(&job.archive_path, &line, tools, cancellation) {
-            Ok(verified) => verified,
-            // Use the actual Windows spawn limit, including argument quoting and paths.
-            // Do not truncate the candidate or hide unrelated process failures.
-            Err(RecoveryError::ProcessStart(error))
-                if cfg!(windows) && error.raw_os_error() == Some(206) =>
-            {
-                if !reported_oversized_candidate {
-                    report(RecoveryUpdate::stage(
-                        RecoveryPhase::Internal,
-                        Some("7-Zip CPU"),
-                        "已跳过超出 Windows 命令行长度限制的候选密码，继续尝试后续候选。",
-                    ));
-                    reported_oversized_candidate = true;
+        let verified =
+            match super::timed_operation(super::RecoveryOperation::Verification, report, |_| {
+                verify_password(&job.archive_path, &line, tools, cancellation)
+            }) {
+                Ok(verified) => verified,
+                // Use the actual Windows spawn limit, including argument quoting and paths.
+                // Do not truncate the candidate or hide unrelated process failures.
+                Err(RecoveryError::ProcessStart(error))
+                    if cfg!(windows) && error.raw_os_error() == Some(206) =>
+                {
+                    if !reported_oversized_candidate {
+                        report(RecoveryUpdate::stage(
+                            RecoveryPhase::Internal,
+                            Some("7-Zip CPU"),
+                            "已跳过超出 Windows 命令行长度限制的候选密码，继续尝试后续候选。",
+                        ));
+                        reported_oversized_candidate = true;
+                    }
+                    continue;
                 }
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
+                Err(error) => return Err(error),
+            };
         if verified {
             extract_with_password(input, tools, &line, cancellation, report)?;
             return Ok(Some(success_result(
@@ -1006,7 +1009,9 @@ fn verify_crack_attempt(
         Some("7-Zip"),
         format!("{engine} 已找到候选密码，正在用 7-Zip 复验。"),
     ));
-    if !verify_password(&job.archive_path, &password, tools, cancellation)? {
+    if !super::timed_operation(super::RecoveryOperation::Verification, report, |_| {
+        verify_password(&job.archive_path, &password, tools, cancellation)
+    })? {
         return Ok(None);
     }
     extract_with_password(input, tools, &password, cancellation, report)?;
@@ -1209,6 +1214,7 @@ mod tests {
             job: &job,
             archive_bytes: 0,
             disk_budget: &super::super::TaskDiskBudget::default(),
+            cached_listing: None,
         };
         let result = finish_external_dictionary(
             &input,

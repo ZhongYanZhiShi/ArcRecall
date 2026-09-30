@@ -5,18 +5,19 @@ use std::time::{Duration, Instant};
 
 use super::super::runner::CancellationToken;
 use super::{
-    RecoveryDictionary, RecoveryError, RecoveryJob, RecoveryPhase, RecoveryToolPaths,
-    RecoveryUpdate, RecursiveRecoveryOptions, RecursiveRecoveryResult,
-    detect_nested_archive_format, ensure_not_cancelled, path_for_display, recover_single_archive,
+    RecoveryDictionary, RecoveryError, RecoveryJob, RecoveryOperation, RecoveryPhase,
+    RecoveryToolPaths, RecoveryUpdate, RecursiveRecoveryOptions, RecursiveRecoveryResult,
+    SkippedScanDirectory, detect_nested_archive_format, ensure_not_cancelled, path_for_display,
+    recover_single_archive, timed_operation,
 };
 
 const SCAN_PROGRESS_INTERVAL_FILES: u64 = 128;
 
-#[derive(Debug, Clone)]
-struct NestedArchiveTask {
-    archive_path: PathBuf,
-    depth: u32,
-    inherited_password: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct NestedArchiveTask {
+    pub(super) archive_path: PathBuf,
+    pub(super) depth: u32,
+    pub(super) inherited_password: Option<String>,
 }
 
 pub(super) struct NestedOutputTransaction {
@@ -65,8 +66,8 @@ impl Drop for NestedOutputTransaction {
     }
 }
 
-#[derive(Debug, Clone)]
-struct FileSnapshot {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct FileSnapshot {
     length: u64,
     modified: Option<std::time::SystemTime>,
     created: Option<std::time::SystemTime>,
@@ -91,11 +92,12 @@ pub(super) struct RecursiveProgressSnapshot {
 struct RecursiveRecoveryState {
     options: RecursiveRecoveryOptions,
     processed_archives: HashSet<PathBuf>,
+    queued_tasks: HashMap<PathBuf, NestedArchiveTask>,
     discovered_nested_archives: u32,
     extracted_nested_archives: u32,
     skipped_nested_archives: u32,
     scanned_files: u64,
-    skipped_directories: u64,
+    skipped_directories: Vec<SkippedScanDirectory>,
     depth_limit_reached: bool,
     count_limit_reached: bool,
 }
@@ -105,11 +107,12 @@ impl RecursiveRecoveryState {
         Self {
             options,
             processed_archives: HashSet::new(),
+            queued_tasks: HashMap::new(),
             discovered_nested_archives: 0,
             extracted_nested_archives: 0,
             skipped_nested_archives: 0,
             scanned_files: 0,
-            skipped_directories: 0,
+            skipped_directories: Vec::new(),
             depth_limit_reached: false,
             count_limit_reached: false,
         }
@@ -138,7 +141,7 @@ impl RecursiveRecoveryState {
         depth: u32,
         archive_path: &Path,
     ) -> RecoveryUpdate {
-        RecoveryUpdate::stage(RecoveryPhase::Recursive, Some("递归解密"), message)
+        RecoveryUpdate::stage(RecoveryPhase::Recursive, None::<String>, message)
             .with_recursive_context(depth, archive_path, &self.progress_snapshot())
     }
 }
@@ -150,9 +153,62 @@ pub fn recover_and_extract_recursive_lazy(
     options: RecursiveRecoveryOptions,
     precomputed_root_fingerprint_sha256: Option<String>,
     prepare_dictionary: impl FnOnce() -> Result<RecoveryDictionary, RecoveryError>,
+    report: impl FnMut(RecoveryUpdate),
+) -> Result<RecursiveRecoveryResult, RecoveryError> {
+    run_recursive_recovery(
+        job,
+        tools,
+        cancellation,
+        options,
+        precomputed_root_fingerprint_sha256,
+        None,
+        prepare_dictionary,
+        report,
+    )
+}
+
+/// Scan previously omitted output directories, retaining the original depth and
+/// archive-count limits. The outer archive is neither read nor extracted again.
+pub fn resume_recursive_scan_lazy(
+    job: &RecoveryJob,
+    tools: &RecoveryToolPaths,
+    cancellation: &CancellationToken,
+    mut options: RecursiveRecoveryOptions,
+    previous: RecursiveRecoveryResult,
+    prepare_dictionary: impl FnOnce() -> Result<RecoveryDictionary, RecoveryError>,
+    report: impl FnMut(RecoveryUpdate),
+) -> Result<RecursiveRecoveryResult, RecoveryError> {
+    if !previous.root.success || previous.skipped_scan_directories.is_empty() {
+        return Err(RecoveryError::Message("没有可补扫的已解压目录。".into()));
+    }
+    options.enabled = true;
+    options.max_files_per_directory = 0;
+    run_recursive_recovery(
+        job,
+        tools,
+        cancellation,
+        options,
+        None,
+        Some(previous),
+        prepare_dictionary,
+        report,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_recursive_recovery(
+    job: &RecoveryJob,
+    tools: &RecoveryToolPaths,
+    cancellation: &CancellationToken,
+    options: RecursiveRecoveryOptions,
+    precomputed_root_fingerprint_sha256: Option<String>,
+    previous: Option<RecursiveRecoveryResult>,
+    prepare_dictionary: impl FnOnce() -> Result<RecoveryDictionary, RecoveryError>,
     mut report: impl FnMut(RecoveryUpdate),
 ) -> Result<RecursiveRecoveryResult, RecoveryError> {
-    let before_root_extraction = if options.enabled {
+    let before_root_extraction = if let Some(previous) = &previous {
+        previous.resume_baseline.clone()
+    } else if options.enabled {
         capture_file_snapshot(&job.output_directory, cancellation)?
     } else {
         HashMap::new()
@@ -183,18 +239,32 @@ pub fn recover_and_extract_recursive_lazy(
         }
     };
 
-    let disk_budget =
-        super::TaskDiskBudget::new(options.max_total_bytes, options.max_total_entries);
-    let mut root = recover_single_archive(
-        job,
-        tools,
-        cancellation,
-        options.compute_mode,
-        &disk_budget,
-        precomputed_root_fingerprint_sha256.as_deref(),
-        &mut dictionary_provider,
-        &mut report,
-    )?;
+    let (remaining_bytes, remaining_entries) = previous
+        .as_ref()
+        .map(|previous| previous.remaining_disk_budget)
+        .unwrap_or((options.max_total_bytes, options.max_total_entries));
+    let disk_budget = super::TaskDiskBudget::new(
+        remaining_bytes.min(options.max_total_bytes),
+        remaining_entries.min(options.max_total_entries),
+    );
+    let mut root = if let Some(previous) = &previous {
+        let mut root = previous.root.clone();
+        root.cancelled = false;
+        root.recovered_archive = None;
+        root.message = "已对现有输出补扫。".into();
+        root
+    } else {
+        recover_single_archive(
+            job,
+            tools,
+            cancellation,
+            options.compute_mode,
+            &disk_budget,
+            precomputed_root_fingerprint_sha256.as_deref(),
+            &mut dictionary_provider,
+            &mut report,
+        )?
+    };
     let mut recovered_passwords = Vec::new();
     if let Some(password) = root.password.as_ref() {
         recovered_passwords.push(password.clone());
@@ -213,6 +283,7 @@ pub fn recover_and_extract_recursive_lazy(
     let mut pending_archive_paths = Vec::new();
     let mut scan_interrupted = false;
     let mut budget_limit_reached = false;
+    let mut content_directories = vec![job.output_directory.clone()];
     if !root.success || !options.enabled {
         return Ok(RecursiveRecoveryResult {
             root,
@@ -229,68 +300,84 @@ pub fn recover_and_extract_recursive_lazy(
             pending_archive_paths,
             scan_interrupted,
             budget_limit_reached,
+            skipped_scan_directories: Vec::new(),
+            content_directories,
+            remaining_disk_budget: disk_budget.remaining(),
+            resume_baseline: HashMap::new(),
+            pending_tasks: Vec::new(),
         });
     }
 
     let mut state = RecursiveRecoveryState::new(options);
+    let mut pending = VecDeque::new();
+    let scan_roots = if let Some(previous) = previous {
+        recovered_passwords.clear();
+        state.discovered_nested_archives = previous.discovered_nested_archives;
+        state.extracted_nested_archives = previous.extracted_nested_archives;
+        state.skipped_nested_archives = previous.skipped_nested_archives;
+        state.scanned_files = previous.scanned_files;
+        state.depth_limit_reached = previous.depth_limit_reached;
+        state.count_limit_reached = previous.count_limit_reached;
+        completed_archive_paths = previous.completed_archive_paths;
+        state
+            .processed_archives
+            .extend(completed_archive_paths.iter().cloned());
+        skipped_archive_paths = previous.skipped_archive_paths;
+        pending_archive_paths = previous.pending_archive_paths;
+        content_directories = previous.content_directories;
+        for task in previous.pending_tasks {
+            state
+                .queued_tasks
+                .insert(task.archive_path.clone(), task.clone());
+            pending.push_back(task);
+        }
+        previous.skipped_scan_directories
+    } else {
+        vec![SkippedScanDirectory {
+            path: job.output_directory.clone(),
+            depth: 1,
+            inherited_password: root.password.clone().or_else(|| job.known_password.clone()),
+        }]
+    };
     // Keep published outputs and their credentials outside the cancellable work.
     let recursive_outcome = (|| -> Result<(), RecoveryError> {
-        report(
-            state
-                .update(
-                    "外层解压已完成，正在扫描第 1 层输出。",
-                    1,
-                    &job.output_directory,
-                )
-                .with_root_extraction_completed(),
-        );
-        let initial_limit = state.collection_limit();
-        let initial_scan_base = state.scanned_files;
-        let initial_scan = find_new_or_changed_archives(
-            &job.output_directory,
-            &before_root_extraction,
-            initial_limit,
-            options.max_files_per_directory,
-            cancellation,
-            |scanned_files, found_archives, skipped_directory| {
-                state.scanned_files = initial_scan_base.saturating_add(scanned_files);
-                if let Some(directory) = skipped_directory {
-                    state.skipped_directories += 1;
-                    report(state.update(
-                        scan_skip_message(directory, options.max_files_per_directory),
-                        1,
-                        directory,
-                    ));
-                    return;
-                }
-                report(state.update(
-                format!(
-                    "正在扫描第 1 层输出：已检查 {scanned_files} 个文件，发现 {found_archives} 个归档。"
-                ),
-                1,
-                &job.output_directory,
-            ));
-            },
-        )?;
-        pending_archive_paths.extend(initial_scan.archives.iter().cloned());
-        if initial_scan.cancelled {
-            scan_interrupted = true;
-            return Err(RecoveryError::Cancelled);
+        for (index, scan_root) in scan_roots.iter().enumerate() {
+            report(
+                state
+                    .update(
+                        format!("正在扫描第 {} 层已有输出。", scan_root.depth),
+                        scan_root.depth,
+                        &scan_root.path,
+                    )
+                    .with_root_extraction_completed(),
+            );
+            let initial_scan = scan_output(
+                scan_root,
+                &before_root_extraction,
+                &mut state,
+                cancellation,
+                &mut report,
+            )?;
+            pending_archive_paths.extend(initial_scan.archives.iter().cloned());
+            if initial_scan.cancelled {
+                state
+                    .skipped_directories
+                    .extend(scan_roots[index..].iter().cloned());
+                scan_interrupted = true;
+                return Err(RecoveryError::Cancelled);
+            }
+            for archive_path in initial_scan.archives {
+                let task = NestedArchiveTask {
+                    archive_path,
+                    depth: scan_root.depth,
+                    inherited_password: scan_root.inherited_password.clone(),
+                };
+                state
+                    .queued_tasks
+                    .insert(task.archive_path.clone(), task.clone());
+                pending.push_back(task);
+            }
         }
-        let inherited_password = root
-            .password
-            .clone()
-            .or_else(|| job.known_password.clone())
-            .filter(|password| !password.is_empty());
-        let mut pending = initial_scan
-            .archives
-            .into_iter()
-            .map(|archive_path| NestedArchiveTask {
-                archive_path,
-                depth: 1,
-                inherited_password: inherited_password.clone(),
-            })
-            .collect::<VecDeque<_>>();
 
         while let Some(nested) = pending.pop_front() {
             ensure_not_cancelled(cancellation)?;
@@ -306,6 +393,7 @@ pub fn recover_and_extract_recursive_lazy(
                 continue;
             }
             if !state.processed_archives.insert(nested.archive_path.clone()) {
+                pending_archive_paths.retain(|path| path != &nested.archive_path);
                 continue;
             }
             if state.discovered_nested_archives >= state.options.max_nested_archives {
@@ -421,56 +509,8 @@ pub fn recover_and_extract_recursive_lazy(
                         .password
                         .or(nested.inherited_password)
                         .filter(|password| !password.is_empty());
-                    let next_depth = nested.depth.saturating_add(1);
-                    report(state.update(
-                        format!(
-                            "{} 已完成解压，正在扫描第 {} 层输出。",
-                            archive_display_name(&nested.archive_path),
-                            next_depth
-                        ),
-                        next_depth,
-                        &nested_output,
-                    ));
-                    let child_limit = state.collection_limit();
-                    let child_scan_base = state.scanned_files;
-                    let child_scan = find_new_or_changed_archives(
-                        &nested_output,
-                        &before_nested_extraction,
-                        child_limit,
-                        options.max_files_per_directory,
-                        cancellation,
-                        |scanned_files, found_archives, skipped_directory| {
-                            state.scanned_files = child_scan_base.saturating_add(scanned_files);
-                            if let Some(directory) = skipped_directory {
-                                state.skipped_directories += 1;
-                                report(state.update(
-                                    scan_skip_message(directory, options.max_files_per_directory),
-                                    next_depth,
-                                    directory,
-                                ));
-                                return;
-                            }
-                            report(state.update(
-                            format!(
-                                "正在扫描第 {next_depth} 层输出：已检查 {scanned_files} 个文件，发现 {found_archives} 个归档。"
-                            ),
-                            next_depth,
-                            &nested_output,
-                        ));
-                        },
-                    )?;
-                    pending_archive_paths.extend(child_scan.archives.iter().cloned());
-                    if child_scan.cancelled {
-                        scan_interrupted = true;
-                        return Err(RecoveryError::Cancelled);
-                    }
-                    pending.extend(child_scan.archives.into_iter().map(|archive_path| {
-                        NestedArchiveTask {
-                            archive_path,
-                            depth: next_depth,
-                            inherited_password: child_password.clone(),
-                        }
-                    }));
+                    content_directories.retain(|path| !nested_output.starts_with(path));
+                    content_directories.push(nested_output.clone());
                     report(state.update(
                         format!(
                             "已解开第 {} 层嵌套压缩包：{}。",
@@ -480,6 +520,36 @@ pub fn recover_and_extract_recursive_lazy(
                         nested.depth,
                         &nested.archive_path,
                     ));
+                    let next_depth = nested.depth.saturating_add(1);
+                    let scan_root = SkippedScanDirectory {
+                        path: nested_output,
+                        depth: next_depth,
+                        inherited_password: child_password.clone(),
+                    };
+                    let child_scan = scan_output(
+                        &scan_root,
+                        &before_nested_extraction,
+                        &mut state,
+                        cancellation,
+                        &mut report,
+                    )?;
+                    pending_archive_paths.extend(child_scan.archives.iter().cloned());
+                    if child_scan.cancelled {
+                        state.skipped_directories.push(scan_root);
+                        scan_interrupted = true;
+                        return Err(RecoveryError::Cancelled);
+                    }
+                    for archive_path in child_scan.archives {
+                        let task = NestedArchiveTask {
+                            archive_path,
+                            depth: next_depth,
+                            inherited_password: child_password.clone(),
+                        };
+                        state
+                            .queued_tasks
+                            .insert(task.archive_path.clone(), task.clone());
+                        pending.push_back(task);
+                    }
                 }
                 Ok(_) => {
                     pending_archive_paths.retain(|path| path != &nested.archive_path);
@@ -523,12 +593,23 @@ pub fn recover_and_extract_recursive_lazy(
         Ok(()) => {}
     }
 
+    let mut seen_directories = HashSet::new();
+    state
+        .skipped_directories
+        .retain(|directory| seen_directories.insert(directory.path.clone()));
+    let mut seen_pending = HashSet::new();
+    pending_archive_paths.retain(|path| seen_pending.insert(path.clone()));
     let mut summary = format!(
         "{}，共检查 {} 个文件，已自动解开 {} 个嵌套压缩包",
         if budget_limit_reached {
             "达到累计磁盘预算，已停止递归；已完成输出保留"
         } else if root.cancelled {
             "递归处理已取消；主归档及已完成的输出已保留"
+        } else if !state.skipped_directories.is_empty()
+            || state.depth_limit_reached
+            || state.count_limit_reached
+        {
+            "解压完成，递归扫描未覆盖全部目录"
         } else {
             "递归扫描完成"
         },
@@ -538,10 +619,10 @@ pub fn recover_and_extract_recursive_lazy(
     if state.skipped_nested_archives > 0 {
         summary.push_str(&format!("，跳过 {} 个", state.skipped_nested_archives));
     }
-    if state.skipped_directories > 0 {
+    if !state.skipped_directories.is_empty() {
         summary.push_str(&format!(
-            "；按文件数上限跳过 {} 个目录及其子目录的嵌套扫描",
-            state.skipped_directories
+            "；仍有 {} 个目录及其子目录未完成嵌套扫描",
+            state.skipped_directories.len()
         ));
     }
     if state.depth_limit_reached || state.count_limit_reached {
@@ -562,10 +643,118 @@ pub fn recover_and_extract_recursive_lazy(
         scanned_files: state.scanned_files,
         completed_archive_paths,
         skipped_archive_paths,
+        pending_tasks: pending_archive_paths
+            .iter()
+            .filter_map(|path| state.queued_tasks.get(path).cloned())
+            .collect(),
         pending_archive_paths,
         scan_interrupted,
         budget_limit_reached,
+        remaining_disk_budget: disk_budget.remaining(),
+        resume_baseline: before_root_extraction
+            .into_iter()
+            .filter(|(path, _)| {
+                state
+                    .skipped_directories
+                    .iter()
+                    .any(|directory| path.starts_with(&directory.path))
+            })
+            .collect(),
+        skipped_scan_directories: state.skipped_directories,
+        content_directories: content_directories
+            .into_iter()
+            .map(resolve_content_directory)
+            .collect(),
     })
+}
+
+fn scan_output(
+    scan_root: &SkippedScanDirectory,
+    before: &HashMap<PathBuf, FileSnapshot>,
+    state: &mut RecursiveRecoveryState,
+    cancellation: &CancellationToken,
+    report: &mut impl FnMut(RecoveryUpdate),
+) -> Result<ArchiveScanResult, RecoveryError> {
+    let base = state.scanned_files;
+    let depth = scan_root.depth;
+    let limit = state.options.max_files_per_directory;
+    let excluded = state
+        .processed_archives
+        .iter()
+        .chain(state.queued_tasks.keys())
+        .cloned()
+        .collect();
+    let result = timed_operation(RecoveryOperation::Scan, report, |report| {
+        if !fs::symlink_metadata(&scan_root.path)?.is_dir() {
+            return Err(RecoveryError::Message("目录已不存在或已被替换。".into()));
+        }
+        find_new_or_changed_archives(
+            &scan_root.path,
+            before,
+            &excluded,
+            state.collection_limit(),
+            limit,
+            cancellation,
+            |scanned, found, skipped| {
+                state.scanned_files = base.saturating_add(scanned);
+                if let Some(path) = skipped {
+                    state.skipped_directories.push(SkippedScanDirectory {
+                        path: path.to_path_buf(),
+                        depth,
+                        inherited_password: scan_root.inherited_password.clone(),
+                    });
+                    report(state.update(scan_skip_message(path, limit), depth, path));
+                } else {
+                    report(state.update(
+                        format!("正在扫描第 {depth} 层输出：已检查 {scanned} 个文件，发现 {found} 个归档。"),
+                        depth, &scan_root.path,
+                    ).with_scan_progress());
+                }
+            },
+        )
+    });
+    match result {
+        Err(error) if !matches!(error, RecoveryError::Cancelled) => {
+            state.skipped_directories.push(scan_root.clone());
+            report(state.update(
+                format!(
+                    "目录 {} 未能完整扫描，已保留补扫入口：{error}",
+                    path_for_display(&scan_root.path)
+                ),
+                depth,
+                &scan_root.path,
+            ));
+            Ok(ArchiveScanResult {
+                archives: Vec::new(),
+                cancelled: false,
+            })
+        }
+        other => other,
+    }
+}
+
+// Follow only unambiguous directory wrappers. Never move files, follow symlinks,
+// or hide a sibling file/directory from the default open action.
+fn resolve_content_directory(mut directory: PathBuf) -> PathBuf {
+    for _ in 0..64 {
+        let Ok(mut entries) = fs::read_dir(&directory) else {
+            break;
+        };
+        let Some(Ok(entry)) = entries.next() else {
+            break;
+        };
+        if entries.next().is_some() {
+            break;
+        }
+        if !entry
+            .file_type()
+            .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+        {
+            break;
+        }
+        directory = entry.path();
+    }
+    directory
 }
 
 fn capture_file_snapshot(
@@ -590,6 +779,7 @@ struct ArchiveScanResult {
 fn find_new_or_changed_archives(
     directory: &Path,
     before: &HashMap<PathBuf, FileSnapshot>,
+    excluded: &HashSet<PathBuf>,
     max_archives: usize,
     max_files_per_directory: u32,
     cancellation: &CancellationToken,
@@ -622,10 +812,17 @@ fn find_new_or_changed_archives(
                     .is_none_or(|previous| current.has_changed_since(previous))
             {
                 match super::archive::resolve_zip_archive_path(&path) {
-                    Ok(Some(primary)) if zip_archives.insert(primary.clone()) => {
+                    Ok(Some(primary))
+                        if !excluded.contains(&primary) && zip_archives.insert(primary.clone()) =>
+                    {
                         archives.push(primary)
                     }
-                    Ok(None) if detect_nested_archive_format(&path).is_ok() => archives.push(path),
+                    Ok(None)
+                        if !excluded.contains(&path)
+                            && detect_nested_archive_format(&path).is_ok() =>
+                    {
+                        archives.push(path)
+                    }
                     _ => {}
                 }
             }
@@ -690,20 +887,13 @@ fn visit_file_entries(
     let mut pending = vec![directory.to_path_buf()];
     'directories: while let Some(current) = pending.pop() {
         ensure_not_cancelled(cancellation)?;
-        let entries = match fs::read_dir(&current) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
+        let entries = fs::read_dir(&current)?;
         let mut files = Vec::new();
         let mut children = Vec::new();
         for entry in entries {
             ensure_not_cancelled(cancellation)?;
-            let Ok(entry) = entry else {
-                continue;
-            };
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
+            let entry = entry?;
+            let file_type = entry.file_type()?;
             if file_type.is_symlink() {
                 continue;
             }
@@ -806,6 +996,30 @@ fn archive_display_name(path: &Path) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn content_directory_follows_single_wrappers_but_preserves_branches_and_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let wrapper = directory.path().join("wrapper");
+        let content = wrapper.join("game");
+        fs::create_dir_all(&content).unwrap();
+        fs::write(content.join("payload.txt"), b"content").unwrap();
+        assert_eq!(
+            resolve_content_directory(directory.path().to_path_buf()),
+            content
+        );
+        fs::write(wrapper.join("readme.txt"), b"keep visible").unwrap();
+        assert_eq!(
+            resolve_content_directory(directory.path().to_path_buf()),
+            wrapper
+        );
+        fs::create_dir(directory.path().join("other")).unwrap();
+        assert_eq!(
+            resolve_content_directory(directory.path().to_path_buf()),
+            directory.path()
+        );
+        assert!(content.join("payload.txt").is_file());
+    }
+
     fn write_files(directory: &Path, count: usize) {
         fs::create_dir_all(directory).unwrap();
         for index in 0..count {
@@ -823,6 +1037,7 @@ mod tests {
         let result = find_new_or_changed_archives(
             directory,
             &HashMap::new(),
+            &HashSet::new(),
             100,
             limit,
             &CancellationToken::default(),
@@ -886,6 +1101,7 @@ mod tests {
         let result = find_new_or_changed_archives(
             dir.path(),
             &before,
+            &HashSet::new(),
             100,
             10,
             &CancellationToken::default(),
@@ -907,6 +1123,7 @@ mod tests {
         let result = find_new_or_changed_archives(
             dir.path(),
             &HashMap::new(),
+            &HashSet::new(),
             100,
             10,
             &cancellation,

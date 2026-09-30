@@ -4,6 +4,8 @@ import test from "node:test"
 import {
   isArchiveContainerFailure,
   recoveryComputeSummary,
+  hasIncompleteRecursiveScan,
+  recoveryStageLabel,
 } from "../src/components/home/recovery-view-utils.ts"
 import type { RecoveryTaskStatus } from "../src/lib/recovery.ts"
 
@@ -65,4 +67,26 @@ test("归档容器失败由结构化字段识别，不依赖错误文案", () =>
   failedTask.failureKind = "io"
   failedTask.message = "归档无法继续验密：这段文案不再参与判断"
   assert.equal(isArchiveContainerFailure(failedTask), false)
+})
+
+test("解压成功与扫描覆盖分别判断，历史任务缺失新字段仍可显示", () => {
+  const completed = { success: true, completed: true } as RecoveryTaskStatus
+  assert.equal(hasIncompleteRecursiveScan(completed), false)
+  for (const fields of [
+    { skippedScanDirectories: ["F:/output/game"] },
+    { scanInterrupted: true },
+    { depthLimitReached: true },
+    { countLimitReached: true },
+    { budgetLimitReached: true },
+    { pendingArchivePaths: ["F:/output/inner.zip"] },
+    { skippedArchivePaths: ["F:/output/bad.zip"] },
+  ])
+    assert.equal(hasIncompleteRecursiveScan({ ...completed, ...fields }), true)
+})
+
+test("阶段标题去重并兼容旧版递归事件", () => {
+  assert.equal(recoveryStageLabel("recursive", "递归解密"), "递归处理")
+  assert.equal(recoveryStageLabel("recursive", null), "递归处理")
+  assert.equal(recoveryStageLabel("hashcat", "Hashcat"), "Hashcat")
+  assert.equal(recoveryStageLabel("verifying", "7-Zip"), "检查 · 7-Zip")
 })

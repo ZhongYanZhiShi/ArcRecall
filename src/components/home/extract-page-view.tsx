@@ -119,6 +119,8 @@ type ExtractPageViewProps = {
   handleStart: () => Promise<void>
   handleCancel: () => Promise<void>
   handleCopyPassword: () => Promise<void>
+  onOpenDirectory: (path: string) => void
+  onRescan?: () => void
   onOpenOutput: () => void
   onOpenEngineSettings: () => void
 }
@@ -167,6 +169,8 @@ export function ExtractPageView({
   handleCancel,
   handleCopyPassword,
   onOpenOutput,
+  onOpenDirectory,
+  onRescan,
   onOpenEngineSettings,
 }: ExtractPageViewProps) {
   const computeModeLabel = computeMode === "cpuOnly" ? "仅 CPU" : "GPU 优先"
@@ -622,6 +626,8 @@ export function ExtractPageView({
                 }
                 onCopyPassword={handleCopyPassword}
                 onOpenOutput={onOpenOutput}
+                onOpenDirectory={onOpenDirectory}
+                onRescan={onRescan}
                 onOpenOptions={() => setOptionsOpen(true)}
                 onOpenEngineSettings={onOpenEngineSettings}
               />
@@ -663,6 +669,8 @@ export function ExtractPageView({
               }
               onCopyPassword={handleCopyPassword}
               onOpenOutput={onOpenOutput}
+              onOpenDirectory={onOpenDirectory}
+              onRescan={onRescan}
               onOpenOptions={() => setOptionsOpen(true)}
               onOpenEngineSettings={onOpenEngineSettings}
             />

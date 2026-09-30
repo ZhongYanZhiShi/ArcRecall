@@ -1,13 +1,13 @@
 use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::super::runner::{CancellationToken, ProcessOutput, ProcessRequest};
 use super::{
-    ArchiveFormat, RecoveryError, RecoveryInput, RecoveryPhase, RecoveryToolPaths, RecoveryUpdate,
-    ensure_not_cancelled, is_password_rejection, path_for_display, process_failure,
-    process_failure_detail, run_checked,
+    ArchiveFormat, RecoveryError, RecoveryInput, RecoveryOperation, RecoveryPhase,
+    RecoveryToolPaths, RecoveryUpdate, ensure_not_cancelled, is_password_rejection,
+    path_for_display, process_failure, process_failure_detail, run_checked, timed_operation,
 };
 
 const MAX_EXTRACTED_ENTRY_COUNT: u64 = 100_000;
@@ -42,7 +42,7 @@ pub(super) fn validate_archive_container(
     expected_format: ArchiveFormat,
     tools: &RecoveryToolPaths,
     cancellation: &CancellationToken,
-) -> Result<(), RecoveryError> {
+) -> Result<Option<ArchiveExtractionBudget>, RecoveryError> {
     let mut request = ProcessRequest::new(&tools.seven_zip);
     request.args = vec![
         OsString::from("l"),
@@ -54,7 +54,7 @@ pub(super) fn validate_archive_container(
     ];
     request.current_dir = tools.seven_zip.parent().map(Path::to_path_buf);
     request.timeout = Duration::from_secs(2 * 60);
-    request.max_output_bytes = 1024 * 1024;
+    request.max_output_bytes = SEVEN_ZIP_LIST_OUTPUT_LIMIT;
     let output = run_checked(&request, cancellation)?;
     let detected_types = seven_zip_archive_types(&output);
 
@@ -63,7 +63,11 @@ pub(super) fn validate_archive_container(
         .any(|detected| archive_type_matches(expected_format, detected))
         || (detected_types.is_empty() && is_password_rejection(&output))
     {
-        return Ok(());
+        // Only a complete, successful listing can replace the extraction preflight.
+        return Ok(output
+            .success
+            .then(|| parse_seven_zip_extraction_budget(&output).ok())
+            .flatten());
     }
 
     if !detected_types.is_empty() {
@@ -140,13 +144,34 @@ pub(super) fn extract_with_password(
 ) -> Result<(), RecoveryError> {
     let job = input.job;
     ensure_not_cancelled(cancellation)?;
-    let declared = validate_extraction_budget(
-        &job.archive_path,
-        input.archive_bytes,
-        password,
-        tools,
-        cancellation,
-    )?;
+    let declared = timed_operation(RecoveryOperation::Preflight, report, |_| {
+        if let Some(listing) = input.cached_listing.filter(|listing| listing.is_current()) {
+            check_extraction_budget(listing.budget, input.archive_bytes)?;
+            Ok(listing.budget)
+        } else {
+            validate_extraction_budget(
+                &job.archive_path,
+                input.archive_bytes,
+                password,
+                tools,
+                cancellation,
+            )
+        }
+    })?;
+    timed_operation(RecoveryOperation::Extraction, report, |report| {
+        extract_preflighted(input, tools, password, cancellation, declared, report)
+    })
+}
+
+fn extract_preflighted(
+    input: &RecoveryInput<'_>,
+    tools: &RecoveryToolPaths,
+    password: &str,
+    cancellation: &CancellationToken,
+    declared: ArchiveExtractionBudget,
+    report: &mut dyn FnMut(RecoveryUpdate),
+) -> Result<(), RecoveryError> {
+    let job = input.job;
     let (remaining_bytes, remaining_entries) = input.disk_budget.remaining();
     super::disk_budget::check_free_space(&job.output_directory, declared.total_bytes)?;
     let baseline = super::disk_budget::directory_usage(
@@ -251,6 +276,38 @@ pub(super) struct ArchiveExtractionBudget {
     pub(super) total_bytes: u64,
 }
 
+/// Task-local cache bound to every volume, invalidated when any volume changes.
+pub(super) struct CachedArchiveListing {
+    budget: ArchiveExtractionBudget,
+    volumes: Vec<(PathBuf, u64, std::time::SystemTime)>,
+}
+
+impl CachedArchiveListing {
+    pub(super) fn capture(budget: ArchiveExtractionBudget, paths: &[PathBuf]) -> Option<Self> {
+        let volumes = paths
+            .iter()
+            .map(|path| {
+                let metadata = fs::metadata(path).ok()?;
+                Some((path.clone(), metadata.len(), metadata.modified().ok()?))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        (!volumes.is_empty()).then_some(Self { budget, volumes })
+    }
+
+    fn is_current(&self) -> bool {
+        self.volumes.iter().all(|(path, length, modified)| {
+            fs::metadata(path).is_ok_and(|metadata| {
+                metadata.len() == *length && metadata.modified().ok() == Some(*modified)
+            })
+        })
+    }
+
+    pub(super) fn with_budget(mut self, budget: ArchiveExtractionBudget) -> Option<Self> {
+        self.budget = budget;
+        self.is_current().then_some(self)
+    }
+}
+
 fn validate_extraction_budget(
     archive: &Path,
     archive_bytes: u64,
@@ -352,6 +409,31 @@ pub(super) fn parse_seven_zip_extraction_budget(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listing_cache_is_invalidated_by_any_changed_or_missing_volume() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = vec![
+            directory.path().join("sample.z01"),
+            directory.path().join("sample.zip"),
+        ];
+        for path in &paths {
+            fs::write(path, b"volume").unwrap();
+        }
+        let budget = ArchiveExtractionBudget {
+            entry_count: 1,
+            total_bytes: 7,
+        };
+        let cache = CachedArchiveListing::capture(budget, &paths).unwrap();
+        assert!(cache.is_current());
+        fs::write(&paths[1], b"changed-volume").unwrap();
+        assert!(!cache.is_current());
+        assert!(cache.with_budget(budget).is_none());
+        let cache = CachedArchiveListing::capture(budget, &paths).unwrap();
+        fs::remove_file(&paths[0]).unwrap();
+        assert!(!cache.is_current());
+        assert!(CachedArchiveListing::capture(budget, &paths).is_none());
+    }
 
     #[test]
     fn content_processing_allows_long_archives_and_keeps_the_tool_directory() {

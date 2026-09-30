@@ -43,6 +43,15 @@ Settings → Recovery engines → Directory scan file limit; set it to 0 to remo
 the file-count limit. Changes apply to new tasks. The detailed process view and
 completion summary explain skipped directories.
 
+Extraction success and scan coverage are shown separately. The most recent task
+in the current session can rescan omitted output directories without the direct-file
+limit or re-extracting the outer archive. Rescans retain the original depth,
+inherited passwords, queued archives and remaining disk budget, and leave unchanged
+archives that existed before extraction alone. Rescan state does not survive an app
+restart. The detailed process view shows cumulative phase timings and shortcuts to
+unscanned and final content directories, with consecutive scan progress coalesced.
+Opening the final content directory does not move or flatten files.
+
 Each recovery task shares a cumulative extraction budget of 100 GiB and 100,000
 files or directories. LZ4 decoding and split-volume copy fallbacks also count
 toward the byte budget. Windows checks available disk space before extraction,

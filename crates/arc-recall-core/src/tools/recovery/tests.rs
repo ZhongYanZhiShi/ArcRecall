@@ -1250,6 +1250,13 @@ fn recursive_scan_file_limit_preserves_output_and_can_resume_with_a_higher_limit
             dictionary_count: 0,
             known_password: Some("shared-test-password".into()),
         };
+        if limit == 10 {
+            // A custom output may already contain unrelated archives. A rescan
+            // must retain the original baseline and leave these alone.
+            let existing = job.output_directory.join("content");
+            fs::create_dir_all(&existing).unwrap();
+            create_plain_archive(&tools.seven_zip, &existing.join("preexisting.7z"), &payload);
+        }
         let mut updates = Vec::new();
         let result = recover_and_extract_recursive_lazy(
             &job,
@@ -1277,11 +1284,197 @@ fn recursive_scan_file_limit_preserves_output_and_can_resume_with_a_higher_limit
             assert_eq!(result.extracted_nested_archives, 0);
             assert_eq!(result.scanned_files, 0);
             assert!(!output.join("nested").exists());
-            assert!(result.root.message.contains("按文件数上限跳过 1 个目录"));
+            assert!(result.root.message.contains("仍有 1 个目录"));
             assert!(
                 updates
                     .iter()
                     .any(|update| update.message.contains("直属文件超过 10 个"))
+            );
+            assert_eq!(
+                result.skipped_scan_directories,
+                vec![SkippedScanDirectory {
+                    path: output.clone(),
+                    inherited_password: Some("shared-test-password".into()),
+                    depth: 1
+                }]
+            );
+            assert!(result.root.message.contains("扫描未覆盖全部目录"));
+            // Resuming must work even after the source archive is unavailable.
+            let resume_job = RecoveryJob {
+                archive_path: dir.path().join("missing-outer.7z"),
+                known_password: None,
+                ..job.clone()
+            };
+            let cancelled = CancellationToken::default();
+            cancelled.cancel();
+            let mut interrupted = resume_recursive_scan_lazy(
+                &resume_job,
+                &tools,
+                &cancelled,
+                RecursiveRecoveryOptions::default(),
+                result.clone(),
+                || panic!("cancelled scan must not prepare dictionary"),
+                |_| {},
+            )
+            .unwrap();
+            assert!(
+                interrupted.root.success
+                    && interrupted.root.cancelled
+                    && interrupted.scan_interrupted
+            );
+            assert_eq!(
+                interrupted.skipped_scan_directories,
+                result.skipped_scan_directories
+            );
+            interrupted.root.password = None;
+            let mut resume_updates = Vec::new();
+            let resumed = resume_recursive_scan_lazy(
+                &resume_job,
+                &tools,
+                &CancellationToken::default(),
+                RecursiveRecoveryOptions::default(),
+                interrupted,
+                || panic!("inherited password must avoid dictionary loading"),
+                |update| resume_updates.push(update),
+            )
+            .unwrap();
+            assert!(resumed.root.success && !resumed.root.cancelled);
+            assert!(resumed.skipped_scan_directories.is_empty());
+            assert_eq!(resumed.extracted_nested_archives, 1);
+            assert_eq!(resumed.completed_archive_paths.len(), 2);
+            assert_eq!(
+                resumed.recovered_archives.len(),
+                1,
+                "only new history is saved"
+            );
+            assert_eq!(
+                fs::read(output.join("nested/payload.txt")).unwrap(),
+                b"nested-content"
+            );
+            assert!(!output.join("nested (2)").exists());
+            assert!(!output.join("preexisting").exists());
+            assert_eq!(resumed.content_directories, vec![output.join("nested")]);
+            let published = resume_updates
+                .iter()
+                .position(|update| update.message.contains("已解开第 1 层"))
+                .unwrap();
+            let scan_child = resume_updates
+                .iter()
+                .position(|update| update.scan_progress && update.recursive_depth == Some(2))
+                .unwrap();
+            assert!(
+                published < scan_child,
+                "publication must precede scanning child output"
+            );
+            for operation in [
+                RecoveryOperation::Preflight,
+                RecoveryOperation::Verification,
+                RecoveryOperation::Extraction,
+                RecoveryOperation::Fingerprint,
+                RecoveryOperation::Scan,
+            ] {
+                assert!(resume_updates.iter().any(|update| {
+                    update
+                        .timing
+                        .as_ref()
+                        .is_some_and(|timing| timing.operation == operation)
+                }));
+            }
+            let mut budget_limited = result.clone();
+            budget_limited.remaining_disk_budget = (1, 1);
+            let budget_limited = resume_recursive_scan_lazy(
+                &resume_job,
+                &tools,
+                &CancellationToken::default(),
+                RecursiveRecoveryOptions::default(),
+                budget_limited,
+                || panic!("directory password remains available"),
+                |_| {},
+            )
+            .unwrap();
+            assert!(
+                budget_limited.budget_limit_reached,
+                "rescan must not reset the disk budget"
+            );
+            assert!(!output.join("nested (2)").exists());
+            let mut unavailable = result.clone();
+            unavailable.skipped_scan_directories[0].path = dir.path().join("missing-output");
+            let unavailable = resume_recursive_scan_lazy(
+                &resume_job,
+                &tools,
+                &CancellationToken::default(),
+                RecursiveRecoveryOptions::default(),
+                unavailable,
+                || panic!("missing output must not prepare dictionary"),
+                |_| {},
+            )
+            .unwrap();
+            assert!(unavailable.root.success);
+            assert_eq!(
+                unavailable.skipped_scan_directories.len(),
+                1,
+                "unreadable directories cannot be marked scanned"
+            );
+            let mut count_limited = result.clone();
+            count_limited.discovered_nested_archives = DEFAULT_RECURSIVE_MAX_ARCHIVES;
+            let count_limited = resume_recursive_scan_lazy(
+                &resume_job,
+                &tools,
+                &CancellationToken::default(),
+                RecursiveRecoveryOptions::default(),
+                count_limited,
+                || panic!("archive count guard precedes recovery"),
+                |_| {},
+            )
+            .unwrap();
+            assert!(count_limited.count_limit_reached);
+            assert_eq!(count_limited.extracted_nested_archives, 0);
+            // The original depth is retained instead of restarting at layer one.
+            let mut limited = result.clone();
+            limited.skipped_scan_directories[0].depth = 6;
+            let limited = resume_recursive_scan_lazy(
+                &resume_job,
+                &tools,
+                &CancellationToken::default(),
+                RecursiveRecoveryOptions::default(),
+                limited,
+                || panic!("depth guard precedes recovery"),
+                |_| {},
+            )
+            .unwrap();
+            assert!(limited.depth_limit_reached);
+            assert_eq!(limited.extracted_nested_archives, 0);
+            // A cancelled scan of a later directory must not lose archives
+            // already queued from an earlier directory or reset their depth.
+            let empty = dir.path().join("remaining-empty-directory");
+            fs::create_dir(&empty).unwrap();
+            let mut queued = result;
+            queued.skipped_scan_directories[0].path = empty;
+            queued.pending_archive_paths.push(output.join("nested.jpg"));
+            queued
+                .pending_tasks
+                .push(super::recursive::NestedArchiveTask {
+                    archive_path: output.join("nested.jpg"),
+                    depth: 2,
+                    inherited_password: Some("shared-test-password".into()),
+                });
+            let mut queued_updates = Vec::new();
+            let queued = resume_recursive_scan_lazy(
+                &resume_job,
+                &tools,
+                &CancellationToken::default(),
+                RecursiveRecoveryOptions::default(),
+                queued,
+                || panic!("queued task retains inherited password"),
+                |update| queued_updates.push(update),
+            )
+            .unwrap();
+            assert_eq!(queued.extracted_nested_archives, 1);
+            assert!(queued.pending_archive_paths.is_empty());
+            assert!(
+                queued_updates
+                    .iter()
+                    .any(|update| update.message.contains("正在处理第 2 层"))
             );
         } else {
             assert_eq!(result.extracted_nested_archives, 1);
@@ -1789,6 +1982,7 @@ fn completed_external_engine_rechecks_long_candidates_with_seven_zip() {
             job: &job,
             archive_bytes: fs::metadata(&job.archive_path).unwrap().len(),
             disk_budget: &TaskDiskBudget::default(),
+            cached_listing: None,
         };
         let result = cracking::finish_external_dictionary(
             &input,
