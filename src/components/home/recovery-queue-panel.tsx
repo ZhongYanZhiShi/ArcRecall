@@ -33,9 +33,13 @@ export function RecoveryQueuePanel({
   onPasswordChange: (value: string) => void
 }) {
   if (queue.items.length === 0) return null
-  const pending = queue.items.filter((item) => item.state === "waiting").length
+  const pending = queue.items.filter(
+    (item) => item.state === "waiting" && !item.blockedReason
+  ).length
   const failed = queue.items.some(
-    (item) => item.state === "failed" || item.state === "cancelled"
+    (item) =>
+      !item.blockedReason &&
+      (item.state === "failed" || item.state === "cancelled")
   )
   const currentTask = queue.items.find(
     (item) => item.id === queue.currentItemId
@@ -99,7 +103,7 @@ export function RecoveryQueuePanel({
         </div>
       </div>
       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-        按当前选项逐项处理，失败后继续；停止会取消当前项并保留等待项，退出应用后队列清空。
+        新任务按当前选项逐项处理，重试项保留原选项；失败后继续，停止会保留等待项。未启用任务记忆时，退出应用后队列清空。
       </p>
       <div className="mt-3 grid items-center gap-2 sm:grid-cols-[auto_1fr]">
         <Label htmlFor="batch-known-password" className="text-xs">
@@ -130,10 +134,25 @@ export function RecoveryQueuePanel({
               <p className="truncate" title={item.path}>
                 {archiveNameFromPath(item.path)}
               </p>
+              {item.options?.computeMode ? (
+                <p className="mt-1 text-muted-foreground">
+                  {item.options.computeMode === "cpuOnly"
+                    ? "仅 CPU"
+                    : "GPU 优先"}
+                  {item.options.recursive === undefined
+                    ? ""
+                    : item.options.recursive
+                      ? " · 递归扫描"
+                      : " · 不递归"}
+                </p>
+              ) : null}
               {item.error ? (
                 <p className="mt-1 break-words text-destructive">
                   {item.error}
                 </p>
+              ) : null}
+              {item.blockedReason ? (
+                <p className="mt-1 text-destructive">{item.blockedReason}</p>
               ) : null}
             </div>
             <Badge variant="secondary">{LABELS[item.state]}</Badge>

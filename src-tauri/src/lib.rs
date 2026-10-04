@@ -7,6 +7,7 @@ mod engine_commands;
 mod history_commands;
 mod history_support;
 mod logging;
+mod queue_journal;
 mod recovery_commands;
 mod task_coordination;
 mod task_lifecycle;
@@ -46,6 +47,7 @@ use engine_commands::{
 use history_commands::{history_clear, history_delete, history_list, history_reveal_password};
 use history_support::migrate_legacy_history_passwords;
 use logging::{LogExportResult, LogLevel, LogListResult, LogQuery, LogStore};
+use queue_journal::{QueueJournal, recovery_queue_load, recovery_queue_save};
 use recovery_commands::{
     RecoveryTaskHandle, archive_analyze, archive_repair_copy, recovery_cancel, recovery_start,
     recovery_status,
@@ -60,6 +62,7 @@ use update_commands::{
 const MIB_BYTES: u64 = 1024 * 1024;
 
 struct AppState {
+    queue_journal: Arc<Mutex<QueueJournal>>,
     paths: AppPaths,
     resource_dir: PathBuf,
     dictionary: Arc<Mutex<DictionaryCandidateStore>>,
@@ -433,6 +436,9 @@ pub fn run() {
                 ],
             );
             app.manage(AppState {
+                queue_journal: Arc::new(Mutex::new(QueueJournal::new(
+                    paths.root.join("recovery-queue.json"),
+                ))),
                 paths,
                 prepared_restore: Mutex::new(None),
                 resource_dir,
@@ -451,6 +457,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            recovery_queue_load,
+            recovery_queue_save,
             app_update_status,
             app_update_check,
             app_update_download,

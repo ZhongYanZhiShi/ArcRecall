@@ -25,7 +25,11 @@ import {
   type RecoveryTaskStatus,
 } from "@/lib/recovery"
 import { uniqueArchivePaths } from "@/lib/recovery-queue"
-import { recoveryQueue } from "@/lib/recovery-queue-session"
+import {
+  recoveryQueue,
+  recoveryQueueJournal,
+} from "@/lib/recovery-queue-session"
+import { QueueMemoryPanel } from "@/components/home/queue-memory-panel"
 import { RecoveryQueuePanel } from "@/components/home/recovery-queue-panel"
 import { createRecoveryTaskSubscription } from "@/lib/recovery-task-attachment"
 import { copySensitiveText } from "@/lib/sensitive-clipboard"
@@ -42,6 +46,14 @@ export function ExtractPage({
     recoveryQueue.getSnapshot,
     recoveryQueue.getSnapshot
   )
+  const journal = React.useSyncExternalStore(
+    recoveryQueueJournal.subscribe,
+    recoveryQueueJournal.getSnapshot,
+    recoveryQueueJournal.getSnapshot
+  )
+  React.useEffect(() => {
+    void recoveryQueueJournal.initialize()
+  }, [])
   const [repairMessage, setRepairMessage] = React.useState<string | null>(null)
   const [outputMode, setOutputMode] = React.useState<OutputMode>("sibling")
   const [outputDir, setOutputDir] = React.useState<string | null>(null)
@@ -121,6 +133,7 @@ export function ExtractPage({
   const isInputLocked = React.useCallback(
     () =>
       operationBusy.current ||
+      !recoveryQueueJournal.getSnapshot().ready ||
       runningRef.current ||
       recoveryQueue.getSnapshot().running,
     [runningRef]
@@ -371,6 +384,23 @@ export function ExtractPage({
     setDragOver(false)
     setError(null)
     try {
+      if (recoveryQueueJournal.getSnapshot().enabled) {
+        const [itemId] = recoveryQueue.enqueue([analysis.archivePath], {
+          exactOutputDirectory:
+            outputMode === "custom"
+              ? outputDir
+              : analysis.suggestedOutputDirectory,
+          knownPassword: knownPassword || null,
+          recursive,
+          computeMode,
+        })
+        if (itemId === undefined)
+          throw new Error("无法加入任务队列，请重新选择归档。")
+        setAnalysis(null)
+        setSelectedQueueItemId(itemId)
+        await recoveryQueue.start({ openWhenDone }, itemId)
+        return
+      }
       const started = await startRecovery({
         archivePath: analysis.archivePath,
         outputDirectory:
@@ -398,6 +428,7 @@ export function ExtractPage({
     analysis,
     computeMode,
     knownPassword,
+    openWhenDone,
     isInputLocked,
     outputDir,
     outputMode,
@@ -586,7 +617,7 @@ export function ExtractPage({
       reattachedTaskId={selectedTask?.taskId ?? reattachedTaskId}
       dictionaryCount={dictionaryCount}
       analyzingPath={analyzingPath}
-      busy={busy || queue.running}
+      busy={busy || queue.running || !journal.ready}
       error={error}
       running={running}
       taskResultRef={taskResultRef}
@@ -595,31 +626,34 @@ export function ExtractPage({
       handleRepairCopy={handleRepairCopy}
       repairMessage={repairMessage}
       queueContent={
-        <RecoveryQueuePanel
-          queue={queue}
-          knownPassword={knownPassword}
-          onPasswordChange={setKnownPassword}
-          disabled={busy || (running && !queue.running)}
-          onStart={handleStartBatch}
-          onView={(id) => {
-            const item = queue.items.find((candidate) => candidate.id === id)
-            if (item?.task) {
-              setAnalysis(null)
-              setSelectedQueueItemId(id)
-              setPasswordTaskId(null)
-              setPasswordCopied(false)
-              requestAnimationFrame(() => {
-                taskResultRef.current?.focus({ preventScroll: true })
-                taskResultRef.current?.scrollIntoView({ block: "nearest" })
-              })
-            }
-          }}
-          onOpenOutput={(path) => {
-            void openOutputDirectory(path).catch((reason) =>
-              setError(toErrorMessage(reason))
-            )
-          }}
-        />
+        <>
+          <QueueMemoryPanel disabled={busy || running || queue.running} />
+          <RecoveryQueuePanel
+            queue={queue}
+            knownPassword={knownPassword}
+            onPasswordChange={setKnownPassword}
+            disabled={busy || !journal.ready || (running && !queue.running)}
+            onStart={handleStartBatch}
+            onView={(id) => {
+              const item = queue.items.find((candidate) => candidate.id === id)
+              if (item?.task) {
+                setAnalysis(null)
+                setSelectedQueueItemId(id)
+                setPasswordTaskId(null)
+                setPasswordCopied(false)
+                requestAnimationFrame(() => {
+                  taskResultRef.current?.focus({ preventScroll: true })
+                  taskResultRef.current?.scrollIntoView({ block: "nearest" })
+                })
+              }
+            }}
+            onOpenOutput={(path) => {
+              void openOutputDirectory(path).catch((reason) =>
+                setError(toErrorMessage(reason))
+              )
+            }}
+          />
+        </>
       }
       handlePickOutputDir={handlePickOutputDir}
       handleComputeModeChange={handleComputeModeChange}
@@ -628,6 +662,33 @@ export function ExtractPage({
       handleCopyPassword={handleCopyPassword}
       onOpenOutput={handleOpenOutput}
       onOpenDirectory={handleOpenDirectory}
+      onRetryArchives={
+        !busy && !running && !queue.running && journal.ready && task
+          ? (paths) => {
+              if (isInputLocked()) return
+              const allowed = new Set([
+                ...(task.skippedArchivePaths ?? []),
+                ...(task.pendingArchivePaths ?? []),
+              ])
+              try {
+                recoveryQueue.enqueue(
+                  paths.filter((path) => allowed.has(path)),
+                  {
+                    recursive: task.recursiveEnabled,
+                    computeMode: task.computeMode,
+                    knownPassword:
+                      task.recoveredPassword ?? (knownPassword || null),
+                  }
+                )
+                setRepairMessage(
+                  "所选归档已加入队列，使用原任务的计算和递归选项。确认密码后按顺序处理。"
+                )
+              } catch (reason) {
+                setError(toErrorMessage(reason))
+              }
+            }
+          : undefined
+      }
       onRescan={
         !busy &&
         !running &&

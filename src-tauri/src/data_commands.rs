@@ -445,6 +445,9 @@ mod tests {
             .unwrap();
         let lifecycle = Arc::new(TaskLifecycle::default());
         let state = AppState {
+            queue_journal: Arc::new(Mutex::new(crate::queue_journal::QueueJournal::new(
+                paths.root.join("recovery-queue.json"),
+            ))),
             history: Arc::new(Mutex::new(
                 RecoveryHistoryStore::open(&paths.database).unwrap(),
             )),

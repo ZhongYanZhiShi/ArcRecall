@@ -34,6 +34,7 @@ static RECOVERY_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecoveryStartRequest {
+    queue_entry_id: Option<u32>,
     archive_path: String,
     #[serde(default)]
     rescan_task_id: Option<String>,
@@ -110,6 +111,19 @@ pub(crate) async fn recovery_start(
         )],
     );
     ensure_no_active_archive_task(&state)?;
+
+    if let Some(id) = request.queue_entry_id {
+        let journal = Arc::clone(&state.queue_journal);
+        let path = request.archive_path.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            journal
+                .lock()
+                .map_err(|e| e.to_string())?
+                .validate(id, &path)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    }
 
     let resume = if let Some(task_id) = request.rescan_task_id.as_deref() {
         let current = state
@@ -311,6 +325,8 @@ pub(crate) async fn recovery_start(
     let logger_for_updates = Arc::clone(&state.logger);
     let worker_task_id = initial.task_id.clone();
     let update_task_id = initial.task_id.clone();
+    let queue_journal = Arc::clone(&state.queue_journal);
+    let queue_entry_id = request.queue_entry_id;
     std::thread::spawn(move || {
         let _task_lease = task_lease;
         let mut job = job;
@@ -683,6 +699,28 @@ pub(crate) async fn recovery_start(
                         [("task_id".into(), worker_task_id.clone())],
                     );
                 }
+            }
+        }
+        if let Some(id) = queue_entry_id {
+            let result = status_for_worker
+                .lock()
+                .map_err(|e| e.to_string())
+                .and_then(|status| {
+                    queue_journal.lock().map_err(|e| e.to_string())?.finish(
+                        id,
+                        status.success,
+                        status.cancelled,
+                    )
+                });
+            if result.is_err() {
+                write_log(
+                    &logger_for_worker,
+                    LogLevel::Warn,
+                    "recovery",
+                    "queue.checkpoint_failed",
+                    "任务状态保存失败；下次启动请核对输出后再运行。",
+                    std::iter::empty(),
+                );
             }
         }
         completion_guard.mark_finalized();

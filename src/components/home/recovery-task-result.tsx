@@ -51,6 +51,7 @@ export function RecoveryTaskResult({
   onOpenOutput,
   onOpenDirectory,
   onRescan,
+  onRetryArchives,
   onOpenOptions,
   onOpenEngineSettings,
 }: {
@@ -63,6 +64,7 @@ export function RecoveryTaskResult({
   onOpenOutput: () => void
   onOpenDirectory: (path: string) => void
   onRescan?: () => void
+  onRetryArchives?: (paths: string[]) => void
   onOpenOptions: () => void
   onOpenEngineSettings: () => void
 }) {
@@ -260,6 +262,7 @@ export function RecoveryTaskResult({
             key={task.taskId}
             task={task}
             onOpenDirectory={onOpenDirectory}
+            onRetryArchives={onRetryArchives}
           />
           {task.recoveredPassword != null ? (
             <div className="mt-2 flex items-center gap-2">
@@ -347,11 +350,21 @@ function taskRecoveryHint(task: RecoveryTaskStatus): string | null {
 function RecoveryProcessDetails({
   task,
   onOpenDirectory,
+  onRetryArchives,
 }: {
   task: RecoveryTaskStatus
   onOpenDirectory: (path: string) => void
+  onRetryArchives?: (paths: string[]) => void
 }) {
   const [open, setOpen] = React.useState(false)
+  const [selection, setSelection] = React.useState<string[]>([])
+  const retryPaths = [
+    ...new Set([
+      ...(task.skippedArchivePaths ?? []),
+      ...(task.pendingArchivePaths ?? []),
+    ]),
+  ]
+  const selectedPaths = selection.filter((path) => retryPaths.includes(path))
   const events = task.events ?? []
 
   if (
@@ -472,8 +485,48 @@ function RecoveryProcessDetails({
                 </div>
               ) : null
             )}
-            {task.completed && (task.completedArchivePaths?.length ?? 0) > 0 ? (
+            {task.completed &&
+            (retryPaths.length > 0 ||
+              (task.completedArchivePaths?.length ?? 0) > 0) ? (
               <div className="space-y-3 border-b border-border py-3">
+                {retryPaths.length > 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      勾选跳过或待处理归档，加入队列后重新运行。原任务的计算、递归选项和当前会话密码会沿用；输出使用新的独立目录。
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={!onRetryArchives}
+                        onClick={() =>
+                          setSelection(
+                            selectedPaths.length === retryPaths.length
+                              ? []
+                              : retryPaths
+                          )
+                        }
+                      >
+                        {selectedPaths.length === retryPaths.length
+                          ? "取消全选"
+                          : "全选未完成归档"}
+                      </Button>
+                      <Button
+                        size="xs"
+                        disabled={
+                          !onRetryArchives || selectedPaths.length === 0
+                        }
+                        onClick={() => {
+                          onRetryArchives?.(selectedPaths)
+                          setSelection([])
+                          setOpen(false)
+                        }}
+                      >
+                        加入重试队列（{selectedPaths.length}）
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
                 {[
                   { label: "已完成", paths: task.completedArchivePaths ?? [] },
                   {
@@ -496,7 +549,28 @@ function RecoveryProcessDetails({
                       >
                         {paths.map((path) => (
                           <li key={path} className="break-all">
-                            {pathForDisplay(path)}
+                            {label !== "已完成" ? (
+                              <label className="flex items-start gap-2">
+                                <input
+                                  type="checkbox"
+                                  aria-label={`重试 ${pathForDisplay(path)}`}
+                                  disabled={!onRetryArchives}
+                                  checked={selectedPaths.includes(path)}
+                                  onChange={(event) =>
+                                    setSelection((previous) =>
+                                      event.target.checked
+                                        ? [...new Set([...previous, path])]
+                                        : previous.filter(
+                                            (item) => item !== path
+                                          )
+                                    )
+                                  }
+                                />
+                                <span>{pathForDisplay(path)}</span>
+                              </label>
+                            ) : (
+                              pathForDisplay(path)
+                            )}
                           </li>
                         ))}
                       </ul>

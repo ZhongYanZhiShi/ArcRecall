@@ -128,6 +128,7 @@ export type RecoveryTaskStatus = {
 }
 
 export type RecoveryStartRequest = {
+  queueEntryId?: number
   rescanTaskId?: string
   archivePath: string
   outputDirectory?: string | null

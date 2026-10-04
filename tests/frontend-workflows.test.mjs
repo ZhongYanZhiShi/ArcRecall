@@ -93,6 +93,14 @@ function sourceHarness(overrides) {
     react: React,
     "react/jsx-runtime": { jsx, jsxs: jsx },
     "@/lib/utils": { cn: () => "" },
+    "@tauri-apps/api/core": {
+      invoke: async (command) => {
+        if (command === "recovery_queue_load")
+          return { version: 1, enabled: false, items: [] }
+        if (command === "recovery_queue_save") return
+        throw new Error(`Unexpected command: ${command}`)
+      },
+    },
     ...overrides,
   }
   function load(relative) {
@@ -1285,7 +1293,7 @@ test("批次在页面隐藏期间换任务并完成，返回页面恢复最新�
   assert.equal(view.props.task.completed, true)
   assert.equal(view.props.running, false)
   assert.equal(view.props.busy, false)
-  assert.equal(view.props.queueContent.props.disabled, false)
+  assert.equal(view.props.queueContent.props.children[1].props.disabled, false)
 })
 
 test("历史页面每次恢复都刷新，隐藏前的迟到响应不能覆盖新结果", async (t) => {
@@ -1412,7 +1420,9 @@ test("批次轮询保留选中详情，新任务密码默认隐藏且执行状�
   view = render()
   assert.equal(view.props.task.taskId, "batch-2")
   assert.equal(view.props.task.recoveredPassword, undefined)
-  view.props.queueContent.props.onView(recoveryQueue.getSnapshot().items[0].id)
+  view.props.queueContent.props.children[1].props.onView(
+    recoveryQueue.getSnapshot().items[0].id
+  )
   view = render()
   assert.equal(view.props.task.taskId, "batch-1")
   assert.equal(view.props.task.completed, true)
@@ -1439,7 +1449,9 @@ test("批次轮询保留选中详情，新任务密码默认隐藏且执行状�
   view = render()
   assert.equal(view.props.task.taskId, "batch-1")
   assert.equal(view.props.running, false)
-  view.props.queueContent.props.onView(recoveryQueue.getSnapshot().items[1].id)
+  view.props.queueContent.props.children[1].props.onView(
+    recoveryQueue.getSnapshot().items[1].id
+  )
   view = render()
   assert.equal(view.props.task.taskId, "batch-2")
   assert.equal(view.props.showRecoveredPassword, false)

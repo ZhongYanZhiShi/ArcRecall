@@ -16,7 +16,11 @@ export type QueueItem = {
     | "cancelled"
   task: RecoveryTaskStatus | null
   error: string | null
+  options?: QueueOptions
+  stamp?: SourceStamp[] | null
+  blockedReason?: string | null
 }
+export type SourceStamp = { path: string; bytes: number; modifiedNanos: string }
 export type QueueSnapshot = {
   currentItemId?: number
   items: QueueItem[]
@@ -27,8 +31,8 @@ export type QueueSnapshot = {
 }
 export type QueueOptions = Omit<
   RecoveryStartRequest,
-  "archivePath" | "avoidOutputCollision"
-> & { openWhenDone?: boolean }
+  "archivePath" | "avoidOutputCollision" | "rescanTaskId" | "queueEntryId"
+> & { openWhenDone?: boolean; exactOutputDirectory?: string | null }
 type QueueApi = {
   analyze: (path: string) => Promise<ArchiveAnalysis>
   start: (request: RecoveryStartRequest) => Promise<RecoveryTaskStatus>
@@ -36,6 +40,7 @@ type QueueApi = {
   cancel: (id: string) => Promise<boolean>
   wait: () => Promise<void>
   openOutput: (path: string) => Promise<void>
+  checkpoint?: () => Promise<boolean>
 }
 
 function mergeChanged<T extends object>(current: T, update: Partial<T>): T {
@@ -46,15 +51,19 @@ function mergeChanged<T extends object>(current: T, update: Partial<T>): T {
     : { ...current, ...update }
 }
 
+function archivePathKey(path: string) {
+  return /^[a-z]:|^\\\\/i.test(path)
+    ? path.replaceAll("/", "\\").toLowerCase()
+    : path
+}
+
 export function uniqueArchivePaths(paths: readonly string[]): string[] {
   const seen = new Set<string>()
   return paths
     .map((path) => path.trim().replace(/^"(.*)"$/, "$1"))
     .filter((path) => {
       if (!path) return false
-      const key = /^[a-z]:|^\\\\/i.test(path)
-        ? path.replaceAll("/", "\\").toLowerCase()
-        : path
+      const key = archivePathKey(path)
       if (seen.has(key)) return false
       seen.add(key)
       return true
@@ -131,7 +140,23 @@ export function createRecoveryQueue(api: QueueApi) {
         listeners.delete(listener)
       }
     },
-    enqueue(paths: readonly string[]) {
+    restore(items: QueueItem[]) {
+      if (snapshot.running || snapshot.items.length)
+        throw new Error("当前队列非空，不能覆盖。")
+      sequence = Math.max(sequence, ...items.map((item) => item.id))
+      publish({
+        items: items.map((item) => ({
+          ...item,
+          task: null,
+          error: null,
+          state:
+            item.state === "running" || item.state === "analyzing"
+              ? "waiting"
+              : item.state,
+        })),
+      })
+    },
+    enqueue(paths: readonly string[], options?: QueueOptions) {
       if (snapshot.running) throw new Error("请先停止批次后再添加文件。")
       const all = uniqueArchivePaths([
         ...snapshot.items.map((item) => item.path),
@@ -140,9 +165,23 @@ export function createRecoveryQueue(api: QueueApi) {
       if (all.length > 200)
         throw new Error("单个批次最多 200 个归档，请分批添加。")
       const additions = all.slice(snapshot.items.length)
+      const requestedKeys = uniqueArchivePaths(paths).map(archivePathKey)
+      const retryKeys = options ? requestedKeys : []
       publish({
         items: [
-          ...snapshot.items,
+          ...snapshot.items.map(
+            (item): QueueItem =>
+              retryKeys.includes(archivePathKey(item.path))
+                ? {
+                    id: ++sequence,
+                    path: item.path,
+                    state: "waiting",
+                    options,
+                    task: null,
+                    error: null,
+                  }
+                : item
+          ),
           ...additions.map(
             (path): QueueItem => ({
               id: ++sequence,
@@ -150,11 +189,15 @@ export function createRecoveryQueue(api: QueueApi) {
               state: "waiting",
               task: null,
               error: null,
+              options,
             })
           ),
         ],
         error: null,
       })
+      return snapshot.items
+        .filter((item) => requestedKeys.includes(archivePathKey(item.path)))
+        .map((item) => item.id)
     },
     remove(id: number) {
       if (!snapshot.running)
@@ -168,18 +211,24 @@ export function createRecoveryQueue(api: QueueApi) {
       if (!snapshot.running)
         publish({
           items: snapshot.items.map((item) =>
-            item.state === "failed" || item.state === "cancelled"
-              ? { ...item, state: "waiting", error: null }
+            !item.blockedReason &&
+            (item.state === "failed" || item.state === "cancelled")
+              ? { ...item, id: ++sequence, state: "waiting", error: null }
               : item
           ),
           error: null,
         })
     },
     stop,
-    async start(options: QueueOptions) {
+    async start(options: QueueOptions, onlyItemId?: number) {
       if (
         snapshot.running ||
-        !snapshot.items.some((item) => item.state === "waiting")
+        !snapshot.items.some(
+          (item) =>
+            item.state === "waiting" &&
+            !item.blockedReason &&
+            (onlyItemId === undefined || item.id === onlyItemId)
+        )
       )
         return
       publish({
@@ -192,12 +241,26 @@ export function createRecoveryQueue(api: QueueApi) {
       try {
         while (!snapshot.stopping) {
           const item = snapshot.items.find(
-            (candidate) => candidate.state === "waiting"
+            (candidate) =>
+              candidate.state === "waiting" &&
+              !candidate.blockedReason &&
+              (onlyItemId === undefined || candidate.id === onlyItemId)
           )
           if (!item) break
+          const itemOptions = {
+            ...options,
+            ...item.options,
+            knownPassword:
+              options.knownPassword || item.options?.knownPassword || null,
+          }
           patch(
             item.id,
-            { state: "analyzing", task: null, error: null },
+            {
+              state: "analyzing",
+              task: null,
+              error: null,
+              options: itemOptions,
+            },
             { currentItemId: item.id }
           )
           try {
@@ -207,20 +270,28 @@ export function createRecoveryQueue(api: QueueApi) {
               break
             }
             // Every item owns a unique output folder, including custom roots.
-            const separator = options.outputDirectory?.includes("\\")
+            const separator = itemOptions.outputDirectory?.includes("\\")
               ? "\\"
               : "/"
             const name =
               analysis.suggestedOutputDirectory.split(/[\\/]/).pop() ||
               "archive"
+            const remembered = await api.checkpoint?.()
+            if (snapshot.stopping) {
+              patch(item.id, { state: "waiting" })
+              break
+            }
             let task = await api.start({
+              ...(remembered ? { queueEntryId: item.id } : {}),
               archivePath: analysis.archivePath,
-              outputDirectory: options.outputDirectory
-                ? `${options.outputDirectory.replace(/[\\/]+$/, "")}${separator}${name}`
-                : analysis.suggestedOutputDirectory,
-              knownPassword: options.knownPassword,
-              recursive: options.recursive,
-              computeMode: options.computeMode,
+              outputDirectory:
+                itemOptions.exactOutputDirectory ??
+                (itemOptions.outputDirectory
+                  ? `${itemOptions.outputDirectory.replace(/[\\/]+$/, "")}${separator}${name}`
+                  : analysis.suggestedOutputDirectory),
+              knownPassword: itemOptions.knownPassword,
+              recursive: itemOptions.recursive,
+              computeMode: itemOptions.computeMode,
               avoidOutputCollision: true,
             })
             activeTaskId = task.taskId
@@ -271,6 +342,11 @@ export function createRecoveryQueue(api: QueueApi) {
         activeTaskId = null
         stopError = null
         publish({ running: false, stopping: false, cancelling: false })
+        try {
+          await api.checkpoint?.()
+        } catch (error) {
+          publish({ error: `任务记录保存失败：${message(error)}` })
+        }
       }
     },
   }
