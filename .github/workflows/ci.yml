@@ -54,6 +54,12 @@ jobs:
       - name: Build static frontend
         run: pnpm build
 
+      - name: Install Chromium for DOM tests
+        run: pnpm exec playwright install chromium
+
+      - name: Test rendered frontend
+        run: pnpm test:ui
+
       - name: Verify Rust formatting
         run: cargo fmt --all -- --check
 
@@ -62,3 +68,19 @@ jobs:
 
       - name: Test Rust workspace
         run: cargo test --workspace --all-targets --all-features
+
+      - name: Build isolated native test application
+        run: |
+          $env:CARGO_TARGET_DIR = Join-Path (Get-Location) "target/native-e2e"
+          pnpm exec tauri build --debug --no-bundle
+
+      - name: Test real Windows desktop and restart recovery
+        run: pnpm test:desktop
+
+      - name: Upload UI test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ui-test-evidence
+          path: test-results/
+          if-no-files-found: ignore
