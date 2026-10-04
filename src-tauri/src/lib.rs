@@ -9,6 +9,7 @@ mod history_support;
 mod logging;
 mod queue_journal;
 mod recovery_commands;
+mod report_commands;
 mod task_coordination;
 mod task_lifecycle;
 mod update_commands;
@@ -52,6 +53,7 @@ use recovery_commands::{
     RecoveryTaskHandle, archive_analyze, archive_repair_copy, recovery_cancel, recovery_start,
     recovery_status,
 };
+use report_commands::recovery_report_export;
 use serde::{Deserialize, Serialize};
 use task_lifecycle::{RecoverySession, TaskLifecycle};
 use tauri::{AppHandle, Manager, State};
@@ -458,6 +460,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             recovery_queue_load,
+            recovery_report_export,
             recovery_queue_save,
             app_update_status,
             app_update_check,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createRecoveryQueue } from "../src/lib/recovery-queue.ts"
 import { createQueueJournal, journalItems } from "../src/lib/queue-journal.ts"
+import { buildRecoveryReport } from "../src/lib/recovery-report.ts"
 
 const task = {
   taskId: "example",
@@ -42,6 +43,22 @@ function queueApi(overrides = {}) {
     ...overrides,
   }
 }
+
+test("报告仅导出白名单，默认不含路径，显式开启也不含密码和日志", () => {
+  const report = buildRecoveryReport(task)
+  assert.equal(report.summary.skippedArchives, 1)
+  for (const includePaths of [false, true]) {
+    const serialized = JSON.stringify(buildRecoveryReport(task, includePaths))
+    for (const secret of [
+      task.recoveredPassword,
+      task.message,
+      "secret event",
+      "must not export",
+    ])
+      assert.ok(!serialized.includes(secret))
+    assert.equal(serialized.includes("C:/private"), includePaths)
+  }
+})
 
 test("任务记忆默认关闭，开启后串行写入并阻止密码和事件进入记录", async () => {
   const writes = []

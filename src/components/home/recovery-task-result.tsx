@@ -40,6 +40,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import type { RecoveryTaskEvent, RecoveryTaskStatus } from "@/lib/recovery"
 import { cn } from "@/lib/utils"
+import { RecoveryReportExport } from "@/components/home/recovery-report-export"
 
 export function RecoveryTaskResult({
   rootRef,
@@ -259,11 +260,18 @@ export function RecoveryTaskResult({
             </div>
           ) : null}
           <RecoveryProcessDetails
-            key={task.taskId}
+            key={`details:${task.taskId}`}
             task={task}
             onOpenDirectory={onOpenDirectory}
             onRetryArchives={onRetryArchives}
           />
+          {task.completed ? (
+            <RecoveryReportExport
+              key={`report:${task.taskId}`}
+              task={task}
+              onOpenDirectory={onOpenDirectory}
+            />
+          ) : null}
           {task.recoveredPassword != null ? (
             <div className="mt-2 flex items-center gap-2">
               <code className="max-w-full truncate rounded bg-muted px-2 py-1 text-xs">
