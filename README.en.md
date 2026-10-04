@@ -12,6 +12,34 @@ A local-first desktop tool for identifying disguised files, repairing extensions
 
 </div>
 
+## Download and first run
+
+Windows x64 installers are listed on [GitHub Releases](https://github.com/ZhongYanZhiShi/ArcRecall/releases).
+Choose the full engine package. If no downloadable release is available, follow the development instructions below or build with `pnpm desktop:build`.
+Actual file processing requires the desktop app. Browser preview is for UI development; macOS/Linux distribution packages are not yet verified.
+
+1. Open Settings → Recovery engines, install the full bundle, and confirm that 7-Zip is ready. Choose CPU only if needed.
+2. Drop a test archive you created, such as `example.7z` containing `hello.txt` with password `demo-password`.
+3. Enter the known password, keep the default sibling output folder, and start recovery and extraction.
+4. Open the output from the result card. Select skipped or pending archives in the detailed process view to add them to the retry queue.
+
+![Task results and report export, using synthetic demonstration data](assets/screenshots/workbench.png)
+
+The screenshot uses synthetic archive information. Passwords are hidden by default.
+
+## Format and volume support
+
+| Type             | Detection and recovery                                                                                 | Volume support                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| 7z               | Content detection, known-password verification, dictionary recovery, recursive extraction              | Contiguous numbered volumes and resolvable disguised names; missing volumes fail validation |
+| ZIP / ZIP64      | Content detection, known-password verification, dictionary recovery, recursive extraction              | `.z01 … .zip` and `.zip.001 …`; the complete, consistent set is required                    |
+| RAR3 / RAR5      | Single-file detection, verification and recovery, subject to engine support for the encryption variant | Full multipart recovery and whole-volume-set history fingerprints are not yet supported     |
+| LZ4 Frame        | Unwrap a supported inner archive, subject to expansion budgets                                         | Not a general-purpose LZ4 file manager                                                      |
+| Archive creation | 7z and ZIP, optionally encrypted                                                                       | Split-volume creation is not available                                                      |
+
+GPU recovery requires a usable Hashcat device; CPU-only recovery does not require a GPU.
+Repairing extensions creates separate copies. Detection alone does not confirm archive integrity or password recovery.
+
 ## Overview
 
 Some files shared online have their extensions removed, replaced with misleading ones, or are wrapped in multiple encrypted archives. The operating system cannot identify these files directly, leaving users to guess the format and unpack each layer by hand.
@@ -28,10 +56,11 @@ ArcRecall reads file contents to determine the actual format, restores or correc
 - Queue multiple selected or dropped files, or pasted paths, and extract them in order with per-item results
 - Create separate copies with correct extensions, copying and consistently naming every archive volume
 - Show dictionary import progress with cancellation, and live Hashcat progress and speed
+- Select unfinished nested archives for retry and optionally restore the task queue across restarts
+- Export JSON/CSV reports with paths excluded by default and passwords and raw logs always omitted
 
 A batch accepts up to 200 items. Stopping a batch preserves waiting items, and
-failed or cancelled items can be queued again. The queue is cleared when the app
-exits. Each archive uses a separate output directory; the batch's preferred
+failed or cancelled items can be queued again. Each archive uses a separate output directory; the batch's preferred
 password is used only for that batch and is not saved in browser storage.
 Hashcat progress describes the current engine attempt and starts over when the
 mode changes or the next nested archive begins.
@@ -51,6 +80,56 @@ archives that existed before extraction alone. Rescan state does not survive an 
 restart. The detailed process view shows cumulative phase timings and shortcuts to
 unscanned and final content directories, with consecutive scan progress coalesced.
 Opening the final content directory does not move or flatten files.
+
+## Queue memory and reports
+
+Remember task queue is off by default. When enabled, both single starts and batch tasks save source paths,
+options, states, volume sizes and modification times to `%LocalAppData%\ArcRecall\recovery-queue.json`.
+Passwords, raw logs and task events are excluded. Disabling the option deletes the file; clearing the queue
+also clears the saved tasks. This file is separate from SQLite dictionary/history backups.
+
+Restored tasks never start automatically. Previously running items become waiting items; completed items stay completed.
+Re-enter passwords when needed and start manually. Missing sources or changed volume sizes/timestamps block execution
+until the item is removed and added again. This metadata check is not a full content fingerprint and cannot detect
+edits that deliberately preserve both size and modification time. Recovery starts from the beginning with a new,
+collision-free output folder; Hashcat progress and recursive rescan cursors are not restored.
+An interrupted save can lose the latest changes, so check existing output before rerunning after a crash.
+
+Use Export JSON or Export CSV on a result card. Reports are saved under `exports` in the local app data directory
+and contain status, counts, scan coverage and phase timings. Paths require an explicit opt-in.
+Passwords, raw errors and event messages are excluded. CSV formula prefixes are escaped for spreadsheet viewing.
+
+## Regression tests
+
+```powershell
+pnpm test                         # Logic/workflow tests; no desktop launch
+pnpm build
+pnpm exec playwright install chromium
+pnpm test:ui                      # Real React DOM with mocked desktop IPC
+cargo test --workspace --all-targets --all-features
+
+# Use an MSVC-configured terminal, Windows WebView2 and 7-Zip
+$env:CARGO_TARGET_DIR = Join-Path (Get-Location) 'target/native-e2e'
+pnpm exec tauri build --debug --no-bundle
+pnpm test:desktop                 # Real Tauri, WebView2, Rust IPC and 7-Zip
+```
+
+Native tests use synthetic fixtures and an isolated temporary app data directory to verify restart recovery,
+source changes, extraction, report files, cancellation and native window shutdown cleanup. They do not use the
+daily-use database or system clipboard. The default 7-Zip location is `C:\Program Files\7-Zip\7z.exe`;
+override it with `ARC_RECALL_TEST_7ZIP`. Use debug test builds only.
+Screenshots/traces go to `test-results`; the retained temporary data location is printed for inspection.
+CI runs browser and native checks separately; browser tests do not prove native integration.
+
+To exercise the actual Hashcat candidate pipeline, provide an isolated engine installation and a usable GPU:
+
+```powershell
+$env:ARC_RECALL_TEST_HASHCAT = 'C:\test-tools\hashcat\hashcat.exe'
+cargo test -p arc-recall-core real_hashcat_preserves_literal_utf8_and_whitespace_passwords -- --ignored
+```
+
+This specific test verifies literal `$HEX[...]`, UTF-8 and leading/trailing spaces through real Hashcat input/output.
+Do not run all ignored tests indiscriminately; other profiling tests can require manually configured local archives.
 
 Each recovery task shares a cumulative extraction budget of 100 GiB and 100,000
 files or directories. LZ4 decoding and split-volume copy fallbacks also count
