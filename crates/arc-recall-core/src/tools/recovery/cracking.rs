@@ -802,26 +802,7 @@ fn run_hashcat(
         .join(format!("hashcat-{mode}-{}.found", device.opencl_type()));
     let _ = fs::remove_file(&output_file);
     let mut request = ProcessRequest::new(&tools.hashcat);
-    request.args = vec![
-        OsString::from("-m"),
-        OsString::from(mode.to_string()),
-        OsString::from("-a"),
-        OsString::from("0"),
-        OsString::from("-D"),
-        OsString::from(device.opencl_type()),
-        OsString::from("--status"),
-        OsString::from("--status-json"),
-        OsString::from("--status-timer"),
-        OsString::from("1"),
-        OsString::from("--potfile-disable"),
-        OsString::from("--restore-disable"),
-        OsString::from("--outfile"),
-        output_file.as_os_str().to_owned(),
-        OsString::from("--outfile-format"),
-        OsString::from("2"),
-        hash_file.as_os_str().to_owned(),
-        job.dictionary_path.as_os_str().to_owned(),
-    ];
+    request.args = hashcat_dictionary_args(job, hash_file, mode, device, &output_file);
     request.current_dir = tools.hashcat.parent().map(Path::to_path_buf);
     request.timeout = Duration::from_secs(7 * 24 * 60 * 60);
     request.max_output_bytes = 8 * 1024 * 1024;
@@ -861,6 +842,38 @@ fn run_hashcat(
             .unwrap_or(CrackAttempt::Failed),
         _ => CrackAttempt::Failed,
     })
+}
+
+fn hashcat_dictionary_args(
+    job: &RecoveryJob,
+    hash_file: &Path,
+    mode: u32,
+    device: HashcatComputeDevice,
+    output_file: &Path,
+) -> Vec<OsString> {
+    vec![
+        OsString::from("-m"),
+        OsString::from(mode.to_string()),
+        OsString::from("-a"),
+        OsString::from("0"),
+        OsString::from("-D"),
+        OsString::from(device.opencl_type()),
+        OsString::from("--status"),
+        OsString::from("--status-json"),
+        OsString::from("--status-timer"),
+        OsString::from("1"),
+        OsString::from("--potfile-disable"),
+        OsString::from("--restore-disable"),
+        // The dictionary contains literal strings, including $HEX[...] candidates.
+        OsString::from("--wordlist-autohex-disable"),
+        OsString::from("--outfile"),
+        output_file.as_os_str().to_owned(),
+        OsString::from("--outfile-format"),
+        // Hex plaintext is unambiguous even when the password itself looks like $HEX[...].
+        OsString::from("3"),
+        hash_file.as_os_str().to_owned(),
+        job.dictionary_path.as_os_str().to_owned(),
+    ]
 }
 
 fn hashcat_password_limit(stdout: &str, stderr: &str) -> Option<usize> {
@@ -1079,7 +1092,10 @@ fn extract_hash(line: &str) -> Option<String> {
 
 fn read_first_password(path: &Path) -> Result<Option<String>, RecoveryError> {
     let content = fs::read_to_string(path)?;
-    Ok(content.lines().next().and_then(decode_password))
+    Ok(content
+        .lines()
+        .next()
+        .and_then(|line| String::from_utf8(hex::decode(line).ok()?).ok()))
 }
 
 fn password_from_pot_line(line: &str, hashes: &[&str]) -> Option<String> {
@@ -1108,6 +1124,99 @@ pub(super) fn decode_password(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires ARC_RECALL_TEST_HASHCAT and a usable GPU backend"]
+    fn real_hashcat_preserves_literal_utf8_and_whitespace_passwords() {
+        let hashcat = PathBuf::from(
+            std::env::var_os("ARC_RECALL_TEST_HASHCAT")
+                .expect("set ARC_RECALL_TEST_HASHCAT to an isolated Hashcat executable"),
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let job = RecoveryJob {
+            archive_path: directory.path().join("unused"),
+            output_directory: directory.path().join("out"),
+            dictionary_path: directory.path().join("dictionary.txt"),
+            dictionary_count: 2,
+            known_password: None,
+            work_directory: directory.path().into(),
+        };
+        let tools = RecoveryToolPaths {
+            hashcat,
+            seven_zip: PathBuf::new(),
+            john_tools_directory: PathBuf::new(),
+            perl: PathBuf::new(),
+        };
+        let hash_file = directory.path().join("hash.txt");
+        let cancellation = CancellationToken::default();
+        let deadline = cancellation.clone();
+        let (done, receiver) = std::sync::mpsc::channel::<()>();
+        let watchdog = std::thread::spawn(move || {
+            if receiver.recv_timeout(Duration::from_secs(90)).is_err() {
+                deadline.cancel();
+            }
+        });
+        for (password, md5) in [
+            ("$HEX[616263]", "747363d3eae8c2ad771e0f6daf87b905"),
+            ("abc", "900150983cd24fb0d6963f7d28e17f72"),
+            ("中文密码", "3d4acf94adca8562b4990599b15488de"),
+            (" leading and trailing ", "d6acf2c199a020b97e05874e03d9eea8"),
+        ] {
+            fs::write(&job.dictionary_path, format!("wrong\n{password}\n")).unwrap();
+            fs::write(&hash_file, format!("{md5}\n")).unwrap();
+            match run_hashcat(
+                &job,
+                &tools,
+                &hash_file,
+                0,
+                HashcatComputeDevice::Gpu,
+                &cancellation,
+                &mut |_| {},
+            )
+            .unwrap()
+            {
+                CrackAttempt::Found(actual) => assert_eq!(actual, password),
+                _ => panic!("Hashcat did not recover the exact literal candidate"),
+            }
+        }
+        let _ = done.send(());
+        watchdog.join().unwrap();
+    }
+
+    #[test]
+    fn hashcat_preserves_literal_wordlist_and_unambiguous_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("found");
+        let job = RecoveryJob {
+            archive_path: directory.path().join("archive"),
+            output_directory: directory.path().join("output"),
+            dictionary_path: directory.path().join("dictionary"),
+            dictionary_count: 4,
+            known_password: None,
+            work_directory: directory.path().into(),
+        };
+        let args = hashcat_dictionary_args(
+            &job,
+            &directory.path().join("hash"),
+            11600,
+            HashcatComputeDevice::Gpu,
+            &output,
+        );
+        assert!(args.contains(&OsString::from("--wordlist-autohex-disable")));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--outfile-format", "3"])
+        );
+        for password in ["$HEX[616263]", "abc", "中文密码", " leading and trailing "] {
+            fs::write(&output, format!("{}\n", hex::encode(password.as_bytes()))).unwrap();
+            assert_eq!(
+                read_first_password(&output).unwrap().as_deref(),
+                Some(password)
+            );
+        }
+        fs::write(&output, "not-hex\n").unwrap();
+        assert_eq!(read_first_password(&output).unwrap(), None);
+    }
 
     #[test]
     fn cancelled_device_probe_is_not_reported_as_unavailable_hardware() {
