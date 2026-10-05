@@ -87,7 +87,9 @@ export function RecoveryTaskResult({
     task.running && task.rootExtractionCompleted
       ? "递归处理"
       : task.success && incompleteScan
-        ? "解压完成 · 扫描未完成"
+        ? skippedDirectories.length > 0
+          ? `解压完成，仍有 ${skippedDirectories.length} 个目录待扫描`
+          : "解压完成，嵌套归档尚未全部处理"
         : RECOVERY_PHASE_LABELS[task.phase]
   const recoveryHint = taskRecoveryHint(task)
   const archiveContainerFailure = isArchiveContainerFailure(task)
@@ -145,7 +147,7 @@ export function RecoveryTaskResult({
           />
         </div>
       ) : null}
-      <div className="flex items-start justify-between gap-3 p-3">
+      <div className="flex flex-col gap-3 p-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             {task.running ? (
@@ -162,20 +164,20 @@ export function RecoveryTaskResult({
                 )}
               />
             )}
-            <p className="text-xs font-semibold">
-              {activePhaseLabel}
-              {task.engine ? ` · ${task.engine}` : ""}
-            </p>
+            <p className="text-sm font-semibold">{activePhaseLabel}</p>
           </div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            {task.message}
-          </p>
+          {!task.success ? (
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              {task.message}
+            </p>
+          ) : null}
           {task.running && task.rootExtractionCompleted ? (
             <p className="mt-1 text-xs text-success-foreground">
               主归档已完成，正在处理嵌套归档。
             </p>
           ) : null}
-          {hasCandidateProgress || task.elapsedMs > 0 ? (
+          {hasCandidateProgress ||
+          (task.elapsedMs > 0 && !hasRecursiveProgress) ? (
             <p className="mt-1 text-xs text-muted-foreground tabular-nums">
               {hasCandidateProgress
                 ? `已尝试 ${formatCount(task.attemptedCount)} / ${formatCount(task.candidateCount)} 条候选 · `
@@ -186,10 +188,14 @@ export function RecoveryTaskResult({
           {hasRecursiveProgress ? (
             <div className="mt-1 flex flex-col gap-0.5 text-xs text-muted-foreground">
               <p className="tabular-nums">
-                已检查 {formatCount(task.scannedFileCount)} 个文件（归档识别） ·
-                嵌套归档：发现 {formatCount(task.nestedArchiveCount)} · 已解开{" "}
-                {formatCount(task.extractedNestedArchiveCount)} · 跳过{" "}
-                {formatCount(task.skippedNestedArchiveCount)}
+                已检查 {formatCount(task.scannedFileCount)} 个文件 · 已解开{" "}
+                {formatCount(task.extractedNestedArchiveCount)} 个嵌套压缩包
+                {task.skippedNestedArchiveCount > 0
+                  ? ` · 跳过 ${formatCount(task.skippedNestedArchiveCount)} 个`
+                  : ""}
+                {!hasCandidateProgress && task.elapsedMs > 0
+                  ? ` · 用时 ${formatCompactElapsed(task.elapsedMs)}`
+                  : ""}
                 {task.running && task.recursiveDepth > 0
                   ? ` · 当前第 ${task.recursiveDepth} 层`
                   : ""}
@@ -245,12 +251,14 @@ export function RecoveryTaskResult({
           {task.completed && skippedDirectories.length > 0 ? (
             <div className="mt-2 space-y-2 rounded-lg bg-warning/10 p-3 text-xs">
               <p className="text-warning-foreground">
-                {skippedDirectories.length}{" "}
-                个目录及其子目录尚未扫描。已解压的文件仍保留；扫描数不代表解压文件总数。
+                已解压的文件可直接使用。继续扫描可查找剩余目录中的嵌套压缩包。
+              </p>
+              <p className="text-xs text-muted-foreground">
+                本次补扫不限制扫描文件数，文件较多时可能需要更长时间。
               </p>
               {onRescan ? (
-                <Button size="sm" variant="outline" onClick={onRescan}>
-                  补扫未扫描目录（不限文件数）
+                <Button size="sm" onClick={onRescan}>
+                  继续扫描剩余目录
                 </Button>
               ) : (
                 <p className="text-muted-foreground">
@@ -265,13 +273,6 @@ export function RecoveryTaskResult({
             onOpenDirectory={onOpenDirectory}
             onRetryArchives={onRetryArchives}
           />
-          {task.completed ? (
-            <RecoveryReportExport
-              key={`report:${task.taskId}`}
-              task={task}
-              onOpenDirectory={onOpenDirectory}
-            />
-          ) : null}
           {task.recoveredPassword != null ? (
             <div className="mt-2 flex items-center gap-2">
               <code className="max-w-full truncate rounded bg-muted px-2 py-1 text-xs">
@@ -305,28 +306,37 @@ export function RecoveryTaskResult({
           ) : null}
         </div>
         {task.success || task.rootExtractionCompleted ? (
-          <div className="flex shrink-0 flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {!task.running &&
             task.contentDirectories?.length === 1 &&
             task.contentDirectories[0] !== task.outputDirectory ? (
               <Button
                 size="sm"
                 variant="outline"
+                title={pathForDisplay(task.contentDirectories[0])}
                 onClick={() => onOpenDirectory(task.contentDirectories![0])}
               >
-                打开最终内容目录
+                打开内层内容目录
               </Button>
             ) : null}
             <Button
-              variant="outline"
+              variant={incompleteScan ? "outline" : "default"}
               size="sm"
               className="shrink-0"
               onClick={onOpenOutput}
+              title={pathForDisplay(task.outputDirectory)}
             >
               <PackageOpen data-icon="inline-start" />
-              打开输出
+              打开解压文件夹
             </Button>
           </div>
+        ) : null}
+        {task.completed ? (
+          <RecoveryReportExport
+            key={`report:${task.taskId}`}
+            task={task}
+            onOpenDirectory={onOpenDirectory}
+          />
         ) : null}
       </div>
     </div>
@@ -391,9 +401,11 @@ function RecoveryProcessDetails({
       <div className="mt-2 flex min-w-0 items-center gap-2 rounded-lg border border-border/70 bg-muted/20 px-2.5 py-1.5">
         <ListTree className="size-3.5 shrink-0 text-muted-foreground" />
         <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-          {latest
-            ? `最近：${recoveryStageLabel(latest.phase, latest.engine)} · ${formatCompactElapsed(latest.elapsedMs)}`
-            : "查看已完成和待处理归档"}
+          {task.completed
+            ? "查看扫描记录、目录与引擎详情"
+            : latest
+              ? `最近：${recoveryStageLabel(latest.phase, latest.engine)} · ${formatCompactElapsed(latest.elapsedMs)}`
+              : "查看已完成和待处理归档"}
         </p>
         <Button
           type="button"
@@ -419,7 +431,11 @@ function RecoveryProcessDetails({
                 variant={task.running ? "default" : "secondary"}
                 className="font-normal"
               >
-                {task.running ? "实时更新" : RECOVERY_PHASE_LABELS[task.phase]}
+                {task.running
+                  ? "实时更新"
+                  : task.success && hasIncompleteRecursiveScan(task)
+                    ? "部分完成"
+                    : RECOVERY_PHASE_LABELS[task.phase]}
               </Badge>
             </div>
             <SheetDescription className="text-xs leading-relaxed">
@@ -439,6 +455,9 @@ function RecoveryProcessDetails({
           </SheetHeader>
 
           <ScrollArea className="min-h-0 flex-1 px-5 py-2">
+            <p className="border-b border-border py-3 text-xs leading-relaxed text-muted-foreground">
+              {task.message}
+            </p>
             {task.timings?.length ? (
               <div className="space-y-1 border-b border-border py-3 text-xs">
                 <p className="font-medium">各阶段累计耗时</p>

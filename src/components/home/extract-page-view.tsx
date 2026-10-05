@@ -640,13 +640,13 @@ export function ExtractPageView({
 
         {task && !analysis ? (
           <section className="mt-3 flex shrink-0 flex-col gap-2 pr-1 pb-1">
-            <Alert variant="warning" className="shrink-0">
-              <CircleAlert />
+            <Alert className="shrink-0">
+              <PackageOpen />
               <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
                 <span>
                   {task.taskId === reattachedTaskId
-                    ? "已连接到："
-                    : "当前任务："}
+                    ? "已恢复任务："
+                    : "当前文件："}
                   {archiveNameFromPath(task.archivePath)}
                 </span>
                 {task.running ? (

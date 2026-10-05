@@ -2,7 +2,10 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { archiveNameFromPath } from "@/components/home/recovery-view-utils"
+import {
+  archiveNameFromPath,
+  hasIncompleteRecursiveScan,
+} from "@/components/home/recovery-view-utils"
 import type { QueueSnapshot } from "@/lib/recovery-queue"
 import { recoveryQueue } from "@/lib/recovery-queue-session"
 
@@ -96,7 +99,7 @@ export function RecoveryQueuePanel({
                 disabled={disabled || pending === 0}
                 onClick={onStart}
               >
-                按顺序处理 {pending} 项
+                {pending > 0 ? `按顺序处理 ${pending} 项` : "暂无待处理任务"}
               </Button>
             </>
           )}
@@ -155,7 +158,23 @@ export function RecoveryQueuePanel({
                 <p className="mt-1 text-destructive">{item.blockedReason}</p>
               ) : null}
             </div>
-            <Badge variant="secondary">{LABELS[item.state]}</Badge>
+            <Badge
+              variant={
+                item.state === "success" &&
+                item.task &&
+                hasIncompleteRecursiveScan(item.task)
+                  ? "warning"
+                  : "secondary"
+              }
+            >
+              {item.state === "success" &&
+              item.task &&
+              hasIncompleteRecursiveScan(item.task)
+                ? item.task.skippedScanDirectories?.length
+                  ? "待补扫"
+                  : "部分完成"
+                : LABELS[item.state]}
+            </Badge>
             {item.task ? (
               <Button size="xs" variant="ghost" onClick={() => onView(item.id)}>
                 详情
@@ -167,7 +186,7 @@ export function RecoveryQueuePanel({
                 variant="ghost"
                 onClick={() => onOpenOutput(item.task!.outputDirectory)}
               >
-                打开输出
+                打开输出目录
               </Button>
             ) : null}
             {!queue.running ? (

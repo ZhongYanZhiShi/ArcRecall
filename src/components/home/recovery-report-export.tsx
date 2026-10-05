@@ -3,6 +3,13 @@
 import * as React from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
+import { ChevronDown } from "lucide-react"
 import { buildRecoveryReport } from "@/lib/recovery-report"
 import type { RecoveryTaskStatus } from "@/lib/recovery"
 
@@ -39,60 +46,64 @@ export function RecoveryReportExport({
     }
   }
   return (
-    <div
-      className="mt-3 space-y-2 rounded-lg border p-2.5 text-xs"
-      aria-label="导出任务报告"
-    >
-      <p className="font-medium">导出任务报告</p>
-      <p className="text-muted-foreground">
-        包含状态、计数和耗时；不包含密码、日志或事件原文。
-      </p>
-      <div className="flex flex-wrap items-center gap-3">
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={includePaths}
-            disabled={busy}
-            onChange={(event) => setIncludePaths(event.target.checked)}
-          />
-          包含文件路径
-        </label>
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={busy}
-          onClick={() => void exportReport("json")}
-        >
-          导出 JSON
-        </Button>
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={busy}
-          onClick={() => void exportReport("csv")}
-        >
-          导出 CSV
-        </Button>
-      </div>
-      {savedPath ? (
-        <div role="status" className="space-y-1">
-          <p className="break-all">已导出：{savedPath}</p>
+    <Collapsible className="border-t pt-2 text-xs" aria-label="导出任务报告">
+      <CollapsibleTrigger
+        render={<Button variant="ghost" size="sm" />}
+        className="group"
+      >
+        导出任务报告
+        <ChevronDown className="size-4 transition-transform group-data-panel-open:rotate-180" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="space-y-3 px-2 pt-2 pb-1">
+        <p className="text-muted-foreground">
+          包含状态、计数和耗时；不包含密码、日志或事件原文。
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2">
+            <Checkbox
+              checked={includePaths}
+              disabled={busy}
+              onCheckedChange={setIncludePaths}
+            />
+            包含文件路径
+          </label>
           <Button
             size="xs"
-            variant="ghost"
-            onClick={() =>
-              onOpenDirectory(savedPath.replace(/[\\/][^\\/]+$/, ""))
-            }
+            variant="outline"
+            disabled={busy}
+            onClick={() => void exportReport("json")}
           >
-            打开报告目录
+            导出 JSON
+          </Button>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void exportReport("csv")}
+          >
+            导出 CSV
           </Button>
         </div>
-      ) : null}
-      {error ? (
-        <p role="alert" className="text-destructive">
-          导出失败：{error}
-        </p>
-      ) : null}
-    </div>
+        {savedPath ? (
+          <div role="status" className="space-y-1">
+            <p className="break-all">已导出：{savedPath}</p>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() =>
+                onOpenDirectory(savedPath.replace(/[\\/][^\\/]+$/, ""))
+              }
+            >
+              打开报告目录
+            </Button>
+          </div>
+        ) : null}
+        {error ? (
+          <p role="alert" className="text-destructive">
+            导出失败：{error}
+          </p>
+        ) : null}
+      </CollapsibleContent>
+    </Collapsible>
   )
 }

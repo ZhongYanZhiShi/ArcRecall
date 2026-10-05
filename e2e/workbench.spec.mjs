@@ -156,6 +156,10 @@ test("真实 DOM：Sheet 勾选重试、切页保留状态、导出默认脱敏"
     await mkdir("assets/screenshots", { recursive: true })
     await page.screenshot({ path: "assets/screenshots/workbench.png" })
   }
+  await expect(
+    page.getByRole("button", { name: "导出 JSON", exact: true })
+  ).toBeHidden()
+  await page.getByRole("button", { name: "导出任务报告", exact: true }).click()
   await page.getByRole("button", { name: "导出 JSON", exact: true }).click()
   await expect(
     page.getByText("已导出：C:/fixtures/reports/result.json")
@@ -165,7 +169,7 @@ test("真实 DOM：Sheet 勾选重试、切页保留状态、导出默认脱敏"
   )
   expect(report.paths).toBeUndefined()
   expect(JSON.stringify(report)).not.toContain(task.recoveredPassword)
-  await page.getByLabel("包含文件路径").check()
+  await page.getByRole("checkbox", { name: "包含文件路径" }).check()
   await page.getByRole("button", { name: "导出 CSV", exact: true }).click()
   await expect
     .poll(() => page.evaluate(() => window.__ARC_TEST__.reports.length))
