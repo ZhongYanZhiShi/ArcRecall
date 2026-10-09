@@ -254,18 +254,6 @@ for (const [name, overrides, expected] of [
     { release: { tag_name: TAG, draft: false, prerelease: false, assets: [] } },
     /已正式发布/,
   ],
-  [
-    "同名资产",
-    {
-      release: {
-        tag_name: TAG,
-        draft: true,
-        prerelease: false,
-        assets: [{ name: ASSET }],
-      },
-    },
-    /同名/,
-  ],
 ]) {
   test(`${name}在构建和远端写入之前终止`, (t) => {
     const f = fixture(t, overrides)
@@ -280,14 +268,16 @@ for (const [name, overrides, expected] of [
 }
 
 test("dry-run 只做预检查，不安装、构建或上传", (t) => {
-  const f = fixture(t)
-  f.publish({ dryRun: true })
-  assert.equal(mutations(f.calls).length, 0)
-  assert.ok(
-    !f.calls.some(
-      ({ command, args }) => command === "pnpm" && args[0] === "install"
+  for (const publish of [false, true]) {
+    const f = fixture(t)
+    f.publish({ publish, dryRun: true })
+    assert.equal(mutations(f.calls).length, 0)
+    assert.ok(
+      !f.calls.some(
+        ({ command, args }) => command === "pnpm" && args[0] === "install"
+      )
     )
-  )
+  }
 })
 
 test("自动发布参数可以单独交给向导，本地打包与自动发布不能混用", () => {
@@ -463,10 +453,7 @@ test("上传期间草稿被替换或公开时停止自动发布", (t) => {
   }
 })
 
-test("dry-run 即使指定自动发布也不会上传，发布结果不确定时不报成功", (t) => {
-  const dry = fixture(t)
-  dry.publish({ publish: true, dryRun: true })
-  assert.equal(mutations(dry.calls).length, 0)
+test("发布结果不确定时不报成功", (t) => {
   const uncertain = fixture(t, { unconfirmedPublish: true })
   assert.throws(() => uncertain.publish({ publish: true }), /未能确认/)
 })
@@ -497,7 +484,7 @@ for (const [version, prerelease] of [
   })
 }
 
-test("正确标记的 beta 草稿可复用，新建 beta 草稿自动标记预发布", (t) => {
+test("正确标记的 beta 草稿可复用", (t) => {
   const version = "0.2.0-beta.1"
   const existing = fixture(t, {
     version,
@@ -513,9 +500,6 @@ test("正确标记的 beta 草稿可复用，新建 beta 草稿自动标记预�
     mutations(existing.calls).map(({ args }) => args[1]),
     ["upload", "upload"]
   )
-  const fresh = fixture(t, { version })
-  fresh.publish()
-  assert.ok(mutations(fresh.calls)[0].args.includes("--prerelease"))
 })
 
 test("构建期间取消 beta 草稿的预发布标记会阻止上传", (t) => {
@@ -596,6 +580,11 @@ test("草稿中任一版本的安装包或签名已存在时在构建之前停�
     assert.throws(() => f.publish(), /同名/)
     assert.equal(mutations(f.calls).length, 0)
     assert.ok(!f.calls.some(({ args }) => args.includes("tauri")))
+    assert.ok(
+      !f.calls.some(
+        ({ command, args }) => command === "pnpm" && args[0] === "install"
+      )
+    )
   }
 })
 

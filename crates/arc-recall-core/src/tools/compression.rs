@@ -557,19 +557,6 @@ mod tests {
     }
 
     #[test]
-    fn archive_collision_starts_at_one() {
-        let directory = tempfile::tempdir().unwrap();
-        let preferred = directory.path().join("backup.7z");
-        fs::write(&preferred, b"first").unwrap();
-        fs::write(directory.path().join("backup (1).7z"), b"second").unwrap();
-
-        assert_eq!(
-            resolve_available_archive_path(&preferred),
-            directory.path().join("backup (2).7z")
-        );
-    }
-
-    #[test]
     fn publication_preserves_late_collisions_and_cleans_up_on_failure() {
         let directory = tempfile::tempdir().unwrap();
         let preferred = directory.path().join("backup.7z");

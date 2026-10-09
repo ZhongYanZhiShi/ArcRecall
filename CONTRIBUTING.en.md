@@ -51,6 +51,14 @@ pnpm test
 cargo test --workspace --all-targets --all-features
 ```
 
+Tests should protect observable behavior and concrete regression risks:
+
+- Keep coverage for persistence, credential protection, concurrency and cancellation, failure recovery, and release integrity.
+- When a more complete test exercises the same execution path, merge unique assertions and remove the duplicate case.
+- Simple assignments, fixed display copy, and path joins do not each need a test; compatibility, input boundaries, and security constraints still need coverage.
+- Use reproducible fixtures and temporary directories. Diagnostics that depend on private local archives or history databases do not belong in the regression suite.
+- `pnpm test:ui` checks rendering and interactions; browser tests with mocked IPC do not replace native integration checks in `pnpm test:desktop`.
+
 Running `pnpm install` enables the pre-commit hook. Before each commit, it
 checks Oxfmt and `cargo fmt`; if the check fails, run:
 

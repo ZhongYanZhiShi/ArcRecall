@@ -573,31 +573,3 @@ fn zip_volumes_extract_from_every_disk_with_real_seven_zip() {
         );
     }
 }
-
-#[test]
-#[ignore = "set ARC_RECALL_PROFILE_ARCHIVE to any local ZIP volume"]
-fn zip_volumes_profile_local_archive() {
-    let selected = PathBuf::from(std::env::var_os("ARC_RECALL_PROFILE_ARCHIVE").unwrap());
-    let analysis = analyze_archive(selected).unwrap();
-    assert!(analysis.volume_count > 1);
-    for path in &analysis.volume_paths {
-        let candidate = analyze_archive(path).unwrap();
-        assert_eq!(candidate, analysis);
-    }
-    let seven_zip = locate_seven_zip().expect("7-Zip is required for the local probe");
-    run_seven_zip(
-        &seven_zip,
-        &[
-            "t",
-            "-y",
-            "-bd",
-            "-bso0",
-            "-p__arcrecall_probe__",
-            &analysis.archive_path,
-        ],
-    );
-    eprintln!(
-        "ZIP validated: {} volumes; {} bytes",
-        analysis.volume_count, analysis.file_size
-    );
-}

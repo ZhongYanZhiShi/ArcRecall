@@ -160,10 +160,14 @@ test("默认递增补丁版本，预发布默认转同版本正式版", () => {
   assert.equal(compareVersions("1.0.0-beta.1", "1.0.0-beta.1"), 0)
 })
 
-test("一键准备版本、提交并向临时远端推送 main 和标签，再交给草稿发布器", async (t) => {
-  const f = fixture(t)
-  await f.run()
+test("回车采用建议版本，提交并推送 main 和标签，默认交给草稿发布器", async (t) => {
+  const f = fixture(t, {
+    answers: ["", "修复导入失败", "改善压缩速度", ".", "y"],
+  })
+  await f.run({})
   assert.equal(f.published, 1)
+  assert.equal(f.releaseOptions[0].publish, false)
+  assert.ok(f.messages.some((message) => message.includes("（草稿）")))
   assert.equal(
     JSON.parse(readFileSync(path.join(f.root, "package.json"))).version,
     "0.1.2"
@@ -194,24 +198,13 @@ test("一键准备版本、提交并向临时远端推送 main 和标签，再�
   )
 })
 
-test("直接回车采用建议版本号", async (t) => {
-  const f = fixture(t, { answers: ["", "修复问题", ".", "y"] })
-  await f.run({})
-  assert.equal(f.published, 1)
-  assert.ok(f.git(["tag", "--list", "v0.1.2"]))
-})
-
-test("向导默认上传草稿，只有显式指定 publish 才传递自动发布", async (t) => {
-  for (const publish of [false, true]) {
-    const f = fixture(t)
-    await f.run({ tag: "v0.1.2", publish })
-    assert.equal(f.releaseOptions[0].publish, publish)
-    assert.ok(
-      f.messages.some((message) =>
-        message.includes(publish ? "上传校验后自动发布" : "（草稿）")
-      )
-    )
-  }
+test("显式指定版本和 publish 才传递自动发布", async (t) => {
+  const f = fixture(t)
+  await f.run({ tag: "v0.1.2", publish: true })
+  assert.deepEqual(f.releaseOptions, [{ tag: "v0.1.2", publish: true }])
+  assert.ok(
+    f.messages.some((message) => message.includes("上传校验后自动发布"))
+  )
 })
 
 test("取消不修改文件、创建提交或标签", async (t) => {

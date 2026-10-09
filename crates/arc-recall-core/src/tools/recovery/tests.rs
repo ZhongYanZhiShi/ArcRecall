@@ -9,24 +9,6 @@ mod zip_volumes;
 
 const SEVEN_ZIP_START_HEADER_SIZE_FOR_TEST: usize = 32;
 
-/// Read-only timing probe for large archives, including disguised split volumes.
-#[test]
-#[ignore = "set ARC_RECALL_PROFILE_ARCHIVE to a local archive path"]
-fn profile_archive_fingerprint() {
-    let archive = std::env::var_os("ARC_RECALL_PROFILE_ARCHIVE").expect("archive path");
-    let started = std::time::Instant::now();
-    let analysis = analyze_archive(PathBuf::from(archive)).unwrap();
-    eprintln!(
-        "analysis: {:?}; bytes: {}; volumes: {}",
-        started.elapsed(),
-        analysis.file_size,
-        analysis.volume_count
-    );
-    let started = std::time::Instant::now();
-    fingerprint_archive_sha256(&analysis).unwrap();
-    eprintln!("fingerprint: {:?}", started.elapsed());
-}
-
 #[test]
 fn lz4_decode_budget_limits_ratio_and_absolute_size() {
     assert_eq!(lz4_decoded_byte_limit(1024), 10_240_000);

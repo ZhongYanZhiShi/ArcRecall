@@ -21,25 +21,6 @@ function logEntry(overrides: Partial<LogEntry> = {}): LogEntry {
   }
 }
 
-test("恢复完成摘要集中呈现引擎与嵌套归档结果", () => {
-  const presentation = presentLogEntry(
-    logEntry({
-      event: "recovery.completed",
-      context: {
-        engine: "7-Zip",
-        nested_extracted: "4",
-        nested_skipped: "2",
-      },
-    })
-  )
-
-  assert.equal(presentation.title, "恢复与解压完成")
-  assert.equal(
-    presentation.description,
-    "使用 7-Zip · 处理了 4 个嵌套压缩包 · 2 个嵌套压缩包未处理"
-  )
-})
-
 test("未知事件只展示允许的通用上下文且去掉句末标点", () => {
   const presentation = presentLogEntry(
     logEntry({

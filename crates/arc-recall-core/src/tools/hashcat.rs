@@ -483,20 +483,4 @@ mod tests {
         assert!(!status.download_url.to_ascii_lowercase().contains("latest"));
         assert_eq!(status.tools_directory, tools.display().to_string());
     }
-
-    #[test]
-    fn expected_path_is_under_tools() {
-        let dir = tempfile::tempdir().unwrap();
-        let tools = dir.path().join("shared-tools");
-        let default = dir.path().join("tools");
-        let dl = HashcatToolDownloader::new(
-            &tools,
-            &default,
-            tools.display().to_string(),
-            dir.path().join("temp"),
-        );
-        let exe = dl.expected_executable();
-        assert!(exe.starts_with(&tools));
-        assert!(exe.to_string_lossy().contains("7.1.2"));
-    }
 }

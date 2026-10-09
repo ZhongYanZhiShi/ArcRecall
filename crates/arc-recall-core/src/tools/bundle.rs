@@ -613,31 +613,6 @@ mod tests {
     }
 
     #[test]
-    fn expected_paths_are_versioned_under_tools_root() {
-        let dir = tempfile::tempdir().unwrap();
-        let manager = FullEngineBundleManager::new(dir.path().join("resources"), dir.path());
-        assert!(manager.seven_zip_executable().starts_with(dir.path()));
-        assert!(
-            manager
-                .hashcat_executable()
-                .to_string_lossy()
-                .contains(super::super::HASHCAT_MANIFEST_VERSION)
-        );
-        assert!(
-            manager
-                .john_tools_directory()
-                .to_string_lossy()
-                .contains(JOHN_VERSION)
-        );
-        assert!(
-            manager
-                .perl_executable()
-                .to_string_lossy()
-                .contains(PERL_VERSION)
-        );
-    }
-
-    #[test]
     fn missing_resources_are_reported_as_not_bundled() {
         let dir = tempfile::tempdir().unwrap();
         let manager =
