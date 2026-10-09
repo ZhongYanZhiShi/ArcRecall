@@ -1,6 +1,6 @@
 [package]
 name = "arc-recall-desktop"
-version = "0.1.1"
+version = "0.1.2"
 description = "ArcRecall desktop application"
 edition = "2024"
 license.workspace = true
