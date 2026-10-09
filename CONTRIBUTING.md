@@ -32,9 +32,24 @@
 - 安装方式、命令或行为发生变化时，请同步更新文档。
 - 避免夹带无关的格式化、生成文件或依赖更新。
 
+## 项目结构
+
+- `src/`：Next.js 界面。
+- `src-tauri/`：Tauri 桌面适配层。
+- `crates/arc-recall-core/`：Rust 核心逻辑。
+
+环境配置、启动与打包方式见 [README](./README.md#本地开发)。
+
 ## 验证
 
 请运行与本次改动相关的检查，并在 Pull Request 中记录命令和结果。未修改的应用不需要勾选对应检查项。
+
+```powershell
+pnpm lint
+pnpm typecheck
+pnpm test
+cargo test --workspace --all-targets --all-features
+```
 
 执行 `pnpm install` 会启用提交前钩子。每次提交前，
 钩子都会执行 Oxfmt 和 `cargo fmt` 格式检查；如果检查失败，请先运行：

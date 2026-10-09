@@ -32,9 +32,24 @@ Describe the use case before the proposed implementation. Explain what is diffic
 - Update documentation when setup, commands, or behavior changes.
 - Avoid unrelated formatting changes, generated output, and dependency updates.
 
+## Project structure
+
+- `src/`: Next.js UI.
+- `src-tauri/`: Tauri desktop adapters.
+- `crates/arc-recall-core/`: Rust core logic.
+
+See the [README](./README.en.md#local-development) for setup, launch, and build instructions.
+
 ## Validation
 
 Run the checks relevant to the part of the project you changed. Record the commands and results in the pull request instead of checking boxes for components you did not touch.
+
+```powershell
+pnpm lint
+pnpm typecheck
+pnpm test
+cargo test --workspace --all-targets --all-features
+```
 
 Running `pnpm install` enables the pre-commit hook. Before each commit, it
 checks Oxfmt and `cargo fmt`; if the check fails, run:
