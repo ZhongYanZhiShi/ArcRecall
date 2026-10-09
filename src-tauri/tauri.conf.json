@@ -51,6 +51,7 @@
     "targets": "all",
     "windows": {
       "nsis": {
+        "languages": ["SimpChinese"],
         "template": "windows/installer.nsi"
       }
     },
