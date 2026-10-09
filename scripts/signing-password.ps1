@@ -3,6 +3,10 @@
     [string]$KeyPath = (Join-Path $env:USERPROFILE '.tauri/arc-recall.key')
 )
 
+# A Windows PowerShell child can inherit PowerShell 7's module search path.
+# Load this host's built-in security module for DPAPI and ACL commands.
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+
 function Get-SigningPasswordCachePath {
     return Join-Path $env:USERPROFILE '.tauri/arc-recall.password.dpapi'
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -110,32 +110,54 @@ try {
 `,
       "utf8"
     )
-    const checked = spawnSync(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        script,
-      ],
+    const incompatibleModules = path.join(directory, "incompatible-modules")
+    const securityModule = path.join(
+      incompatibleModules,
+      "Microsoft.PowerShell.Security"
+    )
+    mkdirSync(securityModule, { recursive: true })
+    writeFileSync(
+      path.join(securityModule, "Microsoft.PowerShell.Security.psd1"),
+      "@{ RootModule = 'incompatible.psm1'; ModuleVersion = '99.0.0'; FunctionsToExport = @('ConvertTo-SecureString', 'ConvertFrom-SecureString', 'Get-Acl') }"
+    )
+    writeFileSync(
+      path.join(securityModule, "incompatible.psm1"),
+      "throw 'Inherited security module is incompatible with this PowerShell host.'"
+    )
+    for (const extraEnv of [
+      {},
       {
-        cwd: repository,
-        env: {
-          ...env,
-          ARCRECALL_TEST_REPOSITORY: repository,
-          ARCRECALL_TEST_PASSWORD: password,
-        },
-        encoding: "utf8",
-        windowsHide: true,
-        timeout: 120000,
-      }
-    )
-    assert.ok(
-      !`${checked.stdout}${checked.stderr}`.includes(password),
-      "Password leaked into output"
-    )
-    assert.equal(checked.status, 0, `${checked.stdout}\n${checked.stderr}`)
+        PSModulePath: `${incompatibleModules};${process.env.PSModulePath ?? ""}`,
+      },
+    ]) {
+      const checked = spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          script,
+        ],
+        {
+          cwd: repository,
+          env: {
+            ...env,
+            ...extraEnv,
+            ARCRECALL_TEST_REPOSITORY: repository,
+            ARCRECALL_TEST_PASSWORD: password,
+          },
+          encoding: "utf8",
+          windowsHide: true,
+          timeout: 120000,
+        }
+      )
+      assert.ok(
+        !`${checked.stdout}${checked.stderr}`.includes(password),
+        "Password leaked into output"
+      )
+      assert.equal(checked.status, 0, `${checked.stdout}\n${checked.stderr}`)
+    }
   }
 )
