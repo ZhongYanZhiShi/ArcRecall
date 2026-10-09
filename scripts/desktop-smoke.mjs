@@ -219,6 +219,7 @@ try {
       password
     )
   )
+  await page.getByRole("button", { name: "导出任务报告", exact: true }).click()
   await expect(
     page.getByRole("button", { name: "导出 JSON", exact: true })
   ).toBeVisible()
@@ -240,7 +241,7 @@ try {
   await close()
   await launch()
   await expect(
-    page.getByRole("button", { name: "按顺序处理 0 项" })
+    page.getByRole("button", { name: "暂无待处理任务", exact: true })
   ).toBeDisabled()
   await page.getByLabel("记住任务队列").click()
   await expect(page.getByLabel("记住任务队列")).not.toBeChecked()
