@@ -189,7 +189,7 @@ export async function releaseWizard(options, dependencies = {}) {
       if (line) lines.push(line.startsWith("- ") ? line : `- ${line}`)
     }
     if (!lines.length) throw new Error("更新说明不能为空。")
-    notes = `# ArcRecall ${tag}\n\n${lines.join("\n")}\n`
+    notes = `${lines.join("\n")}\n`
   }
   if (!notes.trim()) throw new Error("更新说明不能为空。")
   // Fetch only main; refuse to publish a branch that is behind or has diverged.

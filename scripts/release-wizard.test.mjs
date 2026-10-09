@@ -176,9 +176,9 @@ test("一键准备版本、提交并向临时远端推送 main 和标签，再�
     readFileSync(path.join(f.root, "Cargo.lock"), "utf8"),
     /name = "arc-recall-desktop"\nversion = "0.1.2"/
   )
-  assert.match(
+  assert.equal(
     readFileSync(path.join(f.root, ".github/release-notes/v0.1.2.md"), "utf8"),
-    /- 修复导入失败/
+    "- 修复导入失败\n- 改善压缩速度\n"
   )
   assert.equal(f.git(["rev-list", "--count", "HEAD"]), "2")
   assert.deepEqual(
