@@ -16,7 +16,14 @@ export const REPOSITORY = "ZhongYanZhiShi/ArcRecall"
 export const OWNER = "ZhongYanZhiShi"
 const TARGET = "x86_64-pc-windows-msvc"
 const PLATFORM = "windows-x86_64"
+const EDITIONS = ["basic", "full"]
 const ROOT = fileURLToPath(new URL("../", import.meta.url))
+
+function installerNames(version) {
+  return EDITIONS.map(
+    (edition) => `ArcRecall_${version}_x64-${edition}-setup.exe`
+  )
+}
 
 export function parseArguments(args, { requireTag = true } = {}) {
   const options = { tag: "", dryRun: false, help: false }
@@ -173,7 +180,11 @@ export function getRelease(read, tag) {
 
 export function assertDraft(release, tag) {
   const version = versionFromTag(tag)
-  const installerName = `ArcRecall_${version}_x64-setup.exe`
+  // Also reject assets from the old single-edition release workflow.
+  const names = [
+    ...installerNames(version),
+    `ArcRecall_${version}_x64-setup.exe`,
+  ]
   if (release && !release.draft)
     throw new Error("该版本已正式发布，拒绝修改；请使用新版本号。")
   if (release && release.prerelease !== version.includes("-")) {
@@ -183,7 +194,7 @@ export function assertDraft(release, tag) {
   }
   if (
     release?.assets.some((asset) =>
-      [installerName, `${installerName}.sig`].includes(asset.name)
+      names.some((name) => [name, `${name}.sig`].includes(asset.name))
     )
   ) {
     throw new Error(
@@ -295,8 +306,8 @@ export function releaseLocal(options, dependencies = {}) {
       )
   }
 
-  const installerName = `ArcRecall_${version}_x64-setup.exe`
-  const signatureName = `${installerName}.sig`
+  const names = installerNames(version)
+  const assetNames = names.flatMap((name) => [name, `${name}.sig`])
   const initialRelease = options.packageOnly
     ? null
     : getRelease(read, options.tag)
@@ -343,36 +354,6 @@ export function releaseLocal(options, dependencies = {}) {
     "./scripts/prepare-updater-config.ps1",
   ])
 
-  // Keep reusable Cargo output separate from development, and reject stale installers.
-  const installer = path.join(
-    targetDirectory,
-    TARGET,
-    "release",
-    "bundle",
-    "nsis",
-    installerName
-  )
-  for (const file of [installer, `${installer}.sig`])
-    rmSync(file, { force: true })
-  run(
-    "pnpm",
-    [
-      "exec",
-      "tauri",
-      "build",
-      "--target",
-      TARGET,
-      "--bundles",
-      "nsis",
-      "--config",
-      "src-tauri/tauri.updater.release.conf.json",
-    ],
-    { env: { CARGO_TARGET_DIR: targetDirectory } }
-  )
-  const signature = readFileSync(`${installer}.sig`, "utf8")
-  if (assertSource() !== commit)
-    throw new Error("构建期间源码发生变化，拒绝上传。")
-
   const outputRoot = path.join(root, "artifacts")
   mkdirSync(outputRoot, { recursive: true })
   const output = mkdtempSync(
@@ -381,8 +362,47 @@ export function releaseLocal(options, dependencies = {}) {
       `${options.packageOnly ? "package" : "release"}-${options.tag}-`
     )
   )
-  copyFileSync(installer, path.join(output, installerName))
-  copyFileSync(`${installer}.sig`, path.join(output, signatureName))
+
+  // Both builds emit the same filename. Copy each edition before the next build,
+  // and remove its previous installer/signature so stale output cannot be reused.
+  const installer = path.join(
+    targetDirectory,
+    TARGET,
+    "release",
+    "bundle",
+    "nsis",
+    `ArcRecall_${version}_x64-setup.exe`
+  )
+  for (const [index, edition] of EDITIONS.entries()) {
+    for (const file of [installer, `${installer}.sig`])
+      rmSync(file, { force: true })
+    run(
+      "pnpm",
+      [
+        "exec",
+        "tauri",
+        "build",
+        "--target",
+        TARGET,
+        "--bundles",
+        "nsis",
+        "--config",
+        `src-tauri/tauri.windows.${edition}.conf.json`,
+        "--config",
+        "src-tauri/tauri.updater.release.conf.json",
+      ],
+      { env: { CARGO_TARGET_DIR: targetDirectory } }
+    )
+    if (!readFileSync(`${installer}.sig`, "utf8").trim())
+      throw new Error(`${edition} 安装包签名为空，发布已停止。`)
+    copyFileSync(installer, path.join(output, names[index]))
+    copyFileSync(`${installer}.sig`, path.join(output, `${names[index]}.sig`))
+  }
+  if (assertSource() !== commit)
+    throw new Error("构建期间源码发生变化，拒绝上传。")
+
+  // Application updates reuse deployed tools and retained offline resources.
+  const signature = readFileSync(path.join(output, `${names[0]}.sig`), "utf8")
   const manifestPath = path.join(output, "latest.json")
   const writeManifest = (previous) =>
     writeFileSync(
@@ -392,14 +412,14 @@ export function releaseLocal(options, dependencies = {}) {
           version,
           notes,
           signature,
-          assetName: installerName,
+          assetName: names[0],
         }),
         null,
         2
       ) + "\n"
     )
   writeManifest(undefined)
-  log(`已生成安装包、签名及 latest.json：${output}`)
+  log(`已生成基础版、完整版安装包及各自签名，自动更新使用基础版：${output}`)
   if (options.packageOnly) return output
 
   // Preserve complete local artifacts even if the subsequent upload fails.
@@ -455,8 +475,7 @@ export function releaseLocal(options, dependencies = {}) {
     "release",
     "upload",
     options.tag,
-    path.join(output, installerName),
-    path.join(output, signatureName),
+    ...assetNames.map((name) => path.join(output, name)),
     "--repo",
     REPOSITORY,
   ])
@@ -480,8 +499,8 @@ export function releaseLocal(options, dependencies = {}) {
     ) {
       throw new Error("上传期间草稿或源码已变化，未执行正式发布。")
     }
-    // GitHub computes digests for uploaded assets; require all three exact files.
-    for (const name of [installerName, signatureName, "latest.json"]) {
+    // Require both installers, both signatures and the updater manifest.
+    for (const name of [...assetNames, "latest.json"]) {
       const contents = readFileSync(path.join(output, name))
       const assets = uploaded.assets.filter((asset) => asset.name === name)
       const digest = `sha256:${createHash("sha256").update(contents).digest("hex")}`
@@ -531,7 +550,7 @@ if (
     const options = parseArguments(process.argv.slice(2))
     if (options.help) {
       console.log(
-        "用法：pnpm release:local --tag vX.Y.Z [--dry-run] [--publish | --package-only]\n默认上传草稿；--publish 在附件校验通过后自动发布；--package-only 仅生成安装包、签名和 latest.json。\n本地打包推荐使用 pnpm package，自动读取当前版本并隐藏输入密码。\n当前支持 Windows x64；M1/macOS ARM64 暂待原生适配。\n签名环境变量：\n  TAURI_UPDATER_PUBLIC_KEY：.pub 文件完整内容\n  TAURI_SIGNING_PRIVATE_KEY：私钥文件绝对路径或完整内容\n  TAURI_SIGNING_PRIVATE_KEY_PASSWORD：私钥密码，无密码时留空"
+        "用法：pnpm release:local --tag vX.Y.Z [--dry-run] [--publish | --package-only]\n默认上传草稿；--publish 在附件校验通过后自动发布；--package-only 仅生成本地产物。\n每次同时生成基础版、完整版 EXE、各自签名和 latest.json；自动更新使用基础版并覆盖安装，保留已有资源。\n本地打包推荐使用 pnpm package，自动读取当前版本并隐藏输入密码。\n当前支持 Windows x64；M1/macOS ARM64 暂待原生适配。\n签名环境变量：\n  TAURI_UPDATER_PUBLIC_KEY：.pub 文件完整内容\n  TAURI_SIGNING_PRIVATE_KEY：私钥文件绝对路径或完整内容\n  TAURI_SIGNING_PRIVATE_KEY_PASSWORD：私钥密码，无密码时留空"
       )
     } else releaseLocal(options)
   } catch (error) {

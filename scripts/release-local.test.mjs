@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
   mkdirSync,
@@ -23,7 +24,8 @@ import {
 const VERSION = "0.2.0"
 const TAG = `v${VERSION}`
 const COMMIT = "a".repeat(40)
-const ASSET = `ArcRecall_${VERSION}_x64-setup.exe`
+const ASSET = `ArcRecall_${VERSION}_x64-basic-setup.exe`
+const FULL_ASSET = `ArcRecall_${VERSION}_x64-full-setup.exe`
 const MAC_ENTRY = {
   url: "https://example.com/mac.app.tar.gz",
   signature: "mac-signature",
@@ -75,10 +77,21 @@ function fixture(t, overrides = {}) {
       return JSON.stringify([release ? [release] : []])
     }
     if (command === "pnpm" && args.includes("tauri")) {
+      const edition = args.includes("src-tauri/tauri.windows.basic.conf.json")
+        ? "basic"
+        : "full"
       const installer = `target/local-release/x86_64-pc-windows-msvc/release/bundle/nsis/${asset}`
-      write(installer, "fresh installer")
-      if (!overrides.missingSignature)
-        write(`${installer}.sig`, "windows-signature\n")
+      write(installer, `fresh ${edition} installer`)
+      if (
+        overrides.missingSignature !== true &&
+        overrides.missingSignature !== edition
+      )
+        write(
+          `${installer}.sig`,
+          overrides.emptySignature === edition
+            ? " \n"
+            : `${edition}-signature\n`
+        )
     }
     if (command === "gh" && args[1] === "download") {
       writeFileSync(
@@ -186,6 +199,51 @@ test("子进程参数不经过 shell 展开", () => {
   )
 })
 
+test(
+  "签名配置只添加共用公钥和签名开关，不给基础版混入完整版资源",
+  {
+    skip: process.platform !== "win32",
+  },
+  (t) => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), "arcrecall-signing-config-")
+    )
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    mkdirSync(path.join(root, "scripts"))
+    mkdirSync(path.join(root, "src-tauri"))
+    const script = path.join(root, "scripts", "prepare-updater-config.ps1")
+    writeFileSync(
+      script,
+      readFileSync(new URL("./prepare-updater-config.ps1", import.meta.url))
+    )
+    const pubkey = Buffer.from(
+      `untrusted comment: test key\n${Buffer.alloc(42).toString("base64")}\n`
+    ).toString("base64")
+    const result = spawnSync(
+      "powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        env: {
+          ...process.env,
+          TAURI_UPDATER_PUBLIC_KEY: pubkey,
+          TAURI_SIGNING_PRIVATE_KEY: "unused-test-key",
+        },
+      }
+    )
+    assert.equal(result.status, 0, result.stderr)
+    const config = JSON.parse(
+      readFileSync(
+        path.join(root, "src-tauri", "tauri.updater.release.conf.json"),
+        "utf8"
+      ).replace(/^\uFEFF/, "")
+    )
+    assert.deepEqual(config.bundle, { createUpdaterArtifacts: true })
+    assert.equal(config.plugins.updater.pubkey, pubkey)
+  }
+)
+
 for (const [name, overrides, expected] of [
   ["非发布者", { login: "collaborator" }, /不是发布者/],
   ["未提交源码", { dirty: true }, /未提交改动/],
@@ -244,7 +302,7 @@ test("自动发布参数可以单独交给向导，本地打包与自动发布�
   )
 })
 
-test("仅本地打包生成完整三件套，不要求远端标签、GitHub 登录或创建 Release", (t) => {
+test("仅本地打包生成两版安装包、各自签名和基础版更新清单，不访问 GitHub", (t) => {
   const f = fixture(t, {
     login: "someone",
     remoteCommit: "b".repeat(40),
@@ -253,7 +311,13 @@ test("仅本地打包生成完整三件套，不要求远端标签、GitHub 登�
   const output = f.publish({ packageOnly: true })
   assert.deepEqual(
     readdirSync(output).sort(),
-    [ASSET, `${ASSET}.sig`, "latest.json"].sort()
+    [
+      ASSET,
+      `${ASSET}.sig`,
+      FULL_ASSET,
+      `${FULL_ASSET}.sig`,
+      "latest.json",
+    ].sort()
   )
   const manifest = JSON.parse(
     readFileSync(path.join(output, "latest.json"), "utf8")
@@ -261,8 +325,36 @@ test("仅本地打包生成完整三件套，不要求远端标签、GitHub 登�
   assert.equal(manifest.version, VERSION)
   assert.equal(
     manifest.platforms["windows-x86_64"].signature,
-    "windows-signature"
+    "basic-signature"
   )
+  assert.ok(manifest.platforms["windows-x86_64"].url.endsWith(`/${ASSET}`))
+  for (const [edition, name] of [
+    ["basic", ASSET],
+    ["full", FULL_ASSET],
+  ]) {
+    assert.equal(
+      readFileSync(path.join(output, name), "utf8"),
+      `fresh ${edition} installer`
+    )
+    assert.equal(
+      readFileSync(path.join(output, `${name}.sig`), "utf8"),
+      `${edition}-signature\n`
+    )
+  }
+  const builds = f.calls.filter(
+    ({ command, args }) => command === "pnpm" && args.includes("tauri")
+  )
+  assert.equal(builds.length, 2)
+  for (const [index, edition] of ["basic", "full"].entries()) {
+    assert.ok(
+      builds[index].args.includes(
+        `src-tauri/tauri.windows.${edition}.conf.json`
+      )
+    )
+    assert.ok(
+      builds[index].args.includes("src-tauri/tauri.updater.release.conf.json")
+    )
+  }
   assert.ok(!f.calls.some(({ command }) => command === "gh"))
   assert.ok(
     !f.calls.some(
@@ -281,7 +373,7 @@ test("仅本地打包生成完整三件套，不要求远端标签、GitHub 登�
   }
 })
 
-test("自动发布必须等安装包、签名和清单全部上传并验证通过", (t) => {
+test("自动发布必须等两版安装包、两份签名和清单全部上传并验证通过", (t) => {
   const f = fixture(t)
   f.publish({ publish: true })
   const writes = mutations(f.calls)
@@ -290,6 +382,12 @@ test("自动发布必须等安装包、签名和清单全部上传并验证通�
     ["create", "upload", "upload", "edit"]
   )
   assert.ok(writes[0].args.includes("--draft"))
+  assert.deepEqual(
+    writes[1].args
+      .slice(3, writes[1].args.indexOf("--repo"))
+      .map((file) => path.basename(file)),
+    [ASSET, `${ASSET}.sig`, FULL_ASSET, `${FULL_ASSET}.sig`]
+  )
   assert.ok(writes[2].args[3].endsWith("latest.json"))
   assert.ok(writes[3].args.includes("--draft=false"))
   assert.ok(writes[3].args.includes("--latest=true"))
@@ -304,10 +402,12 @@ test("自动发布 beta 保留预发布标记且不设为 Latest", (t) => {
 })
 
 test("任一附件上传失败都不正式发布，并保留完整本地产物", (t) => {
-  for (const name of [ASSET, "latest.json"]) {
+  for (const name of [ASSET, FULL_ASSET, "latest.json"]) {
     const f = fixture(t, {
       fail: (command, args) =>
-        command === "gh" && args[1] === "upload" && args[3].endsWith(name),
+        command === "gh" &&
+        args[1] === "upload" &&
+        args.some((arg) => arg.endsWith(name)),
     })
     assert.throws(() => f.publish({ publish: true }), /simulated/)
     assert.ok(!mutations(f.calls).some(({ args }) => args[1] === "edit"))
@@ -325,7 +425,13 @@ test("任一附件上传失败都不正式发布，并保留完整本地产物",
 })
 
 test("任一远端附件哈希、大小或上传状态不正确都保留草稿", (t) => {
-  for (const name of [ASSET, `${ASSET}.sig`, "latest.json"]) {
+  for (const name of [
+    ASSET,
+    `${ASSET}.sig`,
+    FULL_ASSET,
+    `${FULL_ASSET}.sig`,
+    "latest.json",
+  ]) {
     for (const [field, value] of [
       ["digest", "sha256:wrong"],
       ["size", 0],
@@ -438,6 +544,9 @@ test("校验或构建失败不会创建 Release", (t) => {
   for (const fail of [
     (command, args) => command === "cargo" && args[0] === "test",
     (command, args) => command === "pnpm" && args.includes("tauri"),
+    (command, args) =>
+      command === "pnpm" &&
+      args.includes("src-tauri/tauri.windows.full.conf.json"),
   ]) {
     const f = fixture(t, { fail })
     assert.throws(() => f.publish(), /simulated/)
@@ -448,11 +557,46 @@ test("校验或构建失败不会创建 Release", (t) => {
 test("缺失签名时不能使用上一次构建残留的签名", (t) => {
   const f = fixture(t, { missingSignature: true })
   f.write(
-    `target/local-release/x86_64-pc-windows-msvc/release/bundle/nsis/${ASSET}.sig`,
+    `target/local-release/x86_64-pc-windows-msvc/release/bundle/nsis/ArcRecall_${VERSION}_x64-setup.exe.sig`,
     "stale signature"
   )
   assert.throws(() => f.publish(), /ENOENT/)
   assert.equal(mutations(f.calls).length, 0)
+})
+
+test("完整版缺失或签名为空时不能沿用基础版签名或上传不完整产物", (t) => {
+  for (const overrides of [
+    { missingSignature: "full" },
+    { emptySignature: "basic" },
+    { emptySignature: "full" },
+  ]) {
+    const f = fixture(t, overrides)
+    assert.throws(() => f.publish(), /ENOENT|签名为空/)
+    assert.equal(mutations(f.calls).length, 0)
+  }
+})
+
+test("草稿中任一版本的安装包或签名已存在时在构建之前停止", (t) => {
+  for (const name of [
+    ASSET,
+    `${ASSET}.sig`,
+    FULL_ASSET,
+    `${FULL_ASSET}.sig`,
+    `ArcRecall_${VERSION}_x64-setup.exe`,
+    `ArcRecall_${VERSION}_x64-setup.exe.sig`,
+  ]) {
+    const f = fixture(t, {
+      release: {
+        tag_name: TAG,
+        draft: true,
+        prerelease: false,
+        assets: [{ name }],
+      },
+    })
+    assert.throws(() => f.publish(), /同名/)
+    assert.equal(mutations(f.calls).length, 0)
+    assert.ok(!f.calls.some(({ args }) => args.includes("tauri")))
+  }
 })
 
 test("构建过程中 Release 状态变化会阻止上传", (t) => {
@@ -485,7 +629,7 @@ test("成功构建只创建草稿，安装包先于更新清单上传", (t) => {
   assert.equal(manifest.version, VERSION)
   assert.equal(
     manifest.platforms["windows-x86_64"].signature,
-    "windows-signature"
+    "basic-signature"
   )
   assert.ok(
     manifest.platforms["windows-x86_64"].url.endsWith(`/${TAG}/${ASSET}`)

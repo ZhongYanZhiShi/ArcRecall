@@ -6,7 +6,14 @@ ArcRecall 是一款本地归档处理工具，支持识别真实文件格式、�
 
 ## 下载与使用
 
-在 [GitHub Releases](https://github.com/ZhongYanZhiShi/ArcRecall/releases) 下载 Windows x64 完整引擎版。macOS / Linux 暂无经过验证的发行包。
+在 [GitHub Releases](https://github.com/ZhongYanZhiShi/ArcRecall/releases) 选择 Windows x64 安装包。macOS / Linux 暂无经过验证的发行包。
+
+| 版本   | 文件名                                 | 适用情况                                                       |
+| ------ | -------------------------------------- | -------------------------------------------------------------- |
+| 基础版 | `ArcRecall_版本号_x64-basic-setup.exe` | 不附带离线引擎资源，适合已安装完整版或已自行配置引擎的用户升级 |
+| 完整版 | `ArcRecall_版本号_x64-full-setup.exe`  | 附带完整离线引擎资源，适合首次安装、离线使用或补充资源         |
+
+两版的应用功能相同。安装器会沿用已有安装目录并覆盖更新程序，保留已部署的引擎、离线资源、设置、字典和历史数据，无需先卸载。应用内更新使用基础版，减少重复下载；需要补充或更新引擎资源时，可安装同版本完整版，再进行离线部署。首次安装建议选择完整版。
 
 1. 完整引擎版已内置离线资源。打开「设置 → 解密引擎」，若显示「待部署」，点击「离线部署」；确认引擎就绪，无 GPU 时可选「仅 CPU」。
 2. 如需通过字典恢复密码，先在「字典」页面导入候选密码文件或手动添加候选密码。
@@ -51,6 +58,8 @@ pnpm desktop:dev
 ```powershell
 pnpm desktop:build
 ```
+
+构建基础版使用 `pnpm desktop:build:basic`。本机签名打包使用 `pnpm package`，同时生成两版 EXE、各自的 `.sig` 和指向基础版的 `latest.json`，输出到 `artifacts/package-v版本号-*`。
 
 浏览器预览仅用于界面开发，文件处理需使用桌面版。项目结构与开发检查见[贡献指南](./CONTRIBUTING.md)。
 

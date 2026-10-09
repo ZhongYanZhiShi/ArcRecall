@@ -6,7 +6,14 @@ ArcRecall is a local archive tool for identifying file formats, creating copies 
 
 ## Download and use
 
-Download the Windows x64 full engine edition from [GitHub Releases](https://github.com/ZhongYanZhiShi/ArcRecall/releases). macOS / Linux distribution packages are not yet verified.
+Choose a Windows x64 installer from [GitHub Releases](https://github.com/ZhongYanZhiShi/ArcRecall/releases). macOS / Linux distribution packages are not yet verified.
+
+| Edition | Filename                                | When to use                                                                                                     |
+| ------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Basic   | `ArcRecall_VERSION_x64-basic-setup.exe` | Excludes offline engine resources; upgrade an existing full installation or use engines you configured yourself |
+| Full    | `ArcRecall_VERSION_x64-full-setup.exe`  | Includes offline engine resources; recommended for first installation, offline use, or restoring resources      |
+
+Both editions provide the same application features. Installers reuse the existing installation directory and overwrite the application while retaining deployed engines, offline resources, settings, dictionaries, and history. There is no need to uninstall first. In-app updates download the smaller basic edition. To add or update offline resources, install the full edition of the same version and deploy its engines.
 
 1. The full engine edition includes offline resources. Open Settings → Recovery engines and deploy them if their status is pending. Confirm the engines are ready; choose CPU only if no GPU is available.
 2. For dictionary-based recovery, import a candidate password file or add candidates manually on the Dictionary page first.
@@ -51,6 +58,8 @@ Build the full engine edition:
 ```powershell
 pnpm desktop:build
 ```
+
+Use `pnpm desktop:build:basic` to build the basic edition. For signed local packaging, `pnpm package` creates both EXE installers, their `.sig` files, and a `latest.json` pointing to the basic edition in `artifacts/package-vVERSION-*`.
 
 Browser preview is for UI development; file processing requires the desktop app. See the [contribution guide](./CONTRIBUTING.en.md) for project structure and development checks.
 

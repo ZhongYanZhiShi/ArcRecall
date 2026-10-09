@@ -312,7 +312,7 @@ if (
     const args = process.argv.slice(2).filter((arg) => arg !== "--")
     if (args.includes("--help")) {
       console.log(
-        "用法：pnpm release [--tag vX.Y.Z] [--publish]\n输入版本号和更新说明，确认后自动提交版本文件、推送 main 和标签、检查、打包、生成 latest.json 并上传草稿。\n--publish：完整附件上传并校验通过后，自动正式发布；预发布版本不会标记为 Latest。\n仅本地打包请使用 pnpm package。\n要求：Windows x64、干净的 main 分支、维护者 GitHub 登录和已有签名密钥。\n默认读取 ~/.tauri/arc-recall.key 及 .pub；密码隐藏输入；可沿用 TAURI_* 环境变量。\n失败后使用同一个 --tag 重试；不会移动标签或覆盖同名附件。"
+        "用法：pnpm release [--tag vX.Y.Z] [--publish]\n输入版本号和更新说明，确认后自动提交版本文件、推送 main 和标签、检查、打包基础版与完整版、生成各自签名和 latest.json 并上传草稿。\n自动更新使用基础版；两版均覆盖安装并保留已有资源。\n--publish：五个附件上传并校验通过后，自动正式发布；预发布版本不会标记为 Latest。\n仅本地打包请使用 pnpm package。\n要求：Windows x64、干净的 main 分支、维护者 GitHub 登录和已有签名密钥。\n默认读取 ~/.tauri/arc-recall.key 及 .pub；密码隐藏输入；可沿用 TAURI_* 环境变量。\n失败后使用同一个 --tag 重试；不会移动标签或覆盖同名附件。"
       )
     } else {
       const options = parseArguments(args, { requireTag: false })
