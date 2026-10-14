@@ -170,7 +170,7 @@ impl DictionaryCandidateStore {
         conn: &Connection,
         query: &DictionaryCandidateQuery,
     ) -> Result<Vec<DictionaryCandidateEntry>, DictionaryError> {
-        let take = query.take.clamp(1, DEFAULT_PAGE_SIZE);
+        let take = query.take.max(1);
         let skip = query.skip.max(0);
         let mut stmt = conn.prepare_cached(
             "SELECT id, candidate_text, byte_count, success_count \
@@ -703,9 +703,9 @@ mod tests {
     }
 
     #[test]
-    fn list_entries_clamps_requested_page_size() {
+    fn list_entries_supports_custom_page_size_without_business_cap() {
         let (_dir, store) = temp_db();
-        let candidates = (0..DEFAULT_PAGE_SIZE + 10).map(|index| format!("candidate-{index}"));
+        let candidates = (0..10_010).map(|index| format!("candidate-{index}"));
         store.add_candidates(candidates).unwrap();
 
         let entries = store
@@ -715,7 +715,20 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(entries.len(), DEFAULT_PAGE_SIZE as usize);
+        assert_eq!(entries.len(), 10_010);
+
+        for size in [50, 100, 500, 1000, 1234] {
+            let page = store
+                .list(&DictionaryCandidateQuery {
+                    take: size,
+                    skip: size,
+                    ..DictionaryCandidateQuery::default()
+                })
+                .unwrap();
+            assert_eq!(page.entries.len(), size as usize);
+            assert_eq!(page.entries[0].id, entries[size as usize].id);
+            assert_eq!(page.total_count, 10_010);
+        }
     }
 
     #[test]

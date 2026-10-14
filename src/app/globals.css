@@ -4,6 +4,23 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Keep the sticky dictionary header opaque; fade only the rows below it. */
+.dictionary-list-scroll [data-slot="table-header"]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 100%;
+  height: 16px;
+  background: linear-gradient(to bottom, var(--card), transparent);
+  pointer-events: none;
+  opacity: 0;
+}
+
+.dictionary-list-scroll[data-overflow-y-start]
+  [data-slot="table-header"]::after {
+  opacity: 1;
+}
+
 @theme inline {
   --font-heading: var(--font-app-sans);
   --font-sans: var(--font-app-sans);

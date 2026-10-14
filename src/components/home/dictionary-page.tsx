@@ -3,6 +3,10 @@
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Copy,
+  Check,
   FileUp,
   Library,
   Plus,
@@ -37,6 +41,14 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Empty,
   EmptyContent,
@@ -95,13 +107,25 @@ type StatusTone = "neutral" | "busy" | "ok" | "error"
 export function DictionaryPage() {
   const [entries, setEntries] = React.useState<DictionaryCandidateEntry[]>([])
   const [pageIndex, setPageIndex] = React.useState(0)
+  const [pageSize, setPageSize] = React.useState(DICTIONARY_PAGE_SIZE)
+  const [customPageSize, setCustomPageSize] = React.useState(
+    String(DICTIONARY_PAGE_SIZE)
+  )
+  const [customSizeMode, setCustomSizeMode] = React.useState(false)
+  const [jumpPage, setJumpPage] = React.useState("1")
   const [matchedCount, setMatchedCount] = React.useState(0)
   const [searchInput, setSearchInput] = React.useState("")
   const [appliedSearch, setAppliedSearch] = React.useState("")
   const [selectedIds, setSelectedIds] = React.useState<Set<number>>(
     () => new Set()
   )
-  const [isBusy, setIsBusy] = React.useState(false)
+  const [isBusy, setIsBusy] = React.useState(true)
+  const [loadState, setLoadState] = React.useState<
+    "loading" | "ready" | "error"
+  >("loading")
+  const [addFeedback, setAddFeedback] = React.useState("")
+  const [copiedId, setCopiedId] = React.useState<number | null>(null)
+  const [copyFeedback, setCopyFeedback] = React.useState("")
   const [status, setStatus] = React.useState("解压时自动尝试此处的候选密码。")
   const [statusTone, setStatusTone] = React.useState<StatusTone>("neutral")
   const [addPanelOpen, setAddPanelOpen] = React.useState(false)
@@ -123,52 +147,70 @@ export function DictionaryPage() {
     : 0
 
   const loadEntries = React.useCallback(
-    async (searchText: string, requestedPageIndex = 0) => {
-      const fetchPage = (nextPageIndex: number) =>
-        listDictionary({
-          searchText,
-          skip: nextPageIndex * DICTIONARY_PAGE_SIZE,
-          take: DICTIONARY_PAGE_SIZE,
-        })
+    async (
+      searchText: string,
+      requestedPageIndex = 0,
+      requestedPageSize = pageSize
+    ) => {
+      setLoadState("loading")
+      try {
+        const fetchPage = (nextPageIndex: number) =>
+          listDictionary({
+            searchText,
+            skip: nextPageIndex * requestedPageSize,
+            take: requestedPageSize,
+          })
 
-      let resolvedPageIndex = Math.max(0, requestedPageIndex)
-      let result = await fetchPage(resolvedPageIndex)
-      const lastPageIndex = Math.max(
-        0,
-        Math.ceil(result.matchedCount / DICTIONARY_PAGE_SIZE) - 1
-      )
+        let resolvedPageIndex = Math.max(0, requestedPageIndex)
+        let result = await fetchPage(resolvedPageIndex)
+        const lastPageIndex = Math.max(
+          0,
+          Math.ceil(result.matchedCount / requestedPageSize) - 1
+        )
 
-      if (resolvedPageIndex > lastPageIndex) {
-        resolvedPageIndex = lastPageIndex
-        result = await fetchPage(resolvedPageIndex)
-      }
-
-      setEntries(result.entries)
-      setMatchedCount(result.matchedCount)
-      setPageIndex(resolvedPageIndex)
-      setSelectedIds((prev) => {
-        const visible = new Set(result.entries.map((e) => e.id))
-        const next = new Set<number>()
-        for (const id of prev) {
-          if (visible.has(id)) {
-            next.add(id)
-          }
+        if (resolvedPageIndex > lastPageIndex) {
+          resolvedPageIndex = lastPageIndex
+          result = await fetchPage(resolvedPageIndex)
         }
-        return next
-      })
-      const viewport = scrollAreaRef.current?.querySelector<HTMLElement>(
-        '[data-slot="scroll-area-viewport"]'
-      )
-      if (viewport) {
-        viewport.scrollTop = 0
+
+        setEntries(result.entries)
+        setAppliedSearch(searchText)
+        setLoadState("ready")
+        setMatchedCount(result.matchedCount)
+        setPageIndex(resolvedPageIndex)
+        setPageSize(requestedPageSize)
+        setJumpPage(String(resolvedPageIndex + 1))
+        setSelectedIds((prev) => {
+          const visible = new Set(result.entries.map((e) => e.id))
+          const next = new Set<number>()
+          for (const id of prev) {
+            if (visible.has(id)) {
+              next.add(id)
+            }
+          }
+          return next
+        })
+        const viewport = scrollAreaRef.current?.querySelector<HTMLElement>(
+          '[data-slot="scroll-area-viewport"]'
+        )
+        if (viewport) {
+          viewport.scrollTop = 0
+        }
+        return { ...result, pageIndex: resolvedPageIndex }
+      } catch (error) {
+        setLoadState("error")
+        throw error
       }
-      return { ...result, pageIndex: resolvedPageIndex }
     },
-    []
+    [pageSize]
   )
 
   const runBusy = React.useCallback(
-    async (workingMessage: string, operation: () => Promise<void>) => {
+    async (
+      workingMessage: string,
+      operation: () => Promise<void>,
+      inAddPanel = false
+    ) => {
       if (isBusy || operationBusy.current) {
         return
       }
@@ -176,6 +218,7 @@ export function DictionaryPage() {
       setIsBusy(true)
       setStatusTone("busy")
       setStatus(workingMessage)
+      if (inAddPanel) setAddFeedback(workingMessage)
       try {
         await operation()
       } catch (error) {
@@ -183,6 +226,7 @@ export function DictionaryPage() {
           error instanceof Error ? error.message : String(error ?? "未知错误")
         setStatusTone("error")
         setStatus(`操作失败：${message}`)
+        if (inAddPanel) setAddFeedback(`操作失败：${message}`)
       } finally {
         operationBusy.current = false
         setIsBusy(false)
@@ -201,9 +245,9 @@ export function DictionaryPage() {
       setStatusTone("busy")
       setStatus("正在加载候选…")
       try {
-        const result = await loadEntries("")
+        await loadEntries("")
         setStatusTone("ok")
-        setStatus(`共 ${result.totalCount} 条`)
+        setStatus("")
       } catch (error) {
         initialLoadStarted.current = false
         const message =
@@ -229,27 +273,52 @@ export function DictionaryPage() {
         formatLoadStatus(
           "刷新完成",
           result.totalCount,
-          result.entries.length,
+          result.matchedCount,
           appliedSearch
         )
       )
     })
   }
 
-  const handleSearch = () => {
+  const handleSearch = (searchText = searchInput) => {
     void runBusy("正在查询候选…", async () => {
-      setAppliedSearch(searchInput)
-      const result = await loadEntries(searchInput, 0)
+      const result = await loadEntries(searchText, 0)
       setStatusTone("ok")
       setStatus(
         formatLoadStatus(
           "查询完成",
           result.totalCount,
-          result.entries.length,
-          searchInput
+          result.matchedCount,
+          searchText
         )
       )
     })
+  }
+
+  const clearSearch = () => {
+    setSearchInput("")
+    handleSearch("")
+  }
+
+  const openAddPanel = () => {
+    setAddFeedback("")
+    setAddPanelOpen(true)
+  }
+
+  const finishAdding = async (message: string) => {
+    // Writes may succeed even when refreshing the list fails. Keep the result.
+    let feedback = message
+    let tone: StatusTone = "ok"
+    try {
+      const result = await loadEntries(appliedSearch, pageIndex)
+      feedback += ` 全局共 ${result.totalCount} 条。`
+    } catch {
+      feedback += " 列表刷新失败，请刷新列表查看已添加的候选。"
+      tone = "error"
+    }
+    setStatusTone(tone)
+    setStatus(feedback)
+    setAddFeedback(feedback)
   }
 
   const handleDeleteConfirm = () => {
@@ -334,31 +403,31 @@ export function DictionaryPage() {
     if (singleCandidate.length === 0 || isBusy) {
       return
     }
-    void runBusy("正在添加候选…", async () => {
-      const summary = await addDictionaryCandidates([singleCandidate])
-      setSingleCandidate("")
-      const result = await loadEntries(appliedSearch, pageIndex)
-      setStatusTone("ok")
-      setStatus(
-        `${formatAddStatus("单条新增完成", summary)} 全局共 ${result.totalCount} 条。`
-      )
-    })
+    void runBusy(
+      "正在添加候选…",
+      async () => {
+        const summary = await addDictionaryCandidates([singleCandidate])
+        setSingleCandidate("")
+        await finishAdding(formatAddStatus("单条新增完成", summary))
+      },
+      true
+    )
   }
 
   const handleAddPasted = () => {
     if (pastedCandidates.length === 0 || isBusy) {
       return
     }
-    void runBusy("正在添加候选…", async () => {
-      const candidates = splitLines(pastedCandidates)
-      const summary = await addDictionaryCandidates(candidates)
-      setPastedCandidates("")
-      const result = await loadEntries(appliedSearch, pageIndex)
-      setStatusTone("ok")
-      setStatus(
-        `${formatAddStatus("批量新增完成", summary)} 全局共 ${result.totalCount} 条。`
-      )
-    })
+    void runBusy(
+      "正在添加候选…",
+      async () => {
+        const candidates = splitLines(pastedCandidates)
+        const summary = await addDictionaryCandidates(candidates)
+        setPastedCandidates("")
+        await finishAdding(formatAddStatus("批量新增完成", summary))
+      },
+      true
+    )
   }
 
   const toggleSelect = (id: number, checked: boolean) => {
@@ -402,7 +471,7 @@ export function DictionaryPage() {
     entries.length > 0 && selectedVisibleCount === entries.length
   const someVisibleSelected =
     selectedVisibleCount > 0 && selectedVisibleCount < entries.length
-  const pageCount = Math.ceil(matchedCount / DICTIONARY_PAGE_SIZE)
+  const pageCount = Math.ceil(matchedCount / pageSize)
   const displayedPage = pageCount === 0 ? 0 : pageIndex + 1
   const hasPreviousPage = pageIndex > 0
   const hasNextPage = pageIndex + 1 < pageCount
@@ -417,12 +486,29 @@ export function DictionaryPage() {
       return
     }
     void runBusy(`正在加载第 ${nextPageIndex + 1} 页…`, async () => {
-      const result = await loadEntries(appliedSearch, nextPageIndex)
+      await loadEntries(appliedSearch, nextPageIndex)
       setStatusTone("ok")
-      setStatus(
-        `第 ${result.pageIndex + 1} 页加载完成。全局字典候选共 ${result.totalCount} 条。`
-      )
+      setStatus("")
     })
+  }
+
+  const handlePageSizeChange = (size: number) => {
+    if (!Number.isSafeInteger(size) || size < 1) return
+    void runBusy("正在加载候选…", async () => {
+      await loadEntries(appliedSearch, 0, size)
+      setCustomSizeMode(false)
+      setStatusTone("ok")
+      setStatus("")
+    })
+  }
+
+  const commitJumpPage = () => {
+    if (!jumpPage) {
+      setJumpPage(String(displayedPage))
+      return
+    }
+    const page = Number(jumpPage)
+    if (Number.isInteger(page)) handlePageChange(page - 1)
   }
 
   return (
@@ -430,14 +516,10 @@ export function DictionaryPage() {
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
           title="字典"
-          titleHidden
+          description="解压时自动尝试这些候选密码。"
           actions={
             <>
-              <Button
-                size="sm"
-                disabled={isBusy}
-                onClick={() => setAddPanelOpen(true)}
-              >
+              <Button size="sm" disabled={isBusy} onClick={openAddPanel}>
                 <Plus data-icon="inline-start" />
                 添加
               </Button>
@@ -500,79 +582,101 @@ export function DictionaryPage() {
           className="shrink-0 gap-0 py-0 shadow-sm ring-border/60"
         >
           <CardContent className="flex items-center gap-2 py-2.5">
-            <InputGroup className="h-9 min-w-0 flex-1">
-              <InputGroupAddon>
-                <Search aria-hidden />
-              </InputGroupAddon>
-              <InputGroupInput
-                type="search"
-                aria-label="搜索字典候选"
-                value={searchInput}
-                onChange={(event) => setSearchInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault()
-                    handleSearch()
-                  }
-                }}
-                placeholder="按明文搜索候选"
-                disabled={isBusy}
-                className="text-xs"
-              />
-            </InputGroup>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-9 shrink-0"
-              disabled={isBusy}
-              onClick={handleSearch}
-            >
-              查询
-            </Button>
+            {selectedIds.size > 0 ? (
+              <div
+                role="group"
+                aria-label="所选候选操作"
+                className="flex h-9 w-full items-center justify-between gap-2"
+              >
+                <span
+                  role="status"
+                  className="shrink-0 text-xs font-medium tabular-nums"
+                >
+                  已选 {selectedIds.size} 项
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={isBusy}
+                    onClick={() => setDeleteDialogOpen(true)}
+                  >
+                    <Trash2 data-icon="inline-start" />
+                    删除所选
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={isBusy}
+                    onClick={() => {
+                      setSelectedIds(new Set())
+                      selectAllRef.current?.focus()
+                    }}
+                  >
+                    取消选择
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <InputGroup className="h-9 min-w-0 flex-1">
+                  <InputGroupAddon>
+                    <Search aria-hidden />
+                  </InputGroupAddon>
+                  <InputGroupInput
+                    type="search"
+                    aria-label="搜索字典候选"
+                    value={searchInput}
+                    onChange={(event) => setSearchInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault()
+                        handleSearch()
+                      }
+                    }}
+                    placeholder="按明文搜索候选"
+                    disabled={isBusy}
+                    className="text-xs"
+                  />
+                </InputGroup>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-9 shrink-0"
+                  disabled={isBusy}
+                  onClick={() => handleSearch()}
+                >
+                  查询
+                </Button>
+              </>
+            )}
           </CardContent>
         </Card>
+
+        {appliedSearch ? (
+          <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+            <p className="min-w-0 flex-1 break-all">
+              当前查询：{appliedSearch} · 匹配 {matchedCount} 条
+            </p>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={isBusy}
+              onClick={clearSearch}
+            >
+              清除搜索
+            </Button>
+          </div>
+        ) : null}
 
         <Card
           size="sm"
           className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden rounded-xl py-0 shadow-sm ring-border/60"
         >
-          {selectedIds.size > 0 ? (
-            <div
-              role="group"
-              aria-label="所选候选操作"
-              className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-3 py-2"
-            >
-              <span role="status" className="text-xs font-medium tabular-nums">
-                已选 {selectedIds.size} 项
-              </span>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={isBusy}
-                  onClick={() => setDeleteDialogOpen(true)}
-                >
-                  <Trash2 data-icon="inline-start" />
-                  删除所选
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={isBusy}
-                  onClick={() => {
-                    setSelectedIds(new Set())
-                    selectAllRef.current?.focus()
-                  }}
-                >
-                  取消选择
-                </Button>
-              </div>
-            </div>
-          ) : null}
           <CardContent className="min-h-0 flex-1 p-0">
             <ScrollArea
               ref={scrollAreaRef}
-              className="h-full max-h-full [&_[data-slot=table-container]]:overflow-visible"
+              className="dictionary-list-scroll h-full max-h-full [--scroll-fade-t-size:0px] [&_[data-slot=table-container]]:overflow-visible"
             >
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-card">
@@ -589,12 +693,14 @@ export function DictionaryPage() {
                         aria-label="全选当前列表"
                       />
                     </TableHead>
-                    <TableHead className="h-9 px-3 text-xs">候选明文</TableHead>
-                    <TableHead className="h-9 w-20 px-3 text-right text-xs">
-                      字节
+                    <TableHead className="h-9 px-3 text-xs">
+                      密码（点击复制）
+                    </TableHead>
+                    <TableHead className="h-9 w-24 px-3 text-right text-xs">
+                      长度
                     </TableHead>
                     <TableHead className="h-9 w-16 px-3 text-right text-xs">
-                      命中
+                      成功次数
                     </TableHead>
                   </TableRow>
                 </TableHeader>
@@ -605,25 +711,52 @@ export function DictionaryPage() {
                         <Empty className="min-h-[220px] border-0 px-6 py-10">
                           <EmptyHeader>
                             <EmptyMedia variant="icon">
-                              <Library />
+                              {loadState === "loading" ? (
+                                <Spinner />
+                              ) : (
+                                <Library />
+                              )}
                             </EmptyMedia>
                             <EmptyTitle className="text-sm">
-                              没有可显示的候选
+                              {loadState === "loading"
+                                ? "正在加载候选…"
+                                : loadState === "error"
+                                  ? "候选加载失败"
+                                  : appliedSearch
+                                    ? "没有匹配的候选"
+                                    : "字典还是空的"}
                             </EmptyTitle>
                             <EmptyDescription className="max-w-xs text-xs">
-                              导入文件或添加密码，重复项自动跳过。
+                              {loadState === "loading"
+                                ? "请稍候。"
+                                : loadState === "error"
+                                  ? "请重试加载，错误详情见下方状态区。"
+                                  : appliedSearch
+                                    ? "试试其他关键词，或清除搜索查看全部候选。"
+                                    : "导入文件或添加密码，重复项自动跳过。"}
                             </EmptyDescription>
                           </EmptyHeader>
-                          <EmptyContent>
-                            <Button
-                              size="sm"
-                              disabled={isBusy}
-                              onClick={() => setAddPanelOpen(true)}
-                            >
-                              <Plus data-icon="inline-start" />
-                              添加候选
-                            </Button>
-                          </EmptyContent>
+                          {loadState !== "loading" ? (
+                            <EmptyContent>
+                              <Button
+                                size="sm"
+                                disabled={isBusy}
+                                onClick={
+                                  loadState === "error"
+                                    ? handleRefresh
+                                    : appliedSearch
+                                      ? clearSearch
+                                      : openAddPanel
+                                }
+                              >
+                                {loadState === "error"
+                                  ? "重试加载"
+                                  : appliedSearch
+                                    ? "显示全部候选"
+                                    : "添加候选"}
+                              </Button>
+                            </EmptyContent>
+                          ) : null}
                         </Empty>
                       </TableCell>
                     </TableRow>
@@ -638,11 +771,9 @@ export function DictionaryPage() {
                           className={isBusy ? undefined : "cursor-pointer"}
                           onClick={() => toggleSelect(entry.id, !selected)}
                         >
-                          <TableCell
-                            className="w-10 px-3 py-2"
-                            onClick={(event) => event.stopPropagation()}
-                          >
+                          <TableCell className="w-10 px-3 py-2">
                             <Checkbox
+                              onClick={(event) => event.stopPropagation()}
                               checked={selected}
                               disabled={isBusy}
                               onCheckedChange={(checked) =>
@@ -652,14 +783,43 @@ export function DictionaryPage() {
                             />
                           </TableCell>
                           <TableCell className="max-w-0 px-3 py-2">
-                            <div className="min-w-0">
-                              <p className="truncate font-mono text-xs">
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              className="inline-flex max-w-full cursor-copy items-center gap-2 rounded-sm py-1 text-left font-mono text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-50"
+                              aria-label={`复制候选 #${entry.id} 的完整密码`}
+                              title="点击复制完整密码"
+                              onClick={async (event) => {
+                                event.stopPropagation()
+                                setCopiedId(null)
+                                setCopyFeedback("")
+                                try {
+                                  await navigator.clipboard.writeText(
+                                    entry.value
+                                  )
+                                  setCopiedId(entry.id)
+                                } catch {
+                                  setCopyFeedback(
+                                    "复制失败，请检查剪贴板权限后重试。"
+                                  )
+                                }
+                              }}
+                            >
+                              <span className="min-w-0 truncate">
                                 {entry.value}
-                              </p>
-                              <p className="mt-0.5 text-xs text-muted-foreground">
-                                #{entry.id}
-                              </p>
-                            </div>
+                              </span>
+                              {copiedId === entry.id ? (
+                                <Check
+                                  className="size-3 shrink-0"
+                                  aria-label="已复制"
+                                />
+                              ) : (
+                                <Copy
+                                  className="size-3 shrink-0 text-muted-foreground"
+                                  aria-hidden
+                                />
+                              )}
+                            </button>
                           </TableCell>
                           <TableCell className="px-3 py-2 text-right text-xs text-muted-foreground tabular-nums">
                             {entry.byteCount}
@@ -676,55 +836,216 @@ export function DictionaryPage() {
             </ScrollArea>
           </CardContent>
           <Separator />
-          <div className="flex h-10 shrink-0 items-center justify-between gap-3 px-3">
-            <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-              <span className="shrink-0 tabular-nums">
-                第 {displayedPage} / {pageCount} 页
-              </span>
-              <span aria-hidden="true">·</span>
-              <span
-                className={`flex min-w-0 items-center gap-1.5 ${
-                  statusTone === "error" ? "text-destructive" : ""
-                }`}
-                aria-live="polite"
+          {status || copyFeedback ? (
+            <div className="max-h-28 shrink-0 overflow-y-auto border-b px-3 py-2">
+              <p role="status" className="text-xs text-destructive">
+                {copyFeedback}
+              </p>
+              <p
+                role="status"
+                aria-live={addPanelOpen ? "off" : "polite"}
+                className={`flex items-start gap-2 text-xs break-all whitespace-pre-wrap ${statusTone === "error" ? "text-destructive" : "text-muted-foreground"}`}
               >
                 {statusTone === "busy" ? (
-                  <Spinner className="size-3 shrink-0" />
+                  <Spinner className="mt-0.5 size-3 shrink-0" />
                 ) : null}
-                <span className="truncate">{status}</span>
-              </span>
+                {status}
+              </p>
+              {statusTone === "error" ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2"
+                  disabled={isBusy}
+                  onClick={handleRefresh}
+                >
+                  刷新列表
+                </Button>
+              ) : null}
             </div>
-            <Pagination
-              aria-label="字典分页"
-              className="mx-0 w-auto shrink-0 justify-end"
-            >
-              <PaginationContent>
-                <PaginationItem>
+          ) : null}
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-3 py-2">
+            <span className="text-xs text-muted-foreground tabular-nums">
+              共 {matchedCount} 条
+            </span>
+            <div className="flex items-center gap-1">
+              {customSizeMode ? (
+                <form
+                  className="flex items-center gap-1"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    handlePageSizeChange(Number(customPageSize))
+                  }}
+                >
+                  <Input
+                    type="number"
+                    min={1}
+                    step={1}
+                    required
+                    autoFocus
+                    aria-label="自定义每页条数"
+                    value={customPageSize}
+                    onChange={(event) => setCustomPageSize(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") setCustomSizeMode(false)
+                    }}
+                    disabled={isBusy}
+                    className="h-8 w-24 text-xs"
+                  />
                   <Button
+                    type="submit"
                     size="icon-sm"
                     variant="ghost"
-                    disabled={isBusy || !hasPreviousPage}
-                    onClick={() => handlePageChange(pageIndex - 1)}
-                    aria-label="上一页"
-                    title="上一页"
+                    disabled={
+                      isBusy ||
+                      !Number.isSafeInteger(Number(customPageSize)) ||
+                      Number(customPageSize) < 1
+                    }
+                    aria-label="应用"
+                    title="应用"
                   >
-                    <ChevronLeft />
+                    <Check />
                   </Button>
-                </PaginationItem>
-                <PaginationItem>
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    disabled={isBusy || !hasNextPage}
-                    onClick={() => handlePageChange(pageIndex + 1)}
-                    aria-label="下一页"
-                    title="下一页"
+                </form>
+              ) : (
+                <Select
+                  value={String(pageSize)}
+                  onValueChange={(value) => {
+                    if (!value) return
+                    if (value === "custom") {
+                      setCustomPageSize(String(pageSize))
+                      setCustomSizeMode(true)
+                    } else handlePageSizeChange(Number(value))
+                  }}
+                  disabled={isBusy}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    aria-label="每页条数"
+                    className="bg-transparent px-1 text-xs text-muted-foreground"
                   >
-                    <ChevronRight />
-                  </Button>
-                </PaginationItem>
-              </PaginationContent>
-            </Pagination>
+                    <SelectValue>{pageSize} 行/页</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent
+                    side="top"
+                    align="end"
+                    alignItemWithTrigger={false}
+                  >
+                    {[50, 100, 500, 1000].map((size) => (
+                      <SelectItem key={size} value={String(size)}>
+                        {size} 行/页
+                      </SelectItem>
+                    ))}
+                    <SelectItem value="custom">自定义</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+              <Pagination
+                aria-label="字典分页"
+                className="mx-0 w-auto shrink-0"
+              >
+                <PaginationContent className="gap-0">
+                  <PaginationItem>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      disabled={isBusy || !hasPreviousPage}
+                      onClick={() => handlePageChange(0)}
+                      aria-label="首页"
+                      title="首页"
+                    >
+                      <ChevronsLeft />
+                    </Button>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      disabled={isBusy || !hasPreviousPage}
+                      onClick={() => handlePageChange(pageIndex - 1)}
+                      aria-label="上一页"
+                      title="上一页"
+                    >
+                      <ChevronLeft />
+                    </Button>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <form
+                      className="flex items-center gap-1"
+                      onSubmit={(event) => {
+                        event.preventDefault()
+                        commitJumpPage()
+                      }}
+                    >
+                      <Input
+                        type="number"
+                        min={1}
+                        max={pageCount || 1}
+                        step={1}
+                        required
+                        aria-label="跳转页码"
+                        title={`共 ${pageCount} 页`}
+                        value={pageCount === 0 ? "0" : jumpPage}
+                        onChange={(event) => {
+                          const value = event.target.value
+                          if (value === "") {
+                            setJumpPage("")
+                            return
+                          }
+                          const page = Number(value)
+                          if (Number.isFinite(page))
+                            setJumpPage(
+                              String(
+                                Math.min(
+                                  pageCount || 1,
+                                  Math.max(1, Math.trunc(page))
+                                )
+                              )
+                            )
+                        }}
+                        onBlur={commitJumpPage}
+                        disabled={isBusy || pageCount === 0}
+                        className="h-8 w-16 [appearance:textfield] rounded-lg border-border bg-transparent text-center text-xs tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      />
+                      <span
+                        className="shrink-0 text-xs text-muted-foreground tabular-nums"
+                        aria-label={`共 ${pageCount} 页`}
+                      >
+                        / {pageCount}
+                      </span>
+                    </form>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      disabled={isBusy || !hasNextPage}
+                      onClick={() => handlePageChange(pageIndex + 1)}
+                      aria-label="下一页"
+                      title="下一页"
+                    >
+                      <ChevronRight />
+                    </Button>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      disabled={isBusy || !hasNextPage}
+                      onClick={() => handlePageChange(pageCount - 1)}
+                      aria-label="末页"
+                      title="末页"
+                    >
+                      <ChevronsRight />
+                    </Button>
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+              <span
+                role="status"
+                className="sr-only"
+              >{`第 ${displayedPage} / ${pageCount} 页 · 共 ${matchedCount} 条`}</span>
+            </div>
           </div>
         </Card>
       </WorkbenchPageContent>
@@ -834,6 +1155,30 @@ export function DictionaryPage() {
               </Button>
             </Field>
           </div>
+          {addFeedback ? (
+            <div className="max-h-40 shrink-0 overflow-y-auto border-t px-6 py-4">
+              <p
+                role="status"
+                className={`text-sm break-all whitespace-pre-wrap ${statusTone === "error" ? "text-destructive" : "text-muted-foreground"}`}
+              >
+                {addFeedback}
+              </p>
+              {loadState === "error" ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2"
+                  disabled={isBusy}
+                  onClick={() => {
+                    setAddPanelOpen(false)
+                    handleRefresh()
+                  }}
+                >
+                  刷新列表
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
         </SheetContent>
       </Sheet>
 
@@ -876,10 +1221,10 @@ function splitLines(text: string): string[] {
 function formatLoadStatus(
   prefix: string,
   totalCount: number,
-  shownCount: number,
+  matchedCount: number,
   searchText: string
 ): string {
   const searchSuffix =
-    searchText.length === 0 ? "" : `，当前查询显示 ${shownCount} 条`
+    searchText.length === 0 ? "" : `，当前查询共匹配 ${matchedCount} 条`
   return `${prefix}：全局字典候选共 ${totalCount} 条${searchSuffix}。`
 }
