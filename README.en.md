@@ -50,7 +50,7 @@ git clone https://github.com/ZhongYanZhiShi/ArcRecall.git
 cd ArcRecall
 mise install
 pnpm install
-pnpm desktop:dev
+pnpm dev
 ```
 
 Build the full engine edition:
@@ -61,7 +61,7 @@ pnpm desktop:build
 
 Use `pnpm desktop:build:basic` to build the basic edition. For signed local packaging, `pnpm package` creates both EXE installers, their `.sig` files, and a `latest.json` pointing to the basic edition in `artifacts/package-vVERSION-*`.
 
-Browser preview is for UI development; file processing requires the desktop app. See the [contribution guide](./CONTRIBUTING.en.md) for project structure and development checks.
+`pnpm dev` starts the desktop app. Use `pnpm dev:web` for browser preview, which is for UI development; file processing requires the desktop app. See the [contribution guide](./CONTRIBUTING.en.md) for project structure and development checks.
 
 ## Contributing and license
 

@@ -394,7 +394,7 @@ async function canDecodeDictionary(
   }
 }
 
-// —— In-memory fallback for browser `pnpm dev` (no Tauri) ——
+// —— In-memory fallback for browser `pnpm dev:web` (no Tauri) ——
 
 type MemoryRow = DictionaryCandidateEntry
 

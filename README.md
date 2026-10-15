@@ -50,7 +50,7 @@ git clone https://github.com/ZhongYanZhiShi/ArcRecall.git
 cd ArcRecall
 mise install
 pnpm install
-pnpm desktop:dev
+pnpm dev
 ```
 
 构建完整引擎版：
@@ -61,7 +61,7 @@ pnpm desktop:build
 
 构建基础版使用 `pnpm desktop:build:basic`。本机签名打包使用 `pnpm package`，同时生成两版 EXE、各自的 `.sig` 和指向基础版的 `latest.json`，输出到 `artifacts/package-v版本号-*`。
 
-浏览器预览仅用于界面开发，文件处理需使用桌面版。项目结构与开发检查见[贡献指南](./CONTRIBUTING.md)。
+`pnpm dev` 会启动桌面客户端。浏览器预览使用 `pnpm dev:web`，仅用于界面开发，文件处理需使用桌面版。项目结构与开发检查见[贡献指南](./CONTRIBUTING.md)。
 
 ## 贡献与许可
 

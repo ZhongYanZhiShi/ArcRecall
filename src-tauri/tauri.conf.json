@@ -4,7 +4,7 @@
   "version": "0.1.2",
   "identifier": "io.github.zhongyanzhishi.arcrecall",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm dev:web",
     "devUrl": "http://localhost:3000",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../out"
