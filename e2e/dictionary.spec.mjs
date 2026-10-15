@@ -120,11 +120,9 @@ for (const width of [1280, 390]) {
     await expect(sheet.getByRole("status")).toContainText("新增 40")
     await sheet.getByRole("button", { name: "关闭", exact: true }).click()
     const viewport = page.locator(
-      '.dictionary-list-scroll [data-slot="scroll-area-viewport"]'
+      '.table-scroll-fade [data-slot="scroll-area-viewport"]'
     )
-    const header = page.locator(
-      '.dictionary-list-scroll [data-slot="table-header"]'
-    )
+    const header = page.locator('.table-scroll-fade [data-slot="table-header"]')
     const headerBefore = await header.boundingBox()
     await expect
       .poll(() =>

@@ -2,8 +2,6 @@
 
 import {
   Check,
-  ChevronLeft,
-  ChevronRight,
   Clipboard,
   Clock3,
   Eye,
@@ -57,11 +55,7 @@ import {
   InputGroupAddon,
   InputGroupInput,
 } from "@/components/ui/input-group"
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-} from "@/components/ui/pagination"
+import { TablePagination } from "@/components/ui/table-pagination"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Spinner } from "@/components/ui/spinner"
@@ -106,6 +100,7 @@ export function HistoryPage() {
   const [searchInput, setSearchInput] = React.useState("")
   const [appliedSearch, setAppliedSearch] = React.useState("")
   const [pageIndex, setPageIndex] = React.useState(0)
+  const [pageSize, setPageSize] = React.useState(HISTORY_PAGE_SIZE)
   const [loading, setLoading] = React.useState(true)
   const [working, setBusy] = React.useState(false)
   const busy = loading || working
@@ -129,7 +124,11 @@ export function HistoryPage() {
   }, [])
 
   const load = React.useCallback(
-    async (searchText = appliedSearch, requestedPage = pageIndex) => {
+    async (
+      searchText = appliedSearch,
+      requestedPage = pageIndex,
+      requestedPageSize = pageSize
+    ) => {
       const requestId = ++requestSequence.current
       setLoading(true)
       setError(null)
@@ -137,13 +136,13 @@ export function HistoryPage() {
       try {
         let next = await listRecoveryHistory({
           searchText,
-          skip: requestedPage * HISTORY_PAGE_SIZE,
-          take: HISTORY_PAGE_SIZE,
+          skip: requestedPage * requestedPageSize,
+          take: requestedPageSize,
         })
         if (requestId !== requestSequence.current) return null
         const pageCount = Math.max(
           1,
-          Math.ceil(next.matchedCount / HISTORY_PAGE_SIZE)
+          Math.ceil(next.matchedCount / requestedPageSize)
         )
         const resolvedPage =
           requestedPage >= pageCount && requestedPage > 0
@@ -152,13 +151,14 @@ export function HistoryPage() {
         if (resolvedPage !== requestedPage) {
           next = await listRecoveryHistory({
             searchText,
-            skip: resolvedPage * HISTORY_PAGE_SIZE,
-            take: HISTORY_PAGE_SIZE,
+            skip: resolvedPage * requestedPageSize,
+            take: requestedPageSize,
           })
         }
         if (requestId !== requestSequence.current) return null
         setResult(next)
         setPageIndex(resolvedPage)
+        setPageSize(requestedPageSize)
         setAppliedSearch(searchText)
         setRevealed(null)
         return next
@@ -171,7 +171,7 @@ export function HistoryPage() {
         if (requestId === requestSequence.current) setLoading(false)
       }
     },
-    [appliedSearch, pageIndex]
+    [appliedSearch, pageIndex, pageSize]
   )
 
   const latestLoad = React.useRef(load)
@@ -306,12 +306,6 @@ export function HistoryPage() {
     })
   }, [load, runBusy])
 
-  const pageCount = Math.max(
-    1,
-    Math.ceil((result?.matchedCount ?? 0) / HISTORY_PAGE_SIZE)
-  )
-  const displayedPage = Math.min(pageIndex + 1, pageCount)
-
   return (
     <WorkbenchPage>
       <WorkbenchPageContent className="gap-2">
@@ -438,7 +432,7 @@ export function HistoryPage() {
           </Alert>
           <CardContent className="min-h-0 flex-1 p-0">
             <div className="hidden h-full sm:block">
-              <ScrollArea className="h-full max-h-full [&_[data-slot=table-container]]:overflow-visible">
+              <ScrollArea className="table-scroll-fade h-full max-h-full [&_[data-slot=table-container]]:overflow-visible">
                 <Table>
                   <TableHeader className="sticky top-0 z-10 bg-card">
                     <TableRow className="hover:bg-transparent">
@@ -590,52 +584,23 @@ export function HistoryPage() {
             </div>
           </CardContent>
           <Separator />
-          <div className="flex h-10 shrink-0 items-center justify-between px-3">
-            <p className="text-xs text-muted-foreground tabular-nums">
-              第 {displayedPage} / {pageCount} 页
-            </p>
-            <Pagination
-              aria-label="历史分页"
-              className="mx-0 w-auto justify-end"
-            >
-              <PaginationContent>
-                <PaginationItem>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={busy || pageIndex <= 0}
-                    onClick={() =>
-                      void runBusy(async () => {
-                        await load(appliedSearch, pageIndex - 1)
-                      })
-                    }
-                    aria-label="上一页"
-                    title="上一页"
-                  >
-                    <ChevronLeft data-icon="inline-start" />
-                    上一页
-                  </Button>
-                </PaginationItem>
-                <PaginationItem>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={busy || pageIndex + 1 >= pageCount}
-                    onClick={() =>
-                      void runBusy(async () => {
-                        await load(appliedSearch, pageIndex + 1)
-                      })
-                    }
-                    aria-label="下一页"
-                    title="下一页"
-                  >
-                    下一页
-                    <ChevronRight data-icon="inline-end" />
-                  </Button>
-                </PaginationItem>
-              </PaginationContent>
-            </Pagination>
-          </div>
+          <TablePagination
+            label="历史分页"
+            pageIndex={pageIndex}
+            pageSize={pageSize}
+            totalCount={result?.matchedCount ?? 0}
+            busy={busy}
+            onPageChange={(nextPage) => {
+              void runBusy(async () => {
+                await load(appliedSearch, nextPage)
+              })
+            }}
+            onPageSizeChange={(size) => {
+              void runBusy(async () => {
+                await load(appliedSearch, 0, size)
+              })
+            }}
+          />
         </Card>
       </WorkbenchPageContent>
 

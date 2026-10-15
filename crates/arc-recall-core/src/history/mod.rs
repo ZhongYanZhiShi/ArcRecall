@@ -212,7 +212,7 @@ impl RecoveryHistoryStore {
         self.with_connection(|conn| {
             let search = query.search_text.trim().to_ascii_lowercase();
             let skip = query.skip.max(0);
-            let take = query.take.clamp(1, 500);
+            let take = query.take.max(1);
 
             // Recovery workers use independent store connections. Keep every
             // count and the displayed page in one snapshot while they write.
@@ -598,6 +598,38 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn list_supports_custom_page_sizes_above_500() {
+        let (_directory, store) = store();
+        let records: Vec<_> = (0..1205)
+            .map(|index| {
+                let mut row = record('a', 100, None);
+                row.fingerprint_sha256 = format!("{index:064x}");
+                row
+            })
+            .collect();
+        store.upsert_many(&records).unwrap();
+        let all = store
+            .list(&RecoveryHistoryQuery {
+                take: 20_000,
+                ..RecoveryHistoryQuery::default()
+            })
+            .unwrap();
+        assert_eq!(all.entries.len(), 1205);
+        for size in [50, 100, 500, 1000, 1200] {
+            let page = store
+                .list(&RecoveryHistoryQuery {
+                    skip: size,
+                    take: size,
+                    ..RecoveryHistoryQuery::default()
+                })
+                .unwrap();
+            assert_eq!(page.entries.len(), size.min(1205 - size) as usize);
+            assert_eq!(page.entries[0].id, all.entries[size as usize].id);
+            assert_eq!(page.matched_count, 1205);
+        }
     }
 
     #[test]

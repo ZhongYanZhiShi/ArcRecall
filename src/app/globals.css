@@ -4,8 +4,12 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Keep the sticky dictionary header opaque; fade only the rows below it. */
-.dictionary-list-scroll [data-slot="table-header"]::after {
+/* Keep the sticky table header opaque; fade only the rows below it. */
+.table-scroll-fade {
+  --scroll-fade-t-size: 0px;
+}
+
+.table-scroll-fade [data-slot="table-header"]::after {
   content: "";
   position: absolute;
   inset-inline: 0;
@@ -16,8 +20,7 @@
   opacity: 0;
 }
 
-.dictionary-list-scroll[data-overflow-y-start]
-  [data-slot="table-header"]::after {
+.table-scroll-fade[data-overflow-y-start] [data-slot="table-header"]::after {
   opacity: 1;
 }
 

@@ -1,10 +1,6 @@
 "use client"
 
 import {
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
   Copy,
   Check,
   FileUp,
@@ -41,14 +37,6 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   Empty,
   EmptyContent,
@@ -64,11 +52,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group"
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-} from "@/components/ui/pagination"
+import { TablePagination } from "@/components/ui/table-pagination"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Progress } from "@/components/ui/progress"
 import { Separator } from "@/components/ui/separator"
@@ -108,11 +92,6 @@ export function DictionaryPage() {
   const [entries, setEntries] = React.useState<DictionaryCandidateEntry[]>([])
   const [pageIndex, setPageIndex] = React.useState(0)
   const [pageSize, setPageSize] = React.useState(DICTIONARY_PAGE_SIZE)
-  const [customPageSize, setCustomPageSize] = React.useState(
-    String(DICTIONARY_PAGE_SIZE)
-  )
-  const [customSizeMode, setCustomSizeMode] = React.useState(false)
-  const [jumpPage, setJumpPage] = React.useState("1")
   const [matchedCount, setMatchedCount] = React.useState(0)
   const [searchInput, setSearchInput] = React.useState("")
   const [appliedSearch, setAppliedSearch] = React.useState("")
@@ -179,7 +158,6 @@ export function DictionaryPage() {
         setMatchedCount(result.matchedCount)
         setPageIndex(resolvedPageIndex)
         setPageSize(requestedPageSize)
-        setJumpPage(String(resolvedPageIndex + 1))
         setSelectedIds((prev) => {
           const visible = new Set(result.entries.map((e) => e.id))
           const next = new Set<number>()
@@ -472,9 +450,6 @@ export function DictionaryPage() {
   const someVisibleSelected =
     selectedVisibleCount > 0 && selectedVisibleCount < entries.length
   const pageCount = Math.ceil(matchedCount / pageSize)
-  const displayedPage = pageCount === 0 ? 0 : pageIndex + 1
-  const hasPreviousPage = pageIndex > 0
-  const hasNextPage = pageIndex + 1 < pageCount
 
   const handlePageChange = (nextPageIndex: number) => {
     if (
@@ -496,19 +471,9 @@ export function DictionaryPage() {
     if (!Number.isSafeInteger(size) || size < 1) return
     void runBusy("正在加载候选…", async () => {
       await loadEntries(appliedSearch, 0, size)
-      setCustomSizeMode(false)
       setStatusTone("ok")
       setStatus("")
     })
-  }
-
-  const commitJumpPage = () => {
-    if (!jumpPage) {
-      setJumpPage(String(displayedPage))
-      return
-    }
-    const page = Number(jumpPage)
-    if (Number.isInteger(page)) handlePageChange(page - 1)
   }
 
   return (
@@ -676,7 +641,7 @@ export function DictionaryPage() {
           <CardContent className="min-h-0 flex-1 p-0">
             <ScrollArea
               ref={scrollAreaRef}
-              className="dictionary-list-scroll h-full max-h-full [--scroll-fade-t-size:0px] [&_[data-slot=table-container]]:overflow-visible"
+              className="table-scroll-fade h-full max-h-full [&_[data-slot=table-container]]:overflow-visible"
             >
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-card">
@@ -864,189 +829,15 @@ export function DictionaryPage() {
               ) : null}
             </div>
           ) : null}
-          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-3 py-2">
-            <span className="text-xs text-muted-foreground tabular-nums">
-              共 {matchedCount} 条
-            </span>
-            <div className="flex items-center gap-1">
-              {customSizeMode ? (
-                <form
-                  className="flex items-center gap-1"
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    handlePageSizeChange(Number(customPageSize))
-                  }}
-                >
-                  <Input
-                    type="number"
-                    min={1}
-                    step={1}
-                    required
-                    autoFocus
-                    aria-label="自定义每页条数"
-                    value={customPageSize}
-                    onChange={(event) => setCustomPageSize(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Escape") setCustomSizeMode(false)
-                    }}
-                    disabled={isBusy}
-                    className="h-8 w-24 text-xs"
-                  />
-                  <Button
-                    type="submit"
-                    size="icon-sm"
-                    variant="ghost"
-                    disabled={
-                      isBusy ||
-                      !Number.isSafeInteger(Number(customPageSize)) ||
-                      Number(customPageSize) < 1
-                    }
-                    aria-label="应用"
-                    title="应用"
-                  >
-                    <Check />
-                  </Button>
-                </form>
-              ) : (
-                <Select
-                  value={String(pageSize)}
-                  onValueChange={(value) => {
-                    if (!value) return
-                    if (value === "custom") {
-                      setCustomPageSize(String(pageSize))
-                      setCustomSizeMode(true)
-                    } else handlePageSizeChange(Number(value))
-                  }}
-                  disabled={isBusy}
-                >
-                  <SelectTrigger
-                    size="sm"
-                    aria-label="每页条数"
-                    className="bg-transparent px-1 text-xs text-muted-foreground"
-                  >
-                    <SelectValue>{pageSize} 行/页</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent
-                    side="top"
-                    align="end"
-                    alignItemWithTrigger={false}
-                  >
-                    {[50, 100, 500, 1000].map((size) => (
-                      <SelectItem key={size} value={String(size)}>
-                        {size} 行/页
-                      </SelectItem>
-                    ))}
-                    <SelectItem value="custom">自定义</SelectItem>
-                  </SelectContent>
-                </Select>
-              )}
-              <Pagination
-                aria-label="字典分页"
-                className="mx-0 w-auto shrink-0"
-              >
-                <PaginationContent className="gap-0">
-                  <PaginationItem>
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      disabled={isBusy || !hasPreviousPage}
-                      onClick={() => handlePageChange(0)}
-                      aria-label="首页"
-                      title="首页"
-                    >
-                      <ChevronsLeft />
-                    </Button>
-                  </PaginationItem>
-                  <PaginationItem>
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      disabled={isBusy || !hasPreviousPage}
-                      onClick={() => handlePageChange(pageIndex - 1)}
-                      aria-label="上一页"
-                      title="上一页"
-                    >
-                      <ChevronLeft />
-                    </Button>
-                  </PaginationItem>
-                  <PaginationItem>
-                    <form
-                      className="flex items-center gap-1"
-                      onSubmit={(event) => {
-                        event.preventDefault()
-                        commitJumpPage()
-                      }}
-                    >
-                      <Input
-                        type="number"
-                        min={1}
-                        max={pageCount || 1}
-                        step={1}
-                        required
-                        aria-label="跳转页码"
-                        title={`共 ${pageCount} 页`}
-                        value={pageCount === 0 ? "0" : jumpPage}
-                        onChange={(event) => {
-                          const value = event.target.value
-                          if (value === "") {
-                            setJumpPage("")
-                            return
-                          }
-                          const page = Number(value)
-                          if (Number.isFinite(page))
-                            setJumpPage(
-                              String(
-                                Math.min(
-                                  pageCount || 1,
-                                  Math.max(1, Math.trunc(page))
-                                )
-                              )
-                            )
-                        }}
-                        onBlur={commitJumpPage}
-                        disabled={isBusy || pageCount === 0}
-                        className="h-8 w-16 [appearance:textfield] rounded-lg border-border bg-transparent text-center text-xs tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                      />
-                      <span
-                        className="shrink-0 text-xs text-muted-foreground tabular-nums"
-                        aria-label={`共 ${pageCount} 页`}
-                      >
-                        / {pageCount}
-                      </span>
-                    </form>
-                  </PaginationItem>
-                  <PaginationItem>
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      disabled={isBusy || !hasNextPage}
-                      onClick={() => handlePageChange(pageIndex + 1)}
-                      aria-label="下一页"
-                      title="下一页"
-                    >
-                      <ChevronRight />
-                    </Button>
-                  </PaginationItem>
-                  <PaginationItem>
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      disabled={isBusy || !hasNextPage}
-                      onClick={() => handlePageChange(pageCount - 1)}
-                      aria-label="末页"
-                      title="末页"
-                    >
-                      <ChevronsRight />
-                    </Button>
-                  </PaginationItem>
-                </PaginationContent>
-              </Pagination>
-              <span
-                role="status"
-                className="sr-only"
-              >{`第 ${displayedPage} / ${pageCount} 页 · 共 ${matchedCount} 条`}</span>
-            </div>
-          </div>
+          <TablePagination
+            label="字典分页"
+            pageIndex={pageIndex}
+            pageSize={pageSize}
+            totalCount={matchedCount}
+            busy={isBusy}
+            onPageChange={handlePageChange}
+            onPageSizeChange={handlePageSizeChange}
+          />
         </Card>
       </WorkbenchPageContent>
 
