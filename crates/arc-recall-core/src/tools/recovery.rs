@@ -368,6 +368,9 @@ impl Default for RecursiveRecoveryOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveredArchive {
     pub fingerprint_sha256: String,
+    pub archive_name: String,
+    pub archive_path: String,
+    pub output_directory: String,
     pub archive_format: ArchiveFormat,
     pub file_size: u64,
     pub volume_count: u32,
@@ -739,6 +742,9 @@ fn attach_recovered_archive(
         ensure_not_cancelled(cancellation)?;
         result.recovered_archive = fingerprint.map(|fingerprint_sha256| RecoveredArchive {
             fingerprint_sha256,
+            archive_name: analysis.file_name.clone(),
+            archive_path: analysis.archive_path.clone(),
+            output_directory: path_for_display(&result.output_directory),
             archive_format: analysis.format,
             file_size: analysis.file_size,
             volume_count: analysis.volume_count,

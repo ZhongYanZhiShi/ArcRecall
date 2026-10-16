@@ -79,7 +79,7 @@ export type OutputMode = "sibling" | "custom"
 type ExtractPageViewProps = {
   handlePickBatch?: () => void
   handleRepairCopy?: () => void
-  repairMessage?: string | null
+  repairedCopyPath?: string | null
   queueContent?: React.ReactNode
   outputMode: OutputMode
   setOutputMode: React.Dispatch<React.SetStateAction<OutputMode>>
@@ -129,7 +129,7 @@ type ExtractPageViewProps = {
 export function ExtractPageView({
   handlePickBatch,
   handleRepairCopy,
-  repairMessage,
+  repairedCopyPath,
   queueContent,
   outputMode,
   setOutputMode,
@@ -352,12 +352,12 @@ export function ExtractPageView({
             </Button>
           </div>
         ) : null}
-        {repairMessage ? (
+        {repairedCopyPath ? (
           <p
             role="status"
             className="mt-2 text-xs break-all text-muted-foreground"
           >
-            {repairMessage}
+            副本位置：{repairedCopyPath}
           </p>
         ) : null}
         {queueContent}

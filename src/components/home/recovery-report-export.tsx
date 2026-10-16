@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { toast } from "sonner"
 import { invoke } from "@tauri-apps/api/core"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -23,13 +24,11 @@ export function RecoveryReportExport({
   const [includePaths, setIncludePaths] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [savedPath, setSavedPath] = React.useState<string | null>(null)
-  const [error, setError] = React.useState<string | null>(null)
   const exporting = React.useRef(false)
   const exportReport = async (format: "json" | "csv") => {
     if (exporting.current) return
     exporting.current = true
     setBusy(true)
-    setError(null)
     setSavedPath(null)
     try {
       setSavedPath(
@@ -38,8 +37,12 @@ export function RecoveryReportExport({
           format,
         })
       )
+      toast.success("报告已导出", { id: "report-export" })
     } catch (reason) {
-      setError(String(reason))
+      toast.error(`导出失败：${String(reason)}`, {
+        id: "report-export",
+        duration: 6_000,
+      })
     } finally {
       exporting.current = false
       setBusy(false)
@@ -86,7 +89,7 @@ export function RecoveryReportExport({
         </div>
         {savedPath ? (
           <div role="status" className="space-y-1">
-            <p className="break-all">已导出：{savedPath}</p>
+            <p className="break-all">报告文件：{savedPath}</p>
             <Button
               size="xs"
               variant="ghost"
@@ -97,11 +100,6 @@ export function RecoveryReportExport({
               打开报告目录
             </Button>
           </div>
-        ) : null}
-        {error ? (
-          <p role="alert" className="text-destructive">
-            导出失败：{error}
-          </p>
         ) : null}
       </CollapsibleContent>
     </Collapsible>

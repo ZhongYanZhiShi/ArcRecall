@@ -17,6 +17,7 @@ import {
   Trash2,
 } from "lucide-react"
 import * as React from "react"
+import { toast } from "sonner"
 
 import {
   WorkbenchPage,
@@ -33,7 +34,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -181,7 +181,6 @@ export function LogsPage() {
   const [action, setAction] = React.useState<
     "export" | "backup" | "clear" | "directory" | null
   >(null)
-  const [notice, setNotice] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [clearDialogOpen, setClearDialogOpen] = React.useState(false)
   const [lastRefreshedAt, setLastRefreshedAt] = React.useState<number | null>(
@@ -192,6 +191,7 @@ export function LogsPage() {
     () => new Set()
   )
   const requestSequence = React.useRef(0)
+  const lastLoadError = React.useRef<string | null>(null)
   const [refreshQueue] = React.useState(createRefreshQueue)
   const visible = React.useRef(false)
   const listRef = React.useRef<HTMLDivElement>(null)
@@ -261,11 +261,17 @@ export function LogsPage() {
           setResult(next)
           setLastRefreshedAt(Date.now())
           setError(null)
+          lastLoadError.current = null
         } catch (reason) {
           if (requestSequence.current !== requestId) {
             return
           }
-          setError(`读取日志失败：${errorMessage(reason)}`)
+          const message = `读取日志失败：${errorMessage(reason)}`
+          setError(message)
+          if (!silent || lastLoadError.current !== message) {
+            toast.error(message, { id: "logs-load", duration: 6_000 })
+          }
+          lastLoadError.current = message
         } finally {
           if (requestSequence.current === requestId) {
             setLoading(false)
@@ -317,12 +323,14 @@ export function LogsPage() {
         return
       }
       setAction(nextAction)
-      setError(null)
       try {
-        setNotice(await operation())
+        toast.success(await operation(), { id: "logs-action", duration: 6_000 })
         await latestRefresh.current(true)
       } catch (reason) {
-        setError(errorMessage(reason))
+        toast.error(errorMessage(reason), {
+          id: "logs-action",
+          duration: 6_000,
+        })
       } finally {
         setAction(null)
       }
@@ -598,22 +606,9 @@ export function LogsPage() {
               </div>
             </div>
 
-            {error || notice ? (
-              <Alert
-                aria-live="polite"
-                aria-atomic="true"
-                variant={error ? "destructive" : "success"}
-                className="shrink-0 rounded-none border-x-0 border-t-0 px-3 py-1.5"
-              >
-                <AlertDescription className="text-xs">
-                  {error ?? notice}
-                </AlertDescription>
-              </Alert>
-            ) : (
-              <div className="shrink-0 border-b border-border/80 px-3 py-1.5 text-xs text-muted-foreground">
-                {passiveStatus}
-              </div>
-            )}
+            <div className="shrink-0 border-b border-border/80 px-3 py-1.5 text-xs text-muted-foreground">
+              {error ? "日志暂时无法更新，请点击刷新重试。" : passiveStatus}
+            </div>
 
             <div
               ref={listRef}

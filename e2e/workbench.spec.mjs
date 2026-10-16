@@ -162,7 +162,7 @@ test("真实 DOM：Sheet 勾选重试、切页保留状态、导出默认脱敏"
   await page.getByRole("button", { name: "导出任务报告", exact: true }).click()
   await page.getByRole("button", { name: "导出 JSON", exact: true }).click()
   await expect(
-    page.getByText("已导出：C:/fixtures/reports/result.json")
+    page.getByText("报告文件：C:/fixtures/reports/result.json")
   ).toBeVisible()
   const report = await page.evaluate(
     () => window.__ARC_TEST__.reports[0].report

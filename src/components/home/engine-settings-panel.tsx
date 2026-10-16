@@ -2,6 +2,7 @@
 
 import { CircleAlert, RefreshCw } from "lucide-react"
 import * as React from "react"
+import { toast } from "sonner"
 
 import {
   DefaultRecoveryCard,
@@ -202,11 +203,23 @@ export function EngineSettingsPanel() {
     void operation()
       .then((result) => {
         setEngineError(Boolean(result.error))
-        setEngineMessage(result.message)
+        setEngineMessage(null)
+        if (result.error) {
+          toast.error(result.message, { id: "engine-action", duration: 6_000 })
+        } else {
+          toast.success(result.message, {
+            id: "engine-action",
+            duration: 6_000,
+          })
+        }
       })
       .catch((error) => {
         setEngineError(true)
-        setEngineMessage(`操作失败：${errorMessage(error)}`)
+        setEngineMessage(null)
+        toast.error(`操作失败：${errorMessage(error)}`, {
+          id: "engine-action",
+          duration: 6_000,
+        })
       })
       .finally(() => setEngineBusy(false))
   }
@@ -275,7 +288,10 @@ export function EngineSettingsPanel() {
     setEngineMessage(null)
     void openPath(path.trim()).catch((error) => {
       setEngineError(true)
-      setEngineMessage(`无法跳转到该路径：${errorMessage(error)}`)
+      toast.error(`无法跳转到该路径：${errorMessage(error)}`, {
+        id: "engine-action",
+        duration: 6_000,
+      })
     })
   }
 
@@ -299,16 +315,22 @@ export function EngineSettingsPanel() {
     void updateSettings({ kind: "recoveryComputeMode", value: mode })
       .then((saved) => {
         setAppSettings(saved)
-        setRecoveryMessage(
+        setRecoveryMessage(null)
+        toast.success(
           mode === "gpuPreferred"
             ? "默认使用 GPU 优先；GPU 不可用或执行失败时自动回退 CPU。"
-            : "默认仅使用 CPU，恢复任务不会调用 GPU。"
+            : "默认仅使用 CPU，恢复任务不会调用 GPU。",
+          { id: "recovery-settings", duration: 4_000 }
         )
       })
       .catch((error) => {
         setAppSettings(previous)
         setRecoveryError(true)
-        setRecoveryMessage(`保存失败：${errorMessage(error)}`)
+        setRecoveryMessage(null)
+        toast.error(`保存失败：${errorMessage(error)}`, {
+          id: "recovery-settings",
+          duration: 6_000,
+        })
       })
       .finally(() => setRecoveryBusy(false))
   }
@@ -350,14 +372,20 @@ export function EngineSettingsPanel() {
       })
       setAppSettings(saved)
       setScanLimitDraft(null)
-      setRecoveryMessage(
+      setRecoveryMessage(null)
+      toast.success(
         limit === 0
           ? "已关闭目录文件数限制，下次任务生效。"
-          : `已保存：直属文件超过 ${limit} 个时跳过该目录及其子目录的嵌套扫描，下次任务生效。`
+          : `已保存扫描上限：${limit} 个文件，下次任务生效。`,
+        { id: "recovery-settings", duration: 4_000 }
       )
     } catch (error) {
       setRecoveryError(true)
-      setRecoveryMessage(`保存失败：${errorMessage(error)}`)
+      setRecoveryMessage(null)
+      toast.error(`保存失败：${errorMessage(error)}`, {
+        id: "recovery-settings",
+        duration: 6_000,
+      })
     } finally {
       setRecoveryBusy(false)
     }

@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { toast } from "sonner"
 
 import {
   aiClientDraftRequest,
@@ -186,17 +187,17 @@ export function useAiSettingsController({
     try {
       const shouldActivate = makeActive || draft.id === null
       const next = await persistDraft(makeActive)
-      setProfileFeedback({
-        error: false,
-        message: shouldActivate
-          ? "配置已保存并设为当前 AI 模型。"
-          : "AI 配置已保存。",
-      })
+      setProfileFeedback(null)
+      toast.success(
+        shouldActivate ? "配置已保存并设为当前 AI 模型。" : "AI 配置已保存。",
+        { id: "ai-profile" }
+      )
       return next
     } catch (reason) {
-      setProfileFeedback({
-        error: true,
-        message: `保存失败：${toErrorMessage(reason)}`,
+      setProfileFeedback(null)
+      toast.error(`保存失败：${toErrorMessage(reason)}`, {
+        id: "ai-profile",
+        duration: 6_000,
       })
       return null
     } finally {
@@ -216,17 +217,18 @@ export function useAiSettingsController({
     try {
       const next = await listAiModels(aiClientDraftRequest(draft))
       setModels(next)
-      setProfileFeedback({
-        error: false,
-        message:
-          next.length > 0
-            ? `已获取 ${next.length} 个模型，可从列表选择或继续手动填写。`
-            : "连接成功，但服务没有返回模型；可手动填写模型标识。",
-      })
+      setProfileFeedback(null)
+      toast.info(
+        next.length > 0
+          ? `已获取 ${next.length} 个模型，可从列表选择或继续手动填写。`
+          : "连接成功，但服务没有返回模型；可手动填写模型标识。",
+        { id: "ai-profile", duration: 4_000 }
+      )
     } catch (reason) {
-      setProfileFeedback({
-        error: true,
-        message: `获取模型失败：${toErrorMessage(reason)}`,
+      setProfileFeedback(null)
+      toast.error(`获取模型失败：${toErrorMessage(reason)}`, {
+        id: "ai-profile",
+        duration: 6_000,
       })
     } finally {
       setBusyScope(null)
@@ -244,11 +246,17 @@ export function useAiSettingsController({
     })
     try {
       const result = await testAiConnection(aiClientDraftRequest(draft))
-      setProfileFeedback({ error: !result.success, message: result.message })
+      setProfileFeedback(null)
+      if (result.success) {
+        toast.success(result.message, { id: "ai-profile", duration: 4_000 })
+      } else {
+        toast.error(result.message, { id: "ai-profile", duration: 6_000 })
+      }
     } catch (reason) {
-      setProfileFeedback({
-        error: true,
-        message: `连接失败：${toErrorMessage(reason)}`,
+      setProfileFeedback(null)
+      toast.error(`连接失败：${toErrorMessage(reason)}`, {
+        id: "ai-profile",
+        duration: 6_000,
       })
     } finally {
       setBusyScope(null)
@@ -284,12 +292,14 @@ export function useAiSettingsController({
       })
       setSettings(next)
       setPrompt(next.renamePrompt)
-      setPromptFeedback({ error: false, message: "AI 重命名提示词已保存。" })
+      setPromptFeedback(null)
+      toast.success("AI 重命名提示词已保存", { id: "ai-prompt" })
       return true
     } catch (reason) {
-      setPromptFeedback({
-        error: true,
-        message: `保存失败：${toErrorMessage(reason)}`,
+      setPromptFeedback(null)
+      toast.error(`保存失败：${toErrorMessage(reason)}`, {
+        id: "ai-prompt",
+        duration: 6_000,
       })
       return false
     } finally {
@@ -308,14 +318,13 @@ export function useAiSettingsController({
       setModels([])
       applySettings(next, undefined, false)
       setDeleteOpen(false)
-      setProfileFeedback({
-        error: false,
-        message: "AI 配置和对应的系统凭据已删除。",
-      })
+      setProfileFeedback(null)
+      toast.success("AI 配置和对应的系统凭据已删除", { id: "ai-profile" })
     } catch (reason) {
-      setProfileFeedback({
-        error: true,
-        message: `删除失败：${toErrorMessage(reason)}`,
+      setProfileFeedback(null)
+      toast.error(`删除失败：${toErrorMessage(reason)}`, {
+        id: "ai-profile",
+        duration: 6_000,
       })
     } finally {
       setBusyScope(null)

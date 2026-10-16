@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 
 import { ThemeProvider } from "@/components/theme-provider"
+import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { UpdateProvider } from "@/components/update-provider"
 
@@ -23,6 +24,7 @@ export default function RootLayout({
         <ThemeProvider>
           <TooltipProvider>
             <UpdateProvider>{children}</UpdateProvider>
+            <Toaster />
           </TooltipProvider>
         </ThemeProvider>
       </body>

@@ -497,7 +497,8 @@ fn run_recursive_recovery(
                     completed_archive_paths.push(nested.archive_path.clone());
                     state.extracted_nested_archives =
                         state.extracted_nested_archives.saturating_add(1);
-                    if let Some(record) = result.recovered_archive.clone() {
+                    if let Some(mut record) = result.recovered_archive.clone() {
+                        record.output_directory = path_for_display(&nested_output);
                         recovered_archives.push(record);
                     }
                     if let Some(password) = result.password.as_ref()

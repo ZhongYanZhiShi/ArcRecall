@@ -1,10 +1,10 @@
 "use client"
 
 import * as React from "react"
+import { toast } from "sonner"
 import { invoke } from "@tauri-apps/api/core"
 import { openRememberingDirectory } from "@/lib/file-dialog"
 import { Button } from "@/components/ui/button"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,18 +35,19 @@ export function DatabaseRestorePanel({
   const [preview, setPreview] = React.useState<RestorePreview | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [message, setMessage] = React.useState<string | null>(null)
-  const [error, setError] = React.useState<string | null>(null)
   const operation = React.useRef(false)
   const run = async (action: () => Promise<void>) => {
     if (operation.current) return
     operation.current = true
     setBusy(true)
-    setError(null)
     setMessage(null)
     try {
       await action()
     } catch (reason) {
-      setError(String(reason instanceof Error ? reason.message : reason))
+      toast.error(String(reason instanceof Error ? reason.message : reason), {
+        id: "database-action",
+        duration: 6_000,
+      })
     } finally {
       operation.current = false
       setBusy(false)
@@ -75,7 +76,8 @@ export function DatabaseRestorePanel({
           onClick={() =>
             void run(async () => {
               const result = await backupDatabase()
-              setMessage(`备份已创建：${result.path}`)
+              setMessage(`备份位置：${result.path}`)
+              toast.success("数据库备份已创建", { id: "database-action" })
             })
           }
         >
@@ -114,11 +116,6 @@ export function DatabaseRestorePanel({
         <p role="status" className="text-xs break-all text-muted-foreground">
           {message}
         </p>
-      ) : null}
-      {error ? (
-        <Alert variant="warning">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
       ) : null}
       <AlertDialog
         open={preview !== null}
@@ -161,9 +158,8 @@ export function DatabaseRestorePanel({
                     { token: preview.token }
                   )
                   setPreview(null)
-                  setMessage(
-                    `恢复完成。恢复前的数据备份：${result.safetyBackupPath}`
-                  )
+                  setMessage(`恢复前的数据备份：${result.safetyBackupPath}`)
+                  toast.success("数据库恢复完成", { id: "database-action" })
                   onRestored()
                 })
               }

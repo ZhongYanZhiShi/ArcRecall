@@ -3,7 +3,6 @@
 import { Download, RefreshCw } from "lucide-react"
 
 import { useAppUpdate } from "@/components/update-provider"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -28,7 +27,6 @@ export function AppUpdatePanel() {
     desktop,
     loaded,
     busy,
-    error,
     check,
     download,
     install,
@@ -92,11 +90,6 @@ export function AppUpdatePanel() {
           <p className="text-xs text-muted-foreground">
             上次成功检查：{new Date(status.lastChecked).toLocaleString("zh-CN")}
           </p>
-        ) : null}
-        {error || status.error ? (
-          <Alert variant="destructive">
-            <AlertDescription>{error ?? status.error}</AlertDescription>
-          </Alert>
         ) : null}
         {status.notes ? (
           <details className="text-sm">

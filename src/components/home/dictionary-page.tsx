@@ -12,6 +12,7 @@ import {
   Trash2,
 } from "lucide-react"
 import * as React from "react"
+import { toast } from "sonner"
 
 import {
   WorkbenchPage,
@@ -104,7 +105,6 @@ export function DictionaryPage() {
   >("loading")
   const [addFeedback, setAddFeedback] = React.useState("")
   const [copiedId, setCopiedId] = React.useState<number | null>(null)
-  const [copyFeedback, setCopyFeedback] = React.useState("")
   const [status, setStatus] = React.useState("解压时自动尝试此处的候选密码。")
   const [statusTone, setStatusTone] = React.useState<StatusTone>("neutral")
   const [addPanelOpen, setAddPanelOpen] = React.useState(false)
@@ -202,10 +202,13 @@ export function DictionaryPage() {
       } catch (error) {
         const message =
           error instanceof Error ? error.message : String(error ?? "未知错误")
-        setStatusTone("error")
-        setStatus(`操作失败：${message}`)
-        if (inAddPanel) setAddFeedback(`操作失败：${message}`)
+        toast.error(`操作失败：${message}`, {
+          id: "dictionary-action",
+          duration: 6_000,
+        })
       } finally {
+        setStatus("")
+        setAddFeedback("")
         operationBusy.current = false
         setIsBusy(false)
       }
@@ -232,10 +235,18 @@ export function DictionaryPage() {
           error instanceof Error ? error.message : String(error ?? "未知错误")
         if (!isDesktopRuntime()) {
           setStatusTone("neutral")
-          setStatus("预览字典刷新后清空；桌面端自动保存。")
+          setStatus("")
+          toast.info("预览字典刷新后清空；桌面端自动保存。", {
+            id: "dictionary-action",
+            duration: 4_000,
+          })
         } else {
           setStatusTone("error")
-          setStatus(`加载失败：${message}`)
+          setStatus("")
+          toast.error(`加载失败：${message}`, {
+            id: "dictionary-action",
+            duration: 6_000,
+          })
         }
       } finally {
         setIsBusy(false)
@@ -246,14 +257,14 @@ export function DictionaryPage() {
   const handleRefresh = () => {
     void runBusy("正在刷新候选…", async () => {
       const result = await loadEntries(appliedSearch, pageIndex)
-      setStatusTone("ok")
-      setStatus(
+      toast.success(
         formatLoadStatus(
           "刷新完成",
           result.totalCount,
           result.matchedCount,
           appliedSearch
-        )
+        ),
+        { id: "dictionary-action", duration: 4_000 }
       )
     })
   }
@@ -261,14 +272,14 @@ export function DictionaryPage() {
   const handleSearch = (searchText = searchInput) => {
     void runBusy("正在查询候选…", async () => {
       const result = await loadEntries(searchText, 0)
-      setStatusTone("ok")
-      setStatus(
+      toast.info(
         formatLoadStatus(
           "查询完成",
           result.totalCount,
           result.matchedCount,
           searchText
-        )
+        ),
+        { id: "dictionary-action", duration: 4_000 }
       )
     })
   }
@@ -294,9 +305,11 @@ export function DictionaryPage() {
       feedback += " 列表刷新失败，请刷新列表查看已添加的候选。"
       tone = "error"
     }
-    setStatusTone(tone)
-    setStatus(feedback)
-    setAddFeedback(feedback)
+    if (tone === "error") {
+      toast.warning(feedback, { id: "dictionary-action", duration: 6_000 })
+    } else {
+      toast.success(feedback, { id: "dictionary-action", duration: 4_000 })
+    }
   }
 
   const handleDeleteConfirm = () => {
@@ -310,9 +323,9 @@ export function DictionaryPage() {
       await deleteDictionaryCandidates(ids)
       setSelectedIds(new Set())
       const result = await loadEntries(appliedSearch, pageIndex)
-      setStatusTone("ok")
-      setStatus(
-        `已删除 ${count} 个候选。全局字典候选共 ${result.totalCount} 条。`
+      toast.success(
+        `已删除 ${count} 个候选。全局字典候选共 ${result.totalCount} 条。`,
+        { id: "dictionary-action", duration: 4_000 }
       )
     })
   }
@@ -372,8 +385,13 @@ export function DictionaryPage() {
         message += " 列表刷新失败，请点击刷新查看已导入的候选。"
         tone = "error"
       }
-      setStatusTone(tone)
-      setStatus(message)
+      if (tone === "error") {
+        toast.error(message, { id: "dictionary-action", duration: 6_000 })
+      } else if (tone === "neutral") {
+        toast.info(message, { id: "dictionary-action", duration: 6_000 })
+      } else {
+        toast.success(message, { id: "dictionary-action", duration: 6_000 })
+      }
     })
   }
 
@@ -695,7 +713,7 @@ export function DictionaryPage() {
                               {loadState === "loading"
                                 ? "请稍候。"
                                 : loadState === "error"
-                                  ? "请重试加载，错误详情见下方状态区。"
+                                  ? "请点击刷新列表重试。"
                                   : appliedSearch
                                     ? "试试其他关键词，或清除搜索查看全部候选。"
                                     : "导入文件或添加密码，重复项自动跳过。"}
@@ -757,15 +775,18 @@ export function DictionaryPage() {
                               onClick={async (event) => {
                                 event.stopPropagation()
                                 setCopiedId(null)
-                                setCopyFeedback("")
                                 try {
                                   await navigator.clipboard.writeText(
                                     entry.value
                                   )
                                   setCopiedId(entry.id)
+                                  toast.success("密码已复制", {
+                                    id: "dictionary-copy",
+                                  })
                                 } catch {
-                                  setCopyFeedback(
-                                    "复制失败，请检查剪贴板权限后重试。"
+                                  toast.error(
+                                    "复制失败，请检查剪贴板权限后重试。",
+                                    { id: "dictionary-copy", duration: 6_000 }
                                   )
                                 }
                               }}
@@ -801,11 +822,8 @@ export function DictionaryPage() {
             </ScrollArea>
           </CardContent>
           <Separator />
-          {status || copyFeedback ? (
+          {status ? (
             <div className="max-h-28 shrink-0 overflow-y-auto border-b px-3 py-2">
-              <p role="status" className="text-xs text-destructive">
-                {copyFeedback}
-              </p>
               <p
                 role="status"
                 aria-live={addPanelOpen ? "off" : "polite"}
@@ -983,14 +1001,7 @@ export function DictionaryPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel
-              onClick={() => {
-                setStatusTone("neutral")
-                setStatus("已取消删除。")
-              }}
-            >
-              取消
-            </AlertDialogCancel>
+            <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               disabled={isBusy || selectedIds.size === 0}

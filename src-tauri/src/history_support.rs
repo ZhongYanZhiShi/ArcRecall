@@ -86,6 +86,9 @@ pub fn save_recovered_history(
         match protected_password {
             Ok(protected_password) => records.push(RecoveryHistoryRecord {
                 fingerprint_sha256: archive.fingerprint_sha256.clone(),
+                archive_name: Some(archive.archive_name.clone()),
+                archive_path: Some(archive.archive_path.clone()),
+                output_directory: Some(archive.output_directory.clone()),
                 archive_format: archive.archive_format.label().into(),
                 file_size: archive.file_size,
                 volume_count: archive.volume_count,
@@ -117,6 +120,9 @@ mod tests {
             &database,
             &[RecoveredArchive {
                 fingerprint_sha256: "f".repeat(64),
+                archive_name: "原始资料.zip".into(),
+                archive_path: r"C:\Downloads\原始资料.zip".into(),
+                output_directory: r"D:\Extracted\原始资料".into(),
                 archive_format: ArchiveFormat::Zip,
                 file_size: 42,
                 volume_count: 1,
@@ -128,6 +134,16 @@ mod tests {
         assert_eq!(report.saved_count, 1);
         assert_eq!(report.failed_count, 0);
         let store = RecoveryHistoryStore::open(&database).unwrap();
+        let entry = store.list(&Default::default()).unwrap().entries.remove(0);
+        assert_eq!(entry.archive_name.as_deref(), Some("原始资料.zip"));
+        assert_eq!(
+            entry.archive_path.as_deref(),
+            Some(r"C:\Downloads\原始资料.zip")
+        );
+        assert_eq!(
+            entry.output_directory.as_deref(),
+            Some(r"D:\Extracted\原始资料")
+        );
         assert_eq!(
             history_password_by_fingerprint(&store, &"f".repeat(64)).unwrap(),
             Some(secret.into())

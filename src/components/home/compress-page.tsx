@@ -2,6 +2,7 @@
 
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import * as React from "react"
+import { toast } from "sonner"
 
 import { CompressPageView } from "@/components/home/compress-page-view"
 import {
@@ -180,8 +181,9 @@ export function CompressPage({
       }))
       setPasswordValidationRequested(false)
       setShowPassword(false)
+      toast.success("永久密码已保存", { id: "compression-action" })
     } catch (reason) {
-      setError(toErrorMessage(reason))
+      notifyCompressionError(reason)
     } finally {
       operationBusy.current = false
       setPasswordCredentialBusy(false)
@@ -199,8 +201,9 @@ export function CompressPage({
       setHasPermanentPassword(status.hasPassword)
       setUsePermanentPassword(false)
       setDeletePasswordOpen(false)
+      toast.success("永久密码已删除", { id: "compression-action" })
     } catch (reason) {
-      setError(toErrorMessage(reason))
+      notifyCompressionError(reason)
     } finally {
       operationBusy.current = false
       setPasswordCredentialBusy(false)
@@ -268,7 +271,9 @@ export function CompressPage({
           unlisten = stop
         }
       })
-      .catch((reason) => setError(toErrorMessage(reason)))
+      .catch((reason) => {
+        if (!disposed) notifyCompressionError(reason)
+      })
     return () => {
       disposed = true
       unlisten?.()
@@ -281,7 +286,7 @@ export function CompressPage({
     }
     if (!task) return
     void openPath(task.outputPath).catch((reason) =>
-      setError(toErrorMessage(reason))
+      notifyCompressionError(reason)
     )
   }, [openWhenDone, task])
 
@@ -303,7 +308,7 @@ export function CompressPage({
       if (isDraftLocked() || version !== operationVersion.current) return
       appendSources(paths)
     } catch (reason) {
-      setError(toErrorMessage(reason))
+      notifyCompressionError(reason)
     }
   }, [appendSources, isDraftLocked])
 
@@ -318,7 +323,7 @@ export function CompressPage({
         appendSources([path])
       }
     } catch (reason) {
-      setError(toErrorMessage(reason))
+      notifyCompressionError(reason)
     }
   }, [appendSources, isDraftLocked])
 
@@ -334,7 +339,7 @@ export function CompressPage({
         updateDraft("outputMode", "custom")
       }
     } catch (reason) {
-      setError(toErrorMessage(reason))
+      notifyCompressionError(reason)
     }
   }, [isDraftLocked, updateDraft])
 
@@ -458,7 +463,7 @@ export function CompressPage({
     try {
       await cancelCompression(task.taskId)
     } catch (reason) {
-      setError(toErrorMessage(reason))
+      notifyCompressionError(reason)
     }
   }, [task])
 
@@ -476,7 +481,7 @@ export function CompressPage({
       return
     }
     void openPath(task.outputPath).catch((reason) =>
-      setError(toErrorMessage(reason))
+      notifyCompressionError(reason)
     )
   }, [task])
 
@@ -525,4 +530,11 @@ export function CompressPage({
 
 function toErrorMessage(reason: unknown) {
   return reason instanceof Error ? reason.message : String(reason ?? "未知错误")
+}
+
+function notifyCompressionError(reason: unknown) {
+  toast.error(toErrorMessage(reason), {
+    id: "compression-action",
+    duration: 6_000,
+  })
 }

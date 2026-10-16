@@ -872,6 +872,9 @@ mod tests {
             &database,
             &[RecoveredArchive {
                 fingerprint_sha256: fingerprint.clone(),
+                archive_name: analysis.file_name.clone(),
+                archive_path: analysis.archive_path.clone(),
+                output_directory: analysis.suggested_output_directory.clone(),
                 archive_format: ArchiveFormat::SevenZip,
                 file_size: analysis.file_size,
                 volume_count: analysis.volume_count,

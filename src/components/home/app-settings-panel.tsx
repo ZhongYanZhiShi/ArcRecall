@@ -2,6 +2,7 @@
 
 import { CircleAlert, RefreshCw } from "lucide-react"
 import * as React from "react"
+import { toast } from "sonner"
 import { AppUpdatePanel } from "@/components/home/app-update-panel"
 
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -59,8 +60,6 @@ export function AppSettingsPanel() {
     String(DEFAULT_LOG_MAX_DISK_MIB)
   )
   const [busy, setBusy] = React.useState(false)
-  const [message, setMessage] = React.useState<string | null>(null)
-  const [messageError, setMessageError] = React.useState(false)
   const [loadBusy, setLoadBusy] = React.useState(false)
   const [loadError, setLoadError] = React.useState<string | null>(null)
   const request = React.useRef(0)
@@ -107,17 +106,19 @@ export function AppSettingsPanel() {
     }
     setAppSettings(next)
     setBusy(true)
-    setMessageError(false)
-    setMessage("正在保存日志级别…")
     void updateSettings({ kind: "logLevel", value: level })
       .then((saved) => {
         setAppSettings(saved)
-        setMessage(`日志级别已切换为“${logLevelLabel(level)}”。`)
+        toast.success(`日志级别已切换为“${logLevelLabel(level)}”`, {
+          id: "app-settings",
+        })
       })
       .catch((error) => {
         setAppSettings(previous)
-        setMessageError(true)
-        setMessage(`保存失败：${errorMessage(error)}`)
+        toast.error(`保存失败：${errorMessage(error)}`, {
+          id: "app-settings",
+          duration: 6_000,
+        })
       })
       .finally(() => setBusy(false))
   }
@@ -132,35 +133,32 @@ export function AppSettingsPanel() {
       maxDiskMib < MIN_LOG_MAX_DISK_MIB ||
       maxDiskMib > MAX_LOG_MAX_DISK_MIB
     ) {
-      setMessageError(true)
-      setMessage(
-        `请输入 ${MIN_LOG_MAX_DISK_MIB}–${MAX_LOG_MAX_DISK_MIB} 之间的整数。`
-      )
       return
     }
     if (
       (appSettings.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB) ===
       maxDiskMib
     ) {
-      setMessageError(false)
-      setMessage(`日志最大占用已是 ${maxDiskMib} MiB。`)
+      toast.info(`日志最大占用已是 ${maxDiskMib} MiB`, { id: "app-settings" })
       return
     }
 
     setBusy(true)
-    setMessageError(false)
-    setMessage("正在保存日志容量…")
     void updateSettings({ kind: "logMaxDiskMib", value: maxDiskMib })
       .then((saved) => {
         const savedMaxDiskMib =
           saved.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB
         setAppSettings(saved)
         setLogMaxDiskInput(String(savedMaxDiskMib))
-        setMessage(`日志最大占用已调整为 ${savedMaxDiskMib} MiB。`)
+        toast.success(`日志最大占用已调整为 ${savedMaxDiskMib} MiB`, {
+          id: "app-settings",
+        })
       })
       .catch((error) => {
-        setMessageError(true)
-        setMessage(`保存失败：${errorMessage(error)}`)
+        toast.error(`保存失败：${errorMessage(error)}`, {
+          id: "app-settings",
+          duration: 6_000,
+        })
       })
       .finally(() => setBusy(false))
   }
@@ -264,7 +262,6 @@ export function AppSettingsPanel() {
                     value={logMaxDiskInput}
                     onChange={(event) => {
                       setLogMaxDiskInput(event.target.value)
-                      setMessage(null)
                     }}
                     aria-describedby="log-max-disk-hint"
                     aria-invalid={logCapacityInvalid}
@@ -305,7 +302,6 @@ export function AppSettingsPanel() {
               onValueChange={(value) => {
                 if (value[0]) {
                   setLogMaxDiskInput(value[0])
-                  setMessage(null)
                 }
               }}
               variant="outline"
@@ -323,15 +319,6 @@ export function AppSettingsPanel() {
               MiB；达到上限后自动删除最旧日志。
             </FieldDescription>
           </FieldSet>
-          {message ? (
-            <Alert
-              variant={
-                messageError ? "destructive" : busy ? "default" : "success"
-              }
-            >
-              <AlertDescription aria-live="polite">{message}</AlertDescription>
-            </Alert>
-          ) : null}
         </CardContent>
       </Card>
     </div>

@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS recovery_history (
     last_verified_at_ms   INTEGER NOT NULL,
     verification_count    INTEGER NOT NULL DEFAULT 1,
     password_protected    TEXT,
+    archive_name          TEXT,
+    archive_path          TEXT,
+    output_directory      TEXT,
     CHECK (length(fingerprint_sha256) = 64),
     CHECK (file_size >= 0),
     CHECK (volume_count > 0),
@@ -44,6 +47,9 @@ pub enum RecoveryHistoryError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryHistoryRecord {
     pub fingerprint_sha256: String,
+    pub archive_name: Option<String>,
+    pub archive_path: Option<String>,
+    pub output_directory: Option<String>,
     pub archive_format: String,
     pub file_size: u64,
     pub volume_count: u32,
@@ -62,6 +68,12 @@ pub struct StoredRecoveryPassword {
 pub struct RecoveryHistoryEntry {
     pub id: i64,
     pub fingerprint_prefix: String,
+    #[serde(default)]
+    pub archive_name: Option<String>,
+    #[serde(default)]
+    pub archive_path: Option<String>,
+    #[serde(default)]
+    pub output_directory: Option<String>,
     pub archive_format: String,
     pub file_size: u64,
     pub volume_count: u32,
@@ -123,6 +135,7 @@ impl RecoveryHistoryStore {
         store.with_connection(|conn| {
             conn.execute_batch(SCHEMA_SQL)?;
             migrate_password_column(conn)?;
+            migrate_location_columns(conn)?;
             Ok(())
         })?;
         Ok(store)
@@ -174,9 +187,21 @@ impl RecoveryHistoryStore {
         conn.prepare_cached(
             "INSERT INTO recovery_history (
                     fingerprint_sha256, archive_format, file_size, volume_count,
-                    first_success_at_ms, last_verified_at_ms, password_protected
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
+                    first_success_at_ms, last_verified_at_ms, verification_count, password_protected,
+                    archive_name, archive_path, output_directory
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 1, ?6, ?7, ?8, ?9)
                  ON CONFLICT(fingerprint_sha256) DO UPDATE SET
+                    archive_name = COALESCE(recovery_history.archive_name, excluded.archive_name),
+                    archive_path = CASE
+                        WHEN excluded.last_verified_at_ms >= recovery_history.last_verified_at_ms
+                        THEN COALESCE(excluded.archive_path, recovery_history.archive_path)
+                        ELSE recovery_history.archive_path
+                    END,
+                    output_directory = CASE
+                        WHEN excluded.last_verified_at_ms >= recovery_history.last_verified_at_ms
+                        THEN COALESCE(excluded.output_directory, recovery_history.output_directory)
+                        ELSE recovery_history.output_directory
+                    END,
                     archive_format = excluded.archive_format,
                     file_size = excluded.file_size,
                     volume_count = excluded.volume_count,
@@ -201,6 +226,9 @@ impl RecoveryHistoryStore {
             volume_count,
             verified_at_ms,
             protected_password,
+            record.archive_name,
+            record.archive_path,
+            record.output_directory,
         ])?;
         Ok(())
     }
@@ -226,7 +254,10 @@ impl RecoveryHistoryStore {
             let matched_count = count_query(
                 &tx,
                 "SELECT COUNT(*) FROM recovery_history
-                 WHERE ?1 = '' OR instr(fingerprint_sha256, ?1) = 1;",
+                 WHERE ?1 = '' OR instr(fingerprint_sha256, ?1) = 1
+                    OR instr(lower(archive_name), ?1) > 0
+                    OR instr(lower(archive_path), ?1) > 0
+                    OR instr(lower(output_directory), ?1) > 0;",
                 Some(&search),
             )?;
 
@@ -240,9 +271,13 @@ impl RecoveryHistoryStore {
                     first_success_at_ms,
                     last_verified_at_ms,
                     verification_count,
-                    password_protected IS NOT NULL
+                    password_protected IS NOT NULL,
+                    archive_name, archive_path, output_directory
                  FROM recovery_history
                  WHERE ?1 = '' OR instr(fingerprint_sha256, ?1) = 1
+                    OR instr(lower(archive_name), ?1) > 0
+                    OR instr(lower(archive_path), ?1) > 0
+                    OR instr(lower(output_directory), ?1) > 0
                  ORDER BY last_verified_at_ms DESC, id DESC
                  LIMIT ?3 OFFSET ?4;",
             )?;
@@ -259,6 +294,9 @@ impl RecoveryHistoryStore {
                         last_verified_at_ms: row.get::<_, i64>(6)?.max(0) as u64,
                         verification_count: row.get::<_, i64>(7)?.max(0) as u64,
                         has_password: row.get(8)?,
+                        archive_name: row.get(9)?,
+                        archive_path: row.get(10)?,
+                        output_directory: row.get(11)?,
                     })
                 },
             )?;
@@ -418,6 +456,26 @@ fn migrate_password_column(conn: &Connection) -> Result<(), RecoveryHistoryError
     Ok(())
 }
 
+fn migrate_location_columns(conn: &Connection) -> Result<(), RecoveryHistoryError> {
+    let tx = conn.unchecked_transaction()?;
+    let columns = {
+        let mut statement = tx.prepare("PRAGMA table_info(recovery_history);")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    for column in ["archive_name", "archive_path", "output_directory"] {
+        if !columns.iter().any(|existing| existing == column) {
+            tx.execute(
+                &format!("ALTER TABLE recovery_history ADD COLUMN {column} TEXT;"),
+                [],
+            )?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 fn checkpoint_deleted_content(conn: &Connection) -> Result<(), RecoveryHistoryError> {
     // `secure_delete=ON` clears deleted cells. A WAL truncate is sufficient to
     // remove the journal copy without a full rewrite of the shared database.
@@ -459,6 +517,9 @@ mod tests {
     fn record(fingerprint: char, timestamp: u64, password: Option<&str>) -> RecoveryHistoryRecord {
         RecoveryHistoryRecord {
             fingerprint_sha256: fingerprint.to_string().repeat(64),
+            archive_name: None,
+            archive_path: None,
+            output_directory: None,
             archive_format: "7z".into(),
             file_size: 1_024,
             volume_count: 1,
@@ -507,6 +568,48 @@ mod tests {
                 .as_deref(),
             Some("saved")
         );
+    }
+
+    #[test]
+    fn history_preserves_original_name_and_tracks_latest_locations_after_reopening() {
+        let (directory, store) = store();
+        let mut first = record('a', 100, Some("secret"));
+        first.archive_name = Some("原始资料.7z".into());
+        first.archive_path = Some(r"C:\Downloads\原始资料.7z".into());
+        first.output_directory = Some(r"C:\Downloads\原始资料".into());
+        store.upsert(&first).unwrap();
+        let mut renamed = record('a', 200, Some("secret"));
+        renamed.archive_name = Some("renamed.7z".into());
+        renamed.archive_path = Some(r"D:\Archive\renamed.7z".into());
+        renamed.output_directory = Some(r"D:\Extracted\资料_100%".into());
+        store.upsert(&renamed).unwrap();
+        store.upsert(&first).unwrap(); // Older workers must not revert the latest locations.
+        drop(store);
+
+        let store = RecoveryHistoryStore::open(directory.path().join("history.db")).unwrap();
+        let all = store.list(&RecoveryHistoryQuery::default()).unwrap();
+        assert_eq!(all.total_count, 1);
+        assert_eq!(all.entries[0].archive_name, first.archive_name);
+        assert_eq!(all.entries[0].archive_path, renamed.archive_path);
+        assert_eq!(all.entries[0].output_directory, renamed.output_directory);
+        for search in ["原始资料", "RENamed", r"D:\Archive", "资料_100%"] {
+            let found = store
+                .list(&RecoveryHistoryQuery {
+                    search_text: search.into(),
+                    ..RecoveryHistoryQuery::default()
+                })
+                .unwrap();
+            assert_eq!(found.matched_count, 1, "search: {search}");
+            assert_eq!(found.entries.len(), 1);
+        }
+        let missing = store
+            .list(&RecoveryHistoryQuery {
+                search_text: "资料_100_".into(),
+                ..RecoveryHistoryQuery::default()
+            })
+            .unwrap();
+        assert_eq!(missing.matched_count, 0);
+        assert!(missing.entries.is_empty());
     }
 
     #[test]
@@ -582,6 +685,23 @@ mod tests {
         drop(connection);
 
         let store = RecoveryHistoryStore::open(&path).unwrap();
+
+        let legacy = store.list(&RecoveryHistoryQuery::default()).unwrap();
+        assert_eq!(legacy.entries[0].archive_name, None);
+        assert_eq!(legacy.entries[0].archive_path, None);
+        assert_eq!(legacy.entries[0].output_directory, None);
+        let mut enriched = record('e', 200, None);
+        enriched.archive_name = Some("重新解压.zip".into());
+        enriched.archive_path = Some(r"C:\重新解压.zip".into());
+        store.upsert(&enriched).unwrap();
+        assert_eq!(
+            store
+                .list(&RecoveryHistoryQuery::default())
+                .unwrap()
+                .entries[0]
+                .archive_name,
+            enriched.archive_name
+        );
 
         assert_eq!(
             store.stored_passwords().unwrap()[0].protected_password,

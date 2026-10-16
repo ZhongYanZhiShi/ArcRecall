@@ -7,6 +7,9 @@ export const HISTORY_PAGE_SIZE = 100
 export type RecoveryHistoryEntry = {
   id: number
   fingerprintPrefix: string
+  archiveName: string | null
+  archivePath: string | null
+  outputDirectory: string | null
   archiveFormat: string
   fileSize: number
   volumeCount: number
@@ -78,6 +81,9 @@ const previewStore = (() => {
     {
       id: 1,
       fingerprintPrefix: "8bd14e77ca93",
+      archiveName: "项目设计素材.7z",
+      archivePath: "D:\\下载\\设计资料\\项目设计素材.7z",
+      outputDirectory: "D:\\工作\\项目设计素材",
       archiveFormat: "7z",
       fileSize: 1_284_673_024,
       volumeCount: 1,
@@ -90,6 +96,9 @@ const previewStore = (() => {
     {
       id: 2,
       fingerprintPrefix: "41c7b1f06d52",
+      archiveName: "课程资料合集.rar",
+      archivePath: "C:\\Users\\demo\\Downloads\\课程资料合集（已重命名）.rar",
+      outputDirectory: "D:\\学习资料\\课程资料合集",
       archiveFormat: "RAR5",
       fileSize: 386_146_304,
       volumeCount: 1,
@@ -102,6 +111,9 @@ const previewStore = (() => {
     {
       id: 3,
       fingerprintPrefix: "d062ab19e405",
+      archiveName: null,
+      archivePath: null,
+      outputDirectory: null,
       archiveFormat: "ZIP",
       fileSize: 92_438_528,
       volumeCount: 1,
@@ -114,11 +126,20 @@ const previewStore = (() => {
   ]
 
   function list(query: RecoveryHistoryQuery): RecoveryHistoryListResult {
-    const search = (query.searchText ?? "").trim().toLowerCase()
+    const search = (query.searchText ?? "")
+      .trim()
+      .replace(/[A-Z]/g, (letter) => letter.toLowerCase())
     const skip = Math.max(0, query.skip ?? 0)
     const take = Math.max(1, query.take ?? HISTORY_PAGE_SIZE)
     const filtered = rows.filter(
-      (row) => search === "" || row.fingerprintPrefix.startsWith(search)
+      (row) =>
+        search === "" ||
+        row.fingerprintPrefix.startsWith(search) ||
+        [row.archiveName, row.archivePath, row.outputDirectory].some((value) =>
+          value
+            ?.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
+            .includes(search)
+        )
     )
     return {
       entries: filtered.slice(skip, skip + take).map(stripPassword),
@@ -151,6 +172,9 @@ function stripPassword(row: PreviewRow): RecoveryHistoryEntry {
   return {
     id: row.id,
     fingerprintPrefix: row.fingerprintPrefix,
+    archiveName: row.archiveName,
+    archivePath: row.archivePath,
+    outputDirectory: row.outputDirectory,
     archiveFormat: row.archiveFormat,
     fileSize: row.fileSize,
     volumeCount: row.volumeCount,

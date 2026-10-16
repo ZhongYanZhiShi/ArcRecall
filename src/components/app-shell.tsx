@@ -11,6 +11,7 @@ import {
   Settings,
 } from "lucide-react"
 import * as React from "react"
+import { toast } from "sonner"
 
 import { buttonVariants } from "@/components/ui/button"
 import { PillNav, type PillNavItem } from "@/components/ui/pill-nav"
@@ -65,19 +66,19 @@ export function AppShell({
   onNavPreload,
   children,
 }: AppShellProps) {
-  const [linkError, setLinkError] = React.useState<string | null>(null)
-
   async function handleRepositoryClick(
     event: React.MouseEvent<HTMLAnchorElement>
   ) {
     if (!isTauri()) return
 
     event.preventDefault()
-    setLinkError(null)
     try {
       await openUrl(event.currentTarget.href)
     } catch {
-      setLinkError("无法打开浏览器，请重试或复制 GitHub 链接手动打开。")
+      toast.error("无法打开浏览器，请重试或复制 GitHub 链接手动打开。", {
+        id: "repository-link",
+        duration: 6_000,
+      })
     }
   }
 
@@ -117,14 +118,6 @@ export function AppShell({
           </svg>
           GitHub
         </a>
-        {linkError ? (
-          <p
-            role="alert"
-            className="pointer-events-auto absolute right-4 bottom-14 max-w-72 rounded-xl border border-destructive/30 bg-card p-3 text-xs text-destructive shadow-sm"
-          >
-            {linkError}
-          </p>
-        ) : null}
       </footer>
     </div>
   )

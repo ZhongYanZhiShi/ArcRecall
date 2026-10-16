@@ -219,14 +219,20 @@ try {
       password
     )
   )
+  await page.getByRole("button", { name: "复制恢复密码", exact: true }).click()
+  await expect(
+    page
+      .locator("[data-sonner-toaster]")
+      .getByText("密码已复制", { exact: true })
+  ).toBeVisible()
   await page.getByRole("button", { name: "导出任务报告", exact: true }).click()
   await expect(
     page.getByRole("button", { name: "导出 JSON", exact: true })
   ).toBeVisible()
   await page.getByRole("button", { name: "导出 JSON", exact: true }).click()
-  await expect(page.getByText(/已导出：/)).toBeVisible()
+  await expect(page.getByText(/报告文件：/)).toBeVisible()
   await page.getByRole("button", { name: "导出 CSV", exact: true }).click()
-  await expect(page.getByText(/已导出：.*\.csv/)).toBeVisible()
+  await expect(page.getByText(/报告文件：.*\.csv/)).toBeVisible()
   for (const name of await readdir(join(data, "exports"))) {
     const content = await readFile(join(data, "exports", name), "utf8")
     assert.ok(!content.includes(password), "Report contains password")
@@ -238,8 +244,64 @@ try {
       assert.equal(JSON.parse(content).summary.status, "success")
   }
   await page.screenshot({ path: join(evidence, "native-result.png") })
+  const history = await invoke("history_list", {
+    query: { searchText: "literal-password", skip: 0, take: 100 },
+  })
+  assert.equal(
+    history.totalCount,
+    1,
+    "Identical archive contents share a history record"
+  )
+  assert.equal(history.matchedCount, 1)
+  const savedArchive = history.entries[0]
+  assert.equal(
+    savedArchive.archiveName,
+    "literal-password.7z",
+    "Keep the first recorded name after a renamed copy succeeds"
+  )
+  assert.equal(resolve(savedArchive.archivePath), resolve(pending))
+  assert.equal(
+    resolve(savedArchive.outputDirectory),
+    resolve(status.outputDirectory)
+  )
   await close()
   await launch()
+  await page.getByRole("button", { name: "历史", exact: true }).click()
+  const historyTable = page.getByRole("table")
+  await expect(
+    historyTable.getByText("literal-password.7z", { exact: true })
+  ).toBeVisible()
+  await expect(
+    historyTable.getByText(savedArchive.archivePath, { exact: true })
+  ).toBeVisible()
+  await expect(
+    historyTable.getByText(savedArchive.outputDirectory, { exact: true })
+  ).toBeVisible()
+  await page.getByRole("button", { name: "查看密码", exact: true }).click()
+  await expect(
+    historyTable.locator("code").filter({ hasText: password })
+  ).toBeVisible()
+  const historySearch = page.getByRole("searchbox", {
+    name: "搜索压缩包名称或路径",
+  })
+  await historySearch.fill("pending.7z")
+  await historySearch.press("Enter")
+  await expect(
+    historyTable.getByText("literal-password.7z", { exact: true })
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "查看密码", exact: true })
+  ).toBeVisible()
+  await page
+    .getByRole("button", { name: "复制压缩包路径", exact: true })
+    .click()
+  await expect(
+    page
+      .locator("[data-sonner-toaster]")
+      .getByText("路径已复制", { exact: true })
+  ).toBeVisible()
+  await page.screenshot({ path: join(evidence, "native-history.png") })
+  await page.getByRole("button", { name: "解压", exact: true }).click()
   await expect(
     page.getByRole("button", { name: "暂无待处理任务", exact: true })
   ).toBeDisabled()

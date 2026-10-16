@@ -521,6 +521,9 @@ mod tests {
         history
             .upsert_many(&[RecoveryHistoryRecord {
                 fingerprint_sha256: "a".repeat(64),
+                archive_name: None,
+                archive_path: None,
+                output_directory: None,
                 archive_format: "ZIP".into(),
                 file_size: 22,
                 volume_count: 1,

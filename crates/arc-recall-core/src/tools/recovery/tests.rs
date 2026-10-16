@@ -1117,6 +1117,16 @@ fn recursive_cumulative_budget_preserves_completed_archives_and_stops_siblings()
         assert_eq!(result.extracted_nested_archives, 1, "{name}");
         assert_eq!(result.pending_archive_paths.len(), 2);
         assert_eq!(result.recovered_archives.len(), 2);
+        for record in &result.recovered_archives {
+            let archive_path = Path::new(&record.archive_path);
+            assert!(archive_path.is_file());
+            assert_eq!(
+                archive_path.file_name().unwrap().to_string_lossy(),
+                record.archive_name
+            );
+            assert!(Path::new(&record.output_directory).is_dir());
+            assert!(!record.output_directory.contains(".partial"));
+        }
         assert!(job.output_directory.join("inputs").is_dir());
         assert!(
             !fs::read_dir(job.output_directory.join("inputs"))

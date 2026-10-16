@@ -1,11 +1,11 @@
 "use client"
 
 import * as React from "react"
+import { toast } from "sonner"
 import { invoke } from "@tauri-apps/api/core"
 
 import { isDesktopRuntime } from "@/lib/dictionary"
 import { updateSettings } from "@/lib/settings"
-import { Button } from "@/components/ui/button"
 
 type UpdateStatus = {
   currentVersion: string
@@ -61,10 +61,15 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
   const [loaded, setLoaded] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
-  const [dismissedVersion, setDismissedVersion] = React.useState<string | null>(
-    null
-  )
+  const announcedUpdates = React.useRef(new Set<string>())
+  const reportedError = React.useRef<string | null>(null)
   const operation = React.useRef(false)
+
+  const reportUpdateError = React.useCallback((message: string) => {
+    reportedError.current = message
+    setError(message)
+    toast.error(message, { id: "app-update", duration: 6_000 })
+  }, [])
 
   const refresh = React.useCallback(async () => {
     const next = await invoke<UpdateStatus>("app_update_status")
@@ -85,15 +90,18 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       try {
         await invoke(command, args)
       } catch (cause) {
-        // Automatic failures are retained in the settings panel, without modal interruptions.
-        if (!automatic) setError(String(cause))
+        if (!automatic) reportUpdateError(String(cause))
       } finally {
         operation.current = false
         setBusy(false)
-        await refresh().catch((cause) => setError(String(cause)))
+        await refresh().catch((cause) => {
+          const message = `读取更新状态失败：${String(cause)}`
+          if (automatic) setError(message)
+          else reportUpdateError(message)
+        })
       }
     },
-    [refresh]
+    [refresh, reportUpdateError]
   )
 
   React.useEffect(() => {
@@ -106,6 +114,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return
         setLoaded(true)
         setStatus(next)
+        setError(null)
       } catch (cause) {
         if (!cancelled) setError(`读取更新状态失败：${String(cause)}`)
       }
@@ -140,7 +149,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       await updateSettings({ kind: "autoUpdate", value: enabled })
       await refresh()
     } catch (cause) {
-      setError(`保存自动更新设置失败：${String(cause)}`)
+      reportUpdateError(`保存自动更新设置失败：${String(cause)}`)
       return
     } finally {
       operation.current = false
@@ -148,6 +157,36 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     }
     if (enabled) await run("app_update_check", { reason: "scheduled" }, true)
   }
+
+  React.useEffect(() => {
+    if (busy) return
+    const message = error ?? status.error
+    if (!message) {
+      reportedError.current = null
+      return
+    }
+    if (reportedError.current === message) return
+    reportedError.current = message
+    toast.error(message, { id: "app-update", duration: 6_000 })
+  }, [busy, error, status.error])
+
+  React.useEffect(() => {
+    if (error || status.error) return
+    if (
+      !status.version ||
+      (status.phase !== "ready" && (status.phase !== "available" || busy))
+    )
+      return
+    const key = `${status.phase}:${status.version}`
+    if (announcedUpdates.current.has(key)) return
+    announcedUpdates.current.add(key)
+    toast.info(
+      status.phase === "ready"
+        ? `版本 ${status.version} 已下载，可在“设置 → 应用”安装更新。`
+        : `发现新版本 ${status.version}，可在“设置 → 应用”下载更新。`,
+      { id: "app-update", duration: 6_000 }
+    )
+  }, [busy, error, status.error, status.phase, status.version])
 
   return (
     <UpdateContext.Provider
@@ -164,28 +203,6 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       }}
     >
       {children}
-      {(status.phase === "ready" || (status.phase === "available" && !busy)) &&
-      `${status.phase}:${status.version}` !== dismissedVersion ? (
-        <div
-          role="status"
-          className="fixed top-4 right-4 z-50 flex max-w-sm items-center gap-3 rounded-xl border bg-card p-3 text-sm text-card-foreground shadow-lg"
-        >
-          <p>
-            {status.phase === "ready"
-              ? `版本 ${status.version} 已下载，可在“设置 → 应用”安装更新。`
-              : `发现新版本 ${status.version}，可在“设置 → 应用”下载更新。`}
-          </p>
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={() =>
-              setDismissedVersion(`${status.phase}:${status.version}`)
-            }
-          >
-            知道了
-          </Button>
-        </div>
-      ) : null}
     </UpdateContext.Provider>
   )
 }

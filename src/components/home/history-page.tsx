@@ -3,19 +3,17 @@
 import {
   Check,
   Clipboard,
-  Clock3,
   Eye,
   EyeOff,
-  Fingerprint,
+  FileArchive,
   History,
-  KeyRound,
   MoreHorizontal,
   RefreshCw,
   Search,
-  ShieldCheck,
   Trash2,
 } from "lucide-react"
 import * as React from "react"
+import { toast } from "sonner"
 
 import {
   WorkbenchPage,
@@ -32,7 +30,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -104,10 +101,10 @@ export function HistoryPage() {
   const [loading, setLoading] = React.useState(true)
   const [working, setBusy] = React.useState(false)
   const busy = loading || working
-  const [error, setError] = React.useState<string | null>(null)
-  const [notice, setNotice] = React.useState<string | null>(null)
+  const [loadFailed, setLoadFailed] = React.useState(false)
   const [revealed, setRevealed] = React.useState<RevealedPassword | null>(null)
   const [copiedId, setCopiedId] = React.useState<number | null>(null)
+  const [copiedPath, setCopiedPath] = React.useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] =
     React.useState<RecoveryHistoryEntry | null>(null)
   const [clearDialogOpen, setClearDialogOpen] = React.useState(false)
@@ -131,8 +128,7 @@ export function HistoryPage() {
     ) => {
       const requestId = ++requestSequence.current
       setLoading(true)
-      setError(null)
-      setNotice(null)
+      setLoadFailed(false)
       try {
         let next = await listRecoveryHistory({
           searchText,
@@ -164,7 +160,11 @@ export function HistoryPage() {
         return next
       } catch (reason) {
         if (requestId === requestSequence.current) {
-          setError(toErrorMessage(reason))
+          setLoadFailed(true)
+          toast.error(toErrorMessage(reason), {
+            id: "history-feedback",
+            duration: 6_000,
+          })
         }
         return null
       } finally {
@@ -199,12 +199,15 @@ export function HistoryPage() {
   }, [revealed])
 
   React.useEffect(() => {
-    if (copiedId == null) {
+    if (copiedId == null && copiedPath == null) {
       return
     }
-    const timeout = window.setTimeout(() => setCopiedId(null), 1_800)
+    const timeout = window.setTimeout(() => {
+      setCopiedId(null)
+      setCopiedPath(null)
+    }, 1_800)
     return () => window.clearTimeout(timeout)
-  }, [copiedId])
+  }, [copiedId, copiedPath])
 
   const runBusy = React.useCallback(
     async (action: () => Promise<void>) => {
@@ -213,12 +216,13 @@ export function HistoryPage() {
       }
       operationBusy.current = true
       setBusy(true)
-      setError(null)
-      setNotice(null)
       try {
         await action()
       } catch (reason) {
-        setError(toErrorMessage(reason))
+        toast.error(toErrorMessage(reason), {
+          id: "history-feedback",
+          duration: 6_000,
+        })
       } finally {
         operationBusy.current = false
         setBusy(false)
@@ -235,7 +239,8 @@ export function HistoryPage() {
 
   const handleRefresh = React.useCallback(() => {
     void runBusy(async () => {
-      if (await load()) setNotice("历史记录已刷新。")
+      if (await load())
+        toast.success("历史记录已刷新", { id: "history-feedback" })
     })
   }, [load, runBusy])
 
@@ -262,7 +267,6 @@ export function HistoryPage() {
           value: password,
           expiresAt: Date.now() + 30_000,
         })
-        setNotice("密码将在 30 秒后自动隐藏。")
       })
     },
     [fetchPassword, revealed?.id, runBusy]
@@ -277,7 +281,7 @@ export function HistoryPage() {
             : await fetchPassword(entry.id)
         await copySensitiveText(password)
         setCopiedId(entry.id)
-        setNotice("密码已复制；若剪贴板未被替换，将在 30 秒后自动清除。")
+        toast.success("密码已复制", { id: "history-feedback" })
       })
     },
     [fetchPassword, revealed, runBusy]
@@ -291,18 +295,47 @@ export function HistoryPage() {
     setDeleteTarget(null)
     void runBusy(async () => {
       const deleted = await deleteRecoveryHistory(target.id)
-      await load()
-      setNotice(deleted ? "历史记录已删除。" : "该记录已经不存在。")
+      if (!(await load())) {
+        if (deleted) {
+          toast.warning("历史记录已删除，但列表刷新失败，请重试刷新", {
+            id: "history-feedback",
+            duration: 6_000,
+          })
+        }
+        return
+      }
+      if (deleted) {
+        toast.success("历史记录已删除", { id: "history-feedback" })
+      } else {
+        toast.info("该记录已经不存在", { id: "history-feedback" })
+      }
     })
   }, [deleteTarget, load, runBusy])
+
+  const handleCopyPath = React.useCallback(
+    (path: string) => {
+      void runBusy(async () => {
+        await navigator.clipboard.writeText(path)
+        setCopiedPath(path)
+        toast.success("路径已复制", { id: "history-feedback" })
+      })
+    },
+    [runBusy]
+  )
 
   const handleClear = React.useCallback(() => {
     setClearDialogOpen(false)
     void runBusy(async () => {
       const removed = await clearRecoveryHistory()
       setSearchInput("")
-      await load("", 0)
-      setNotice(`已清空 ${removed} 条历史记录。`)
+      if (!(await load("", 0))) {
+        toast.warning(
+          `已清空 ${removed} 条历史记录，但列表刷新失败，请重试刷新`,
+          { id: "history-feedback", duration: 6_000 }
+        )
+        return
+      }
+      toast.success(`已清空 ${removed} 条历史记录`, { id: "history-feedback" })
     })
   }, [load, runBusy])
 
@@ -354,31 +387,6 @@ export function HistoryPage() {
           }
         />
 
-        <Card
-          size="sm"
-          aria-label="历史概览"
-          className="grid shrink-0 grid-cols-1 gap-px overflow-hidden bg-border py-0 shadow-sm sm:grid-cols-3"
-        >
-          <SummaryMetric
-            icon={<History className="size-4" />}
-            label="成功归档"
-            value={String(result?.totalCount ?? 0)}
-            hint="相同内容指纹自动归并"
-          />
-          <SummaryMetric
-            icon={<KeyRound className="size-4" />}
-            label="已存密码"
-            value={String(result?.passwordCount ?? 0)}
-            hint="仅存本机，不同步或写入日志"
-          />
-          <SummaryMetric
-            icon={<ShieldCheck className="size-4" />}
-            label="来源信息"
-            value="不记录"
-            hint="无文件名、路径和字典内容"
-          />
-        </Card>
-
         <Card size="sm" className="shrink-0 gap-0 py-0 shadow-sm">
           <CardContent className="flex items-center gap-2 py-2.5">
             <InputGroup className="h-9 min-w-0 flex-1">
@@ -387,7 +395,7 @@ export function HistoryPage() {
               </InputGroupAddon>
               <InputGroupInput
                 type="search"
-                aria-label="搜索归档历史"
+                aria-label="搜索压缩包名称或路径"
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
                 onKeyDown={(event) => {
@@ -396,9 +404,9 @@ export function HistoryPage() {
                     handleSearch()
                   }
                 }}
-                placeholder="按内容指纹前缀查询"
+                placeholder="搜索压缩包名称或路径"
                 disabled={busy}
-                className="font-mono text-xs"
+                className="text-xs"
               />
             </InputGroup>
             <Button
@@ -408,7 +416,7 @@ export function HistoryPage() {
               disabled={busy}
               onClick={handleSearch}
             >
-              查询
+              搜索
             </Button>
           </CardContent>
         </Card>
@@ -417,42 +425,23 @@ export function HistoryPage() {
           size="sm"
           className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden py-0 shadow-sm"
         >
-          <Alert
-            aria-live="polite"
-            variant={error ? "destructive" : notice ? "success" : "default"}
-            className="shrink-0 rounded-none border-x-0 border-t-0 px-3 py-1.5"
-          >
-            <AlertDescription className="text-xs">
-              {error ??
-                notice ??
-                (result
-                  ? `匹配 ${result.matchedCount} / ${result.totalCount} 条 · 密码默认遮罩，查看后 30 秒自动隐藏`
-                  : "正在读取本机历史…")}
-            </AlertDescription>
-          </Alert>
           <CardContent className="min-h-0 flex-1 p-0">
-            <div className="hidden h-full sm:block">
+            <div className="hidden h-full md:block">
               <ScrollArea className="table-scroll-fade h-full max-h-full [&_[data-slot=table-container]]:overflow-visible">
-                <Table>
+                <Table className="table-fixed">
                   <TableHeader className="sticky top-0 z-10 bg-card">
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="h-9 min-w-40 px-3 text-xs">
-                        内容指纹
+                      <TableHead className="h-9 w-1/4 px-3 text-xs">
+                        压缩包原名
                       </TableHead>
-                      <TableHead className="h-9 w-16 px-3 text-xs">
-                        格式
+                      <TableHead className="h-9 w-1/5 px-3 text-xs">
+                        解压密码
                       </TableHead>
-                      <TableHead className="h-9 w-28 px-3 text-right text-xs">
-                        大小 / 分卷
-                      </TableHead>
-                      <TableHead className="h-9 w-36 px-3 text-xs">
-                        首次成功
+                      <TableHead className="h-9 px-3 text-xs">
+                        最近文件位置
                       </TableHead>
                       <TableHead className="h-9 w-36 px-3 text-xs">
-                        最近验证
-                      </TableHead>
-                      <TableHead className="h-9 min-w-44 px-3 text-xs">
-                        密码
+                        最近解压时间
                       </TableHead>
                       <TableHead className="h-9 w-10 px-2">
                         <span className="sr-only">操作</span>
@@ -470,35 +459,24 @@ export function HistoryPage() {
                       result.entries.map((entry) => (
                         <TableRow key={entry.id}>
                           <TableCell className="px-3 py-2.5">
-                            <div className="flex items-center gap-2">
-                              <Fingerprint className="size-3.5 shrink-0 text-muted-foreground" />
+                            <div className="flex items-start gap-2">
+                              <FileArchive
+                                aria-hidden
+                                className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                              />
                               <div className="min-w-0">
-                                <p className="font-mono text-xs">
-                                  {entry.fingerprintPrefix}…
+                                <p className="text-sm font-medium wrap-anywhere whitespace-normal">
+                                  {historyEntryName(entry)}
                                 </p>
                                 <p className="mt-0.5 text-xs text-muted-foreground">
-                                  已验证 {entry.verificationCount} 次
+                                  {entry.archiveFormat} ·{" "}
+                                  {formatBytes(entry.fileSize)}
+                                  {entry.volumeCount > 1
+                                    ? ` · ${entry.volumeCount} 卷`
+                                    : ""}
                                 </p>
                               </div>
                             </div>
-                          </TableCell>
-                          <TableCell className="px-3 py-2.5 text-xs font-medium">
-                            {entry.archiveFormat}
-                          </TableCell>
-                          <TableCell className="px-3 py-2.5 text-right text-xs tabular-nums">
-                            <p>{formatBytes(entry.fileSize)}</p>
-                            <p className="mt-0.5 text-xs text-muted-foreground">
-                              {entry.volumeCount} 卷
-                            </p>
-                          </TableCell>
-                          <TableCell className="px-3 py-2.5 text-xs text-muted-foreground tabular-nums">
-                            {formatDate(entry.firstSuccessAtMs)}
-                          </TableCell>
-                          <TableCell className="px-3 py-2.5 text-xs text-muted-foreground tabular-nums">
-                            <span className="inline-flex items-center gap-1">
-                              <Clock3 className="size-3" />
-                              {formatDate(entry.lastVerifiedAtMs)}
-                            </span>
                           </TableCell>
                           <TableCell className="px-3 py-2">
                             <PasswordCell
@@ -514,13 +492,28 @@ export function HistoryPage() {
                               onCopy={() => handleCopy(entry)}
                             />
                           </TableCell>
+                          <TableCell className="px-3 py-2.5 whitespace-normal">
+                            <HistoryLocations
+                              entry={entry}
+                              busy={busy}
+                              copiedPath={copiedPath}
+                              onCopy={handleCopyPath}
+                            />
+                          </TableCell>
+                          <TableCell className="px-3 py-2.5 text-xs text-muted-foreground tabular-nums">
+                            {formatDate(entry.lastVerifiedAtMs)}
+                          </TableCell>
                           <TableCell className="px-2 py-2">
                             <Button
                               size="icon-sm"
                               variant="ghost"
                               disabled={busy}
                               onClick={() => setDeleteTarget(entry)}
-                              aria-label={`删除指纹 ${entry.fingerprintPrefix} 的记录`}
+                              aria-label={
+                                entry.archiveName
+                                  ? `删除 ${entry.archiveName} 的记录`
+                                  : "删除此条历史记录"
+                              }
                               title="删除"
                             >
                               <Trash2 />
@@ -532,12 +525,18 @@ export function HistoryPage() {
                       <StateRow
                         icon={<History className="size-5" />}
                         title={
-                          appliedSearch ? "没有匹配的历史" : "还没有成功记录"
+                          loadFailed
+                            ? "暂时无法显示历史"
+                            : appliedSearch
+                              ? "没有匹配的历史"
+                              : "还没有成功记录"
                         }
                         description={
-                          appliedSearch
-                            ? "请检查指纹前缀，或清空查询后重试。"
-                            : "成功解压后自动保存记录。"
+                          loadFailed
+                            ? "请点击右上角刷新重试。"
+                            : appliedSearch
+                              ? "试试压缩包名称或路径中的关键词，或清空搜索查看全部。"
+                              : "成功解压后，会在这里保存压缩包原名、密码和文件位置。"
                         }
                       />
                     )}
@@ -545,7 +544,7 @@ export function HistoryPage() {
                 </Table>
               </ScrollArea>
             </div>
-            <div className="h-full overflow-y-auto sm:hidden">
+            <div className="h-full scroll-fade overflow-y-auto md:hidden">
               {loading ? (
                 <HistoryMobileState
                   icon={<Spinner />}
@@ -566,6 +565,8 @@ export function HistoryPage() {
                         onReveal={() => handleReveal(entry)}
                         onCopy={() => handleCopy(entry)}
                         onDelete={() => setDeleteTarget(entry)}
+                        copiedPath={copiedPath}
+                        onCopyPath={handleCopyPath}
                       />
                     </li>
                   ))}
@@ -573,11 +574,19 @@ export function HistoryPage() {
               ) : (
                 <HistoryMobileState
                   icon={<History className="size-5" />}
-                  title={appliedSearch ? "没有匹配的历史" : "还没有成功记录"}
+                  title={
+                    loadFailed
+                      ? "暂时无法显示历史"
+                      : appliedSearch
+                        ? "没有匹配的历史"
+                        : "还没有成功记录"
+                  }
                   description={
-                    appliedSearch
-                      ? "请检查指纹前缀，或清空查询后重试。"
-                      : "成功解压后自动保存记录。"
+                    loadFailed
+                      ? "请点击右上角刷新重试。"
+                      : appliedSearch
+                        ? "试试压缩包名称或路径中的关键词，或清空搜索查看全部。"
+                        : "成功解压后，会在这里保存压缩包原名、密码和文件位置。"
                   }
                 />
               )}
@@ -616,8 +625,11 @@ export function HistoryPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>删除历史记录</AlertDialogTitle>
             <AlertDialogDescription>
-              将删除指纹 {deleteTarget?.fingerprintPrefix}… 的摘要和已保存密码。
-              此操作不可撤销。
+              将删除
+              {deleteTarget?.archiveName
+                ? `“${deleteTarget.archiveName}”的历史记录`
+                : "此条历史记录"}
+              和已保存密码，压缩包及解压文件不会被删除。此操作不可撤销。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -636,9 +648,9 @@ export function HistoryPage() {
       <AlertDialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
         <AlertDialogContent size="default">
           <AlertDialogHeader>
-            <AlertDialogTitle>清空恢复历史</AlertDialogTitle>
+            <AlertDialogTitle>清空解压历史</AlertDialogTitle>
             <AlertDialogDescription>
-              将删除全部归档摘要和已保存密码。字典候选和运行日志不会受影响，此操作不可撤销。
+              将删除全部解压历史和已保存密码，压缩包及解压文件不会被删除。此操作不可撤销。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -657,32 +669,52 @@ export function HistoryPage() {
   )
 }
 
-function SummaryMetric({
-  icon,
-  label,
-  value,
-  hint,
+function historyEntryName(entry: RecoveryHistoryEntry) {
+  return entry.archiveName || "—"
+}
+
+function HistoryLocations({
+  entry,
+  busy,
+  copiedPath,
+  onCopy,
 }: {
-  icon: React.ReactNode
-  label: string
-  value: string
-  hint: string
+  entry: RecoveryHistoryEntry
+  busy: boolean
+  copiedPath: string | null
+  onCopy: (path: string) => void
 }) {
+  if (!entry.archivePath && !entry.outputDirectory) {
+    return <span className="text-xs text-muted-foreground">—</span>
+  }
   return (
-    <div className="flex min-w-0 items-center gap-2.5 bg-card px-3 py-2.5">
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted/80 text-muted-foreground">
-        {icon}
-      </div>
-      <div className="min-w-0">
-        <div className="flex items-baseline gap-2">
-          <p className="shrink-0 text-sm font-semibold tabular-nums">{value}</p>
-          <p className="truncate text-xs font-medium tracking-wide text-muted-foreground">
-            {label}
-          </p>
+    <dl className="space-y-1 text-xs">
+      {[
+        { label: "压缩包", path: entry.archivePath },
+        { label: "解压到", path: entry.outputDirectory },
+      ].map(({ label, path }) => (
+        <div key={label} className="flex items-start gap-2">
+          <dt className="shrink-0 pt-1.5 text-muted-foreground">{label}</dt>
+          <dd className="flex min-w-0 flex-1 items-start gap-1">
+            <span className="min-w-0 flex-1 pt-1.5 wrap-anywhere">
+              {path || "—"}
+            </span>
+            {path ? (
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => onCopy(path)}
+                aria-label={`复制${label}路径`}
+                title={`复制${label}路径`}
+              >
+                {copiedPath === path ? <Check /> : <Clipboard />}
+              </Button>
+            ) : null}
+          </dd>
         </div>
-        <p className="mt-0.5 truncate text-xs text-muted-foreground">{hint}</p>
-      </div>
-    </div>
+      ))}
+    </dl>
   )
 }
 
@@ -694,6 +726,8 @@ function HistoryMobileEntry({
   onReveal,
   onCopy,
   onDelete,
+  copiedPath,
+  onCopyPath,
 }: {
   entry: RecoveryHistoryEntry
   revealed: string | null
@@ -702,49 +736,49 @@ function HistoryMobileEntry({
   onReveal: () => void
   onCopy: () => void
   onDelete: () => void
+  copiedPath: string | null
+  onCopyPath: (path: string) => void
 }) {
   return (
     <article className="flex flex-col gap-3 p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="flex items-center gap-1.5 font-mono text-xs">
-            <Fingerprint
+          <p className="flex items-start gap-1.5 text-sm font-medium">
+            <FileArchive
               aria-hidden
-              className="size-3.5 shrink-0 text-muted-foreground"
+              className="mt-0.5 size-4 shrink-0 text-muted-foreground"
             />
-            <span className="truncate">{entry.fingerprintPrefix}…</span>
+            <span className="wrap-anywhere">{historyEntryName(entry)}</span>
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            已验证 {entry.verificationCount} 次
+            {formatBytes(entry.fileSize)}
+            {entry.volumeCount > 1 ? ` · ${entry.volumeCount} 卷` : ""}
           </p>
         </div>
         <Badge variant="outline">{entry.archiveFormat}</Badge>
       </div>
 
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-        <div>
-          <dt className="text-muted-foreground">大小 / 分卷</dt>
-          <dd className="mt-0.5 font-medium tabular-nums">
-            {formatBytes(entry.fileSize)} · {entry.volumeCount} 卷
-          </dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground">最近验证</dt>
-          <dd className="mt-0.5 font-medium tabular-nums">
-            {formatDate(entry.lastVerifiedAtMs)}
-          </dd>
-        </div>
-      </dl>
+      <p className="text-xs text-muted-foreground">
+        最近解压：{formatDate(entry.lastVerifiedAtMs)}
+      </p>
+
+      <HistoryLocations
+        entry={entry}
+        busy={busy}
+        copiedPath={copiedPath}
+        onCopy={onCopyPath}
+      />
 
       <div className="flex min-w-0 items-center gap-2">
+        <span className="shrink-0 text-xs text-muted-foreground">解压密码</span>
         <code
           className={cn(
-            "min-w-0 flex-1 truncate rounded-lg bg-muted/70 px-2.5 py-2 text-xs",
+            "min-w-0 flex-1 rounded-lg bg-muted/70 px-2.5 py-2 text-xs wrap-anywhere whitespace-pre-wrap",
             !revealed && "tracking-[0.14em] text-muted-foreground"
           )}
           title={revealed ?? undefined}
         >
-          {entry.hasPassword ? (revealed ?? "••••••••") : "未保存密码"}
+          {entry.hasPassword ? (revealed ?? "••••••••") : "—"}
         </code>
       </div>
 
@@ -833,14 +867,14 @@ function PasswordCell({
   onCopy: () => void
 }) {
   if (!entry.hasPassword) {
-    return <span className="text-xs text-muted-foreground">未保存</span>
+    return <span className="text-xs text-muted-foreground">—</span>
   }
 
   return (
     <div className="flex min-w-0 items-center gap-1">
       <code
         className={cn(
-          "min-w-0 flex-1 truncate rounded-md bg-muted/70 px-2 py-1 text-xs",
+          "min-w-0 flex-1 rounded-md bg-muted/70 px-2 py-1 text-xs wrap-anywhere whitespace-pre-wrap",
           !revealed && "tracking-[0.14em] text-muted-foreground"
         )}
         title={revealed ?? undefined}
@@ -882,7 +916,7 @@ function StateRow({
 }) {
   return (
     <TableRow className="hover:bg-transparent">
-      <TableCell colSpan={7} className="p-0">
+      <TableCell colSpan={5} className="p-0">
         <Empty className="min-h-56 border-0 px-6 py-10">
           <EmptyHeader>
             <EmptyMedia variant="icon">{icon}</EmptyMedia>

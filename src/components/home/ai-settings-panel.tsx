@@ -544,7 +544,7 @@ export const AiSettingsPanel = React.forwardRef<
                 </Button>
               </div>
             </div>
-            {profileFeedback ? (
+            {profileFeedback && !invalidField ? (
               <Alert
                 aria-live="polite"
                 variant={profileFeedback.error ? "destructive" : "default"}
@@ -616,7 +616,7 @@ export const AiSettingsPanel = React.forwardRef<
               保存提示词
             </Button>
           </div>
-          {promptFeedback ? (
+          {promptFeedback && !renamePromptError ? (
             <Alert
               aria-live="polite"
               variant={promptFeedback.error ? "destructive" : "default"}

@@ -2,6 +2,7 @@
 
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import * as React from "react"
+import { toast } from "sonner"
 
 import {
   ExtractPageView,
@@ -54,7 +55,9 @@ export function ExtractPage({
   React.useEffect(() => {
     void recoveryQueueJournal.initialize()
   }, [])
-  const [repairMessage, setRepairMessage] = React.useState<string | null>(null)
+  const [repairedCopyPath, setRepairedCopyPath] = React.useState<string | null>(
+    null
+  )
   const [outputMode, setOutputMode] = React.useState<OutputMode>("sibling")
   const [outputDir, setOutputDir] = React.useState<string | null>(null)
   const [openWhenDone, setOpenWhenDone] = React.useState(true)
@@ -184,7 +187,7 @@ export function ExtractPage({
       setAnalyzingPath(normalizedPath)
       setBusy(true)
       setError(null)
-      setRepairMessage(null)
+      setRepairedCopyPath(null)
       setSelectedQueueItemId(null)
       setTask(null)
       setReattachedTaskId(null)
@@ -240,7 +243,7 @@ export function ExtractPage({
             try {
               recoveryQueue.enqueue(paths)
             } catch (reason) {
-              setError(toErrorMessage(reason))
+              notifyExtractError(reason)
             }
           } else if (paths[0]) {
             void selectArchivePath(paths[0])
@@ -256,7 +259,9 @@ export function ExtractPage({
           unlisten = stop
         }
       })
-      .catch((reason) => setError(toErrorMessage(reason)))
+      .catch((reason) => {
+        if (!disposed) notifyExtractError(reason)
+      })
     return () => {
       disposed = true
       unlisten?.()
@@ -281,7 +286,7 @@ export function ExtractPage({
           try {
             recoveryQueue.enqueue(paths)
           } catch (reason) {
-            setError(toErrorMessage(reason))
+            notifyExtractError(reason)
           }
         }
         return
@@ -330,7 +335,7 @@ export function ExtractPage({
     }
     openedTasks.current.add(task.taskId)
     void openOutputDirectory(task.outputDirectory).catch((reason) =>
-      setError(toErrorMessage(reason))
+      notifyExtractError(reason)
     )
   }, [openWhenDone, task])
 
@@ -346,7 +351,7 @@ export function ExtractPage({
       }
     } catch (reason) {
       if (!isInputLocked() && version === analysisRequestId.current) {
-        setError(toErrorMessage(reason))
+        notifyExtractError(reason)
       }
     }
   }, [isInputLocked, selectArchivePath])
@@ -364,7 +369,7 @@ export function ExtractPage({
       }
     } catch (reason) {
       if (!isInputLocked() && version === analysisRequestId.current) {
-        setError(toErrorMessage(reason))
+        notifyExtractError(reason)
       }
     }
   }, [isInputLocked])
@@ -453,7 +458,7 @@ export function ExtractPage({
         setComputeMode(saved.recovery?.computeMode ?? nextMode)
       } catch (reason) {
         setComputeMode(previousMode)
-        setError(`无法保存解密方式：${toErrorMessage(reason)}`)
+        notifyExtractError(`无法保存解密方式：${toErrorMessage(reason)}`)
       } finally {
         setComputeModeBusy(false)
       }
@@ -471,7 +476,7 @@ export function ExtractPage({
         current ? { ...current, message: "正在停止外部引擎…" } : current
       )
     } catch (reason) {
-      setError(toErrorMessage(reason))
+      notifyExtractError(reason)
     }
   }, [setTask, activeTask])
 
@@ -482,8 +487,9 @@ export function ExtractPage({
     try {
       await copySensitiveText(task.recoveredPassword)
       setPasswordCopied(true)
+      toast.success("密码已复制", { id: "extract-action" })
     } catch (reason) {
-      setError(toErrorMessage(reason))
+      notifyExtractError(reason)
     }
   }, [task])
 
@@ -496,9 +502,7 @@ export function ExtractPage({
   }, [passwordCopied])
 
   const handleOpenDirectory = React.useCallback((path: string) => {
-    void openOutputDirectory(path).catch((reason) =>
-      setError(toErrorMessage(reason))
-    )
+    void openOutputDirectory(path).catch((reason) => notifyExtractError(reason))
   }, [])
 
   const handleRescan = React.useCallback(async () => {
@@ -530,7 +534,7 @@ export function ExtractPage({
       return
     }
     void openOutputDirectory(task.outputDirectory).catch((reason) =>
-      setError(toErrorMessage(reason))
+      notifyExtractError(reason)
     )
   }, [task])
 
@@ -548,7 +552,7 @@ export function ExtractPage({
       const paths = await pickArchivePaths()
       if (!isInputLocked()) recoveryQueue.enqueue(paths)
     } catch (reason) {
-      setError(toErrorMessage(reason))
+      notifyExtractError(reason)
     }
   }
   const handleStartBatch = () => {
@@ -575,12 +579,13 @@ export function ExtractPage({
     operationBusy.current = true
     setBusy(true)
     setError(null)
-    setRepairMessage(null)
+    setRepairedCopyPath(null)
     try {
       const destination = await createRepairedArchiveCopy(analysis.archivePath)
-      setRepairMessage(`已创建独立副本：${destination}`)
+      setRepairedCopyPath(destination)
+      toast.success("独立副本已创建", { id: "extract-action" })
     } catch (reason) {
-      setError(toErrorMessage(reason))
+      notifyExtractError(reason)
     } finally {
       operationBusy.current = false
       setBusy(false)
@@ -624,7 +629,7 @@ export function ExtractPage({
       handlePickArchive={handlePickArchive}
       handlePickBatch={handlePickBatch}
       handleRepairCopy={handleRepairCopy}
-      repairMessage={repairMessage}
+      repairedCopyPath={repairedCopyPath}
       queueContent={
         <>
           <QueueMemoryPanel disabled={busy || running || queue.running} />
@@ -647,11 +652,7 @@ export function ExtractPage({
                 })
               }
             }}
-            onOpenOutput={(path) => {
-              void openOutputDirectory(path).catch((reason) =>
-                setError(toErrorMessage(reason))
-              )
-            }}
+            onOpenOutput={handleOpenDirectory}
           />
         </>
       }
@@ -680,11 +681,13 @@ export function ExtractPage({
                       task.recoveredPassword ?? (knownPassword || null),
                   }
                 )
-                setRepairMessage(
-                  "所选归档已加入队列，使用原任务的计算和递归选项。确认密码后按顺序处理。"
-                )
+                toast.info("所选归档已加入队列", {
+                  description: "确认密码后按顺序处理，将保留原任务选项。",
+                  id: "extract-action",
+                  duration: 4_000,
+                })
               } catch (reason) {
-                setError(toErrorMessage(reason))
+                notifyExtractError(reason)
               }
             }
           : undefined
@@ -704,6 +707,10 @@ export function ExtractPage({
 
 function normalizeArchivePath(value: string): string {
   return value.trim().replace(/^"(.*)"$/, "$1")
+}
+
+function notifyExtractError(reason: unknown) {
+  toast.error(toErrorMessage(reason), { id: "extract-action", duration: 6_000 })
 }
 
 function looksLikeAbsolutePath(value: string): boolean {

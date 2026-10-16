@@ -20,6 +20,7 @@ const settle = async () => {
 // Execute the real event handlers and JSX with only React's lifecycle and IPC
 // replaced. These regressions do not start Tauri, a browser, or write user data.
 function sourceHarness(overrides) {
+  const notifications = []
   const slots = []
   const pendingEffects = []
   let cursor = 0
@@ -90,6 +91,14 @@ function sourceHarness(overrides) {
   const jsx = (type, props, key) => ({ type, props, key })
   const modules = new Map()
   const mocks = {
+    sonner: {
+      toast: Object.fromEntries(
+        ["success", "error", "info", "warning"].map((type) => [
+          type,
+          (message) => notifications.push({ type, message }),
+        ])
+      ),
+    },
     react: React,
     "react/jsx-runtime": { jsx, jsxs: jsx },
     "@/lib/utils": { cn: () => "" },
@@ -134,6 +143,7 @@ function sourceHarness(overrides) {
     return compiledModule.exports
   }
   return {
+    notifications,
     load,
     render(Component, props = {}) {
       cursor = 0
@@ -250,19 +260,60 @@ test("关闭自动更新后每次重启仍检查并提示新版本，不自动�
     t.mock.timers.tick(0)
     await settle()
     const tree = harness.render(Provider)
-    const notice = find(tree, (node) => node.props?.role === "status")
-    assert.match(notice.props.children[0].props.children, /发现新版本 0.2.0/)
-    button(tree, "知道了").props.onClick()
+    assert.equal(harness.notifications.at(-1).type, "info")
+    assert.match(harness.notifications.at(-1).message, /发现新版本 0.2.0/)
     assert.equal(
-      find(harness.render(Provider), (node) => node.props?.role === "status"),
+      find(tree, (node) => node.props?.role === "status"),
       null
     )
+    const notificationCount = harness.notifications.length
+    t.mock.timers.tick(5_000)
+    await settle()
+    harness.render(Provider)
+    assert.equal(harness.notifications.length, notificationCount)
     harness.hide()
   }
   assert.deepEqual(checks, [
     ["app_update_check", { reason: "startup" }],
     ["app_update_check", { reason: "startup" }],
   ])
+})
+
+test("更新状态读取失败不重复通知，轮询恢复后仍能提示新版本", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] })
+  let failStatus = true
+  const harness = sourceHarness({
+    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/settings": {},
+    "@tauri-apps/api/core": {
+      invoke: async (command) => {
+        if (command !== "app_update_status") return
+        if (failStatus) throw new Error("offline")
+        return { phase: "available", version: "0.2.0", autoUpdate: false }
+      },
+    },
+  })
+  t.after(() => harness.hide())
+  const Provider = harness.load(
+    "src/components/update-provider.tsx"
+  ).UpdateProvider
+  harness.render(Provider)
+  t.mock.timers.tick(0)
+  await settle()
+  harness.render(Provider)
+  assert.equal(harness.notifications.length, 1)
+  assert.equal(harness.notifications[0].type, "error")
+  t.mock.timers.tick(5_000)
+  await settle()
+  harness.render(Provider)
+  assert.equal(harness.notifications.length, 1)
+  failStatus = false
+  t.mock.timers.tick(5_000)
+  await settle()
+  const tree = harness.render(Provider)
+  assert.equal(tree.props.value.error, null)
+  assert.equal(harness.notifications.length, 2)
+  assert.match(harness.notifications[1].message, /发现新版本/)
 })
 
 test("自动更新偏好保存失败时不开始下载，安装失败保留已下载版本并允许重试", async (t) => {
@@ -300,6 +351,12 @@ test("自动更新偏好保存失败时不开始下载，安装失败保留已�
   assert.equal(context.busy, false)
   assert.match(context.error, /task running/)
   await context.install()
+  assert.equal(
+    harness.notifications.filter(
+      (notice) => notice.type === "error" && /task running/.test(notice.message)
+    ).length,
+    2
+  )
   assert.equal(
     calls.filter((command) => command === "app_update_install").length,
     2
@@ -385,6 +442,12 @@ test("批次接收全部拖入和粘贴路径，恢复启动期间拒绝并发�
       getRecoveryCapabilities: async () => ({ methods: [] }),
       pickArchivePath: () => archivePicker.promise,
       pickOutputDirectory: () => outputPicker.promise,
+      pickArchivePaths: async () => {
+        throw new Error("archive picker unavailable")
+      },
+      openOutputDirectory: async () => {
+        throw new Error("directory unavailable")
+      },
       analyzeArchive: async (path) => {
         analyzed.push(path)
         return { archivePath: path, suggestedOutputDirectory: path + ".out" }
@@ -471,6 +534,19 @@ test("批次接收全部拖入和粘贴路径，恢复启动期间拒绝并发�
     harness.render(ExtractPage, props).props.analysis.archivePath,
     "C:\\D.7z"
   )
+  view = harness.render(ExtractPage, props)
+  await view.props.handlePickBatch()
+  assert.deepEqual(harness.notifications.at(-1), {
+    type: "error",
+    message: "archive picker unavailable",
+  })
+  view.props.onOpenDirectory("C:\\output")
+  await settle()
+  assert.deepEqual(harness.notifications.at(-1), {
+    type: "error",
+    message: "directory unavailable",
+  })
+  assert.equal(harness.render(ExtractPage, props).props.error, null)
 })
 
 test("数据库恢复必须先预览确认，并阻止不可解密密码的恢复", async () => {
@@ -602,7 +678,9 @@ test("扫描上限和解密方式提交单项更新，校验和保存失败保�
   assert.deepEqual(updates[2], { kind: "scanMaxFilesPerDirectory", value: 25 })
   assert.equal(card().scanLimitValue, "25")
   assert.equal(card().messageError, true)
-  assert.match(card().message, /disk unavailable/)
+  assert.equal(card().message, null)
+  assert.equal(harness.notifications.at(-1).type, "error")
+  assert.match(harness.notifications.at(-1).message, /disk unavailable/)
   rejectSave = false
   card().onSaveScanLimit()
   await settle()
@@ -937,6 +1015,79 @@ const logResult = (entries, total, skip = 0, take = 200) => ({
   directory: "preview",
 })
 
+test("日志轮询同一失败只通知一次，手动重试及恢复后的新失败重新通知", async (t) => {
+  let harness
+  t.after(() => harness?.hide())
+  enableClock(t)
+  let fails = true
+  harness = sourceHarness({
+    "@/lib/logging": {
+      listLogs: async () => {
+        if (fails) throw new Error("offline")
+        return logResult([], 0)
+      },
+    },
+  })
+  const { LogsPage } = harness.load("src/components/home/logs-page.tsx")
+  let tree = harness.render(LogsPage)
+  const poll = async () => {
+    t.mock.timers.tick(2_500)
+    await settle()
+    tree = harness.render(LogsPage)
+  }
+  t.mock.timers.tick(0)
+  await settle()
+  tree = harness.render(LogsPage)
+  assert.equal(harness.notifications.length, 1)
+  await poll()
+  await poll()
+  assert.equal(harness.notifications.length, 1)
+  assert.equal(
+    find(tree, (node) => node.type === "Alert"),
+    null
+  )
+  button(tree, "刷新").props.onClick()
+  await settle()
+  tree = harness.render(LogsPage)
+  assert.equal(harness.notifications.length, 2)
+  fails = false
+  await poll()
+  fails = true
+  await poll()
+  assert.equal(harness.notifications.length, 3)
+})
+
+test("打开仓库链接失败仅使用通知，不再创建页内提示", async (t) => {
+  const harness = sourceHarness({
+    "@tauri-apps/api/core": { isTauri: () => true },
+    "@tauri-apps/plugin-opener": {
+      openUrl: async () => {
+        throw new Error("blocked")
+      },
+    },
+    "@/components/ui/button": { buttonVariants: () => "" },
+  })
+  t.after(() => harness.hide())
+  const { AppShell } = harness.load("src/components/app-shell.tsx")
+  const tree = harness.render(AppShell, {
+    activeNav: "extract",
+    onNavChange() {},
+  })
+  await find(tree, (node) => node.type === "a").props.onClick({
+    preventDefault() {},
+    currentTarget: { href: "https://github.com/ZhongYanZhiShi/ArcRecall" },
+  })
+  assert.equal(harness.notifications.at(-1).type, "error")
+  assert.match(harness.notifications.at(-1).message, /无法打开浏览器/)
+  assert.equal(
+    find(
+      harness.render(AppShell, { activeNav: "extract", onNavChange() {} }),
+      (node) => node.props?.role === "alert"
+    ),
+    null
+  )
+})
+
 test("日志固定分页可到达第 1001 条以后，并暂停非首页自动刷新", async (t) => {
   enableClock(t)
   const queries = []
@@ -1021,6 +1172,97 @@ test("日志慢请求没有轮询堆积，快速搜索只查询最终关键词",
   assert.equal(queries.length, 2)
   assert.equal(queries[1].searchText, "error")
   harness.hide()
+})
+
+test("历史加载失败使用通知并可刷新恢复，查看密码失败不会插入页面提示", async (t) => {
+  let fails = true
+  const harness = sourceHarness({
+    "@/lib/history": {
+      HISTORY_PAGE_SIZE: 100,
+      listRecoveryHistory: async () => {
+        if (fails) throw new Error("history database unavailable")
+        return {
+          entries: [
+            {
+              id: 1,
+              hasPassword: true,
+              firstSuccessAtMs: 1000,
+              lastVerifiedAtMs: 2000,
+            },
+          ],
+          matchedCount: 1,
+          totalCount: 1,
+          passwordCount: 1,
+        }
+      },
+      revealHistoryPassword: async () => {
+        throw new Error("credential unavailable")
+      },
+      deleteRecoveryHistory: async () => true,
+      clearRecoveryHistory: async () => 3,
+    },
+    "@/lib/sensitive-clipboard": {},
+  })
+  t.after(() => harness.hide())
+  const { HistoryPage } = harness.load("src/components/home/history-page.tsx")
+  harness.render(HistoryPage)
+  await settle()
+  let tree = harness.render(HistoryPage)
+  assert.deepEqual(harness.notifications.at(-1), {
+    type: "error",
+    message: "history database unavailable",
+  })
+  assert.equal(
+    find(tree, (node) => node.type === "Alert"),
+    null
+  )
+  assert.equal(
+    find(tree, (node) => node.type?.name === "StateRow").props.title,
+    "暂时无法显示历史"
+  )
+  fails = false
+  button(tree, "刷新").props.onClick()
+  await settle()
+  tree = harness.render(HistoryPage)
+  const cell = find(tree, (node) => node.type?.name === "PasswordCell")
+  assert.ok(cell)
+  cell.props.onReveal()
+  await settle()
+  tree = harness.render(HistoryPage)
+  assert.deepEqual(harness.notifications.at(-1), {
+    type: "error",
+    message: "credential unavailable",
+  })
+  assert.equal(
+    find(tree, (node) => node.type === "Alert"),
+    null
+  )
+  fails = true
+  find(
+    tree,
+    (node) => node.props?.["aria-label"] === "删除此条历史记录"
+  ).props.onClick()
+  tree = harness.render(HistoryPage)
+  find(
+    tree,
+    (node) =>
+      node.type === "AlertDialogAction" && node.props.children === "删除"
+  ).props.onClick()
+  await settle()
+  tree = harness.render(HistoryPage)
+  assert.equal(harness.notifications.at(-1).type, "warning")
+  assert.match(harness.notifications.at(-1).message, /已删除，但列表刷新失败/)
+  find(
+    tree,
+    (node) =>
+      node.type === "AlertDialogAction" && node.props.children === "清空历史"
+  ).props.onClick()
+  await settle()
+  assert.equal(harness.notifications.at(-1).type, "warning")
+  assert.match(
+    harness.notifications.at(-1).message,
+    /已清空 3 条历史记录，但列表刷新失败/
+  )
 })
 
 test("历史明文按绝对期限隐藏，Activity 清理后异步结果不能重新显示密码", async (t) => {

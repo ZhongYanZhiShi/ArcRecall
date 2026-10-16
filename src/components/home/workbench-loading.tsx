@@ -205,17 +205,6 @@ export function HistoryPageLoading() {
     <LoadingFrame label="正在载入历史记录…">
       <LoadingHeader actions={2} />
       <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2">
-        <LoadingSurface className="grid h-20 shrink-0 grid-cols-3 gap-px overflow-hidden bg-border p-0">
-          {[0, 1, 2].map((item) => (
-            <div key={item} className="flex items-center gap-3 bg-card px-4">
-              <Skeleton className="size-9 rounded-xl" />
-              <div className="min-w-0 flex-1 space-y-2">
-                <Skeleton className="h-4 w-12 rounded-md" />
-                <Skeleton className="h-3 w-full rounded-md" />
-              </div>
-            </div>
-          ))}
-        </LoadingSurface>
         <LoadingToolbar />
         <LoadingTable />
       </div>
