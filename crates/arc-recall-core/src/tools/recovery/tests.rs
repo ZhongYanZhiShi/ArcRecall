@@ -1141,6 +1141,188 @@ fn recursive_cumulative_budget_preserves_completed_archives_and_stops_siblings()
 }
 
 #[test]
+fn recursive_empty_directory_cleanup_respects_setting_and_existing_outputs() {
+    let Some(seven_zip) = locate_seven_zip() else {
+        eprintln!("skip: 7-Zip not found");
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let payload = directory.path().join("payload");
+    fs::create_dir_all(payload.join("empty/a/b")).unwrap();
+    fs::create_dir_all(payload.join("keep")).unwrap();
+    fs::write(payload.join("keep/.hidden"), b"keep this file").unwrap();
+    fs::write(payload.join("zero.txt"), b"").unwrap();
+    let inputs = directory.path().join("inputs");
+    fs::create_dir_all(inputs.join("empty/a/b")).unwrap();
+    create_plain_archive(&seven_zip, &inputs.join("inner.7z"), &payload);
+    let archive = directory.path().join("outer.7z");
+    create_plain_archive(&seven_zip, &archive, &inputs);
+    let tools = RecoveryToolPaths {
+        seven_zip,
+        hashcat: directory.path().join("unused-hashcat"),
+        john_tools_directory: directory.path().join("unused-john"),
+        perl: directory.path().join("unused-perl"),
+    };
+    for remove_empty_directories in [false, true] {
+        for recursive in [false, true] {
+            let output = directory
+                .path()
+                .join(format!("out-{remove_empty_directories}-{recursive}"));
+            fs::create_dir_all(output.join("inputs/existing/empty")).unwrap();
+            let job = RecoveryJob {
+                archive_path: archive.clone(),
+                output_directory: output.clone(),
+                dictionary_path: directory.path().join("unused.dict"),
+                dictionary_count: 0,
+                known_password: None,
+                work_directory: directory.path().join("work"),
+            };
+            let result = recover_and_extract_recursive_lazy(
+                &job,
+                &tools,
+                &CancellationToken::default(),
+                RecursiveRecoveryOptions {
+                    enabled: recursive,
+                    remove_empty_directories,
+                    flatten_output_directories: false,
+                    max_files_per_directory: 0,
+                    ..RecursiveRecoveryOptions::default()
+                },
+                None,
+                || panic!("plain archives do not need a dictionary"),
+                |_| {},
+            )
+            .unwrap();
+            assert!(result.root.success, "{}", result.root.message);
+            assert!(output.is_dir());
+            assert!(output.join("inputs/existing/empty").is_dir());
+            assert!(output.join("inputs/inner.7z").is_file());
+            assert_eq!(
+                output.join("inputs/empty").exists(),
+                !remove_empty_directories
+            );
+            assert_eq!(result.extracted_nested_archives, u32::from(recursive));
+            if recursive {
+                let nested = output.join("inputs/inner/payload");
+                assert_eq!(nested.join("empty").exists(), !remove_empty_directories);
+                assert_eq!(
+                    fs::read(nested.join("keep/.hidden")).unwrap(),
+                    b"keep this file"
+                );
+                assert_eq!(fs::metadata(nested.join("zero.txt")).unwrap().len(), 0);
+                assert!(
+                    result
+                        .recovered_archives
+                        .iter()
+                        .all(|record| { Path::new(&record.output_directory).is_dir() })
+                );
+            }
+            if remove_empty_directories {
+                let count = if recursive { 6 } else { 3 };
+                assert!(
+                    result
+                        .root
+                        .message
+                        .contains(&format!("已清理 {count} 个空文件夹"))
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn flattening_preserves_existing_roots_and_keeps_recursive_history_paths_valid() {
+    let Some(seven_zip) = locate_seven_zip() else {
+        eprintln!("skip: 7-Zip not found");
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let payload = directory.path().join("inner");
+    fs::create_dir_all(payload.join("inner/x/y")).unwrap();
+    fs::write(
+        payload.join("inner/x/y/keep.txt"),
+        b"contents survive flattening",
+    )
+    .unwrap();
+    fs::write(payload.join("inner/x/y/zero.txt"), b"").unwrap();
+    let inputs = directory.path().join("outer");
+    fs::create_dir_all(inputs.join("outer")).unwrap();
+    create_plain_archive(&seven_zip, &inputs.join("outer/inner.7z"), &payload);
+    let archive = directory.path().join("outer.7z");
+    create_plain_archive(&seven_zip, &archive, &inputs);
+    let tools = RecoveryToolPaths {
+        seven_zip,
+        hashcat: directory.path().join("unused-hashcat"),
+        john_tools_directory: directory.path().join("unused-john"),
+        perl: directory.path().join("unused-perl"),
+    };
+    for flatten in [false, true] {
+        for existing_root in [false, true] {
+            let output = directory
+                .path()
+                .join(format!("out-{flatten}-{existing_root}"));
+            if existing_root {
+                fs::create_dir(&output).unwrap();
+            }
+            let job = RecoveryJob {
+                archive_path: archive.clone(),
+                output_directory: output.clone(),
+                dictionary_path: directory.path().join("unused.dict"),
+                dictionary_count: 0,
+                known_password: None,
+                work_directory: directory.path().join("work"),
+            };
+            let result = recover_and_extract_recursive_lazy(
+                &job,
+                &tools,
+                &CancellationToken::default(),
+                RecursiveRecoveryOptions {
+                    flatten_output_directories: flatten,
+                    remove_empty_directories: false,
+                    ..RecursiveRecoveryOptions::default()
+                },
+                None,
+                || panic!("plain archive"),
+                |_| {},
+            )
+            .unwrap();
+            assert!(result.root.success, "{}", result.root.message);
+            assert_eq!(result.extracted_nested_archives, 1);
+            let outer_content = if flatten && !existing_root {
+                output.join("outer")
+            } else {
+                output.join("outer/outer")
+            };
+            let nested_content = if flatten {
+                outer_content.join("inner/inner/x/y")
+            } else {
+                outer_content.join("inner/inner/inner/x/y")
+            };
+            assert_eq!(
+                fs::read(nested_content.join("keep.txt")).unwrap(),
+                b"contents survive flattening"
+            );
+            assert!(nested_content.join("zero.txt").is_file());
+            assert_eq!(result.content_directories, vec![nested_content]);
+            for record in &result.recovered_archives {
+                assert!(Path::new(&record.archive_path).is_file());
+                assert!(Path::new(&record.output_directory).is_dir());
+                assert!(!record.output_directory.contains(".arcrecall-unwrap-"));
+            }
+            if flatten {
+                let count = if existing_root { 1 } else { 2 };
+                assert!(
+                    result
+                        .root
+                        .message
+                        .contains(&format!("已去除 {count} 层多余嵌套"))
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn recursively_extracts_misleading_suffix_archive_with_inherited_password() {
     let Some(seven_zip) = locate_seven_zip() else {
         eprintln!("skip: 7z.exe not found");

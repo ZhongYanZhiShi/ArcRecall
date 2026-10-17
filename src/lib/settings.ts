@@ -32,6 +32,8 @@ export type AppSettings = {
   recovery?: {
     computeMode: RecoveryComputeMode
     scanMaxFilesPerDirectory?: number
+    removeEmptyDirectories?: boolean
+    flattenOutputDirectories?: boolean
   }
 }
 
@@ -187,6 +189,8 @@ export async function getSettings(): Promise<AppSettings> {
       recovery: {
         computeMode: "gpuPreferred",
         scanMaxFilesPerDirectory: DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY,
+        removeEmptyDirectories: true,
+        flattenOutputDirectories: true,
       },
     }
   }
@@ -199,6 +203,8 @@ export type SettingsUpdate =
   | { kind: "logMaxDiskMib"; value: number }
   | { kind: "recoveryComputeMode"; value: RecoveryComputeMode }
   | { kind: "scanMaxFilesPerDirectory"; value: number }
+  | { kind: "removeEmptyDirectories"; value: boolean }
+  | { kind: "flattenOutputDirectories"; value: boolean }
 
 export async function updateSettings(
   update: SettingsUpdate
@@ -221,6 +227,12 @@ export async function updateSettings(
       break
     case "scanMaxFilesPerDirectory":
       settings.recovery!.scanMaxFilesPerDirectory = update.value
+      break
+    case "removeEmptyDirectories":
+      settings.recovery!.removeEmptyDirectories = update.value
+      break
+    case "flattenOutputDirectories":
+      settings.recovery!.flattenOutputDirectories = update.value
       break
   }
   return settings

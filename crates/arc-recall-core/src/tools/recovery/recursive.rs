@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::super::runner::CancellationToken;
+use super::cleanup::{CleanupSummary, EmptyDirectoryCleanup, is_plain_directory};
+use super::flatten::{FlattenSummary, flatten_output};
 use super::{
     RecoveryDictionary, RecoveryError, RecoveryJob, RecoveryOperation, RecoveryPhase,
     RecoveryToolPaths, RecoveryUpdate, RecursiveRecoveryOptions, RecursiveRecoveryResult,
@@ -206,6 +208,13 @@ fn run_recursive_recovery(
     prepare_dictionary: impl FnOnce() -> Result<RecoveryDictionary, RecoveryError>,
     mut report: impl FnMut(RecoveryUpdate),
 ) -> Result<RecursiveRecoveryResult, RecoveryError> {
+    let root_cleanup = (options.remove_empty_directories && previous.is_none())
+        .then(|| EmptyDirectoryCleanup::prepare(&job.output_directory, cancellation));
+    let mut cleanup_summary = CleanupSummary::default();
+    let flatten_root = options.flatten_output_directories
+        && previous.is_none()
+        && matches!(fs::symlink_metadata(&job.output_directory), Err(error) if error.kind() == std::io::ErrorKind::NotFound);
+    let mut flatten_summary = FlattenSummary::default();
     let before_root_extraction = if let Some(previous) = &previous {
         previous.resume_baseline.clone()
     } else if options.enabled {
@@ -284,7 +293,51 @@ fn run_recursive_recovery(
     let mut scan_interrupted = false;
     let mut budget_limit_reached = false;
     let mut content_directories = vec![job.output_directory.clone()];
+    if root.success {
+        if let Some(cleanup) = root_cleanup {
+            report(
+                RecoveryUpdate::stage(
+                    RecoveryPhase::Preparing,
+                    None::<String>,
+                    "正在清理解压产生的空文件夹。",
+                )
+                .with_root_extraction_completed(),
+            );
+            cleanup_summary.merge(cleanup.finish(&job.output_directory, cancellation));
+        }
+        if flatten_root {
+            report(
+                RecoveryUpdate::stage(
+                    RecoveryPhase::Preparing,
+                    None::<String>,
+                    "正在去除解压结果顶部的多余嵌套层级。",
+                )
+                .with_root_extraction_completed(),
+            );
+            let flattened = flatten_output(&job.output_directory, &job.archive_path, cancellation);
+            if let Some(fallback) = &flattened.fallback_root {
+                root.output_directory = fallback.clone();
+                if let Some(record) = &mut root.recovered_archive {
+                    record.output_directory = path_for_display(fallback);
+                }
+                for record in &mut recovered_archives {
+                    record.output_directory = path_for_display(fallback);
+                }
+                content_directories = vec![fallback.clone()];
+            }
+            flatten_summary.merge(flattened);
+        }
+        root.cancelled |= cancellation.is_cancelled();
+    }
     if !root.success || !options.enabled {
+        if root.success && options.remove_empty_directories {
+            root.message
+                .push_str(&format!(" {}", cleanup_summary.message()));
+        }
+        if root.success && options.flatten_output_directories {
+            root.message
+                .push_str(&format!(" {}", flatten_summary.message()));
+        }
         return Ok(RecursiveRecoveryResult {
             root,
             discovered_nested_archives: 0,
@@ -334,7 +387,7 @@ fn run_recursive_recovery(
         previous.skipped_scan_directories
     } else {
         vec![SkippedScanDirectory {
-            path: job.output_directory.clone(),
+            path: root.output_directory.clone(),
             depth: 1,
             inherited_password: root.password.clone().or_else(|| job.known_password.clone()),
         }]
@@ -438,7 +491,7 @@ fn run_recursive_recovery(
                 nested.depth,
                 &nested.archive_path,
             ));
-            let nested_output = resolve_nested_output_directory(&nested.archive_path);
+            let mut nested_output = resolve_nested_output_directory(&nested.archive_path);
             let before_nested_extraction = capture_file_snapshot(&nested_output, cancellation)?;
             let mut output_transaction = NestedOutputTransaction::new(nested_output.clone());
             let nested_job = RecoveryJob {
@@ -452,6 +505,9 @@ fn run_recursive_recovery(
                     .join(format!("nested-{}", state.discovered_nested_archives)),
             };
             let context_state = state.progress_snapshot();
+            let nested_cleanup = options.remove_empty_directories.then(|| {
+                EmptyDirectoryCleanup::prepare(&nested_job.output_directory, cancellation)
+            });
             let nested_result = recover_single_archive(
                 &nested_job,
                 tools,
@@ -492,6 +548,27 @@ fn run_recursive_recovery(
                             &nested.archive_path,
                         ));
                         continue;
+                    }
+                    if let Some(cleanup) = nested_cleanup {
+                        report(state.update(
+                            "正在清理嵌套归档解压产生的空文件夹。",
+                            nested.depth,
+                            &nested.archive_path,
+                        ));
+                        cleanup_summary.merge(cleanup.finish(&nested_output, cancellation));
+                    }
+                    if options.flatten_output_directories {
+                        report(state.update(
+                            "正在去除嵌套归档输出顶部的多余层级。",
+                            nested.depth,
+                            &nested.archive_path,
+                        ));
+                        let flattened =
+                            flatten_output(&nested_output, &nested.archive_path, cancellation);
+                        if let Some(fallback) = &flattened.fallback_root {
+                            nested_output = fallback.clone();
+                        }
+                        flatten_summary.merge(flattened);
                     }
                     pending_archive_paths.retain(|path| path != &nested.archive_path);
                     completed_archive_paths.push(nested.archive_path.clone());
@@ -631,6 +708,14 @@ fn run_recursive_recovery(
     }
     summary.push('。');
     root.message = format!("{} {summary}", root.message);
+    if options.remove_empty_directories {
+        root.message
+            .push_str(&format!(" {}", cleanup_summary.message()));
+    }
+    if options.flatten_output_directories {
+        root.message
+            .push_str(&format!(" {}", flatten_summary.message()));
+    }
 
     Ok(RecursiveRecoveryResult {
         root,
@@ -747,10 +832,7 @@ fn resolve_content_directory(mut directory: PathBuf) -> PathBuf {
         if entries.next().is_some() {
             break;
         }
-        if !entry
-            .file_type()
-            .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
-        {
+        if !fs::symlink_metadata(entry.path()).is_ok_and(|metadata| is_plain_directory(&metadata)) {
             break;
         }
         directory = entry.path();

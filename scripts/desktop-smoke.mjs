@@ -317,6 +317,253 @@ try {
       }
     })
     .toBe(false)
+  // Exercise the real setting, IPC and filesystem cleanup for nested outputs.
+  const cleanupSource = join(root, "cleanup-source")
+  const cleanupInput = join(root, "cleanup-input")
+  await mkdir(join(cleanupSource, "empty", "a", "b"), { recursive: true })
+  await mkdir(join(cleanupSource, "keep"), { recursive: true })
+  await writeFile(join(cleanupSource, "keep", ".hidden"), "keep hidden file")
+  await writeFile(join(cleanupSource, "zero.txt"), "")
+  await mkdir(join(cleanupInput, "empty", "a", "b"), { recursive: true })
+  const cleanupArchive = join(root, "cleanup.7z")
+  for (const [archivePath, source] of [
+    [join(cleanupInput, "inner.7z"), cleanupSource],
+    [cleanupArchive, cleanupInput],
+  ]) {
+    const packed = spawnSync(sevenZip, ["a", "-t7z", archivePath, source], {
+      windowsHide: true,
+      encoding: "utf8",
+    })
+    assert.equal(packed.status, 0, packed.stderr)
+  }
+  await page.getByRole("button", { name: "设置", exact: true }).click()
+  const cleanupSwitch = page.getByRole("switch", { name: "智能清理空文件夹" })
+  await expect(cleanupSwitch).toBeEnabled()
+  await expect(cleanupSwitch).toBeChecked()
+  const flattenSwitch = page.getByRole("switch", { name: "去除多层无效嵌套" })
+  await expect(flattenSwitch).toBeChecked()
+  // Exercise explicit opt-out while verifying empty-folder cleanup separately.
+  await flattenSwitch.click()
+  await expect
+    .poll(
+      async () =>
+        (await invoke("settings_get")).recovery.flattenOutputDirectories
+    )
+    .toBe(false)
+  await expect(flattenSwitch).toBeEnabled()
+  for (const enabled of [false, true]) {
+    // Verify keyboard activation as well as the pointer interaction.
+    if (enabled) await cleanupSwitch.click()
+    else {
+      await cleanupSwitch.focus()
+      await cleanupSwitch.press("Space")
+    }
+    await expect
+      .poll(
+        async () =>
+          (await invoke("settings_get")).recovery.removeEmptyDirectories
+      )
+      .toBe(enabled)
+    await expect(cleanupSwitch).toBeEnabled()
+    const outputDirectory = join(root, `cleanup-output-${enabled}`)
+    await mkdir(join(outputDirectory, "cleanup-input", "existing", "empty"), {
+      recursive: true,
+    })
+    const started = await invoke("recovery_start", {
+      request: {
+        archivePath: cleanupArchive,
+        outputDirectory,
+        recursive: true,
+        computeMode: "cpuOnly",
+        avoidOutputCollision: false,
+      },
+    })
+    await expect
+      .poll(
+        async () =>
+          (await invoke("recovery_status", { taskId: started.taskId }))
+            .completed,
+        { timeout: 30_000 }
+      )
+      .toBe(true)
+    const cleaned = await invoke("recovery_status", { taskId: started.taskId })
+    assert.equal(cleaned.success, true, cleaned.message)
+    assert.equal(cleaned.extractedNestedArchiveCount, 1)
+    const nested = join(
+      outputDirectory,
+      "cleanup-input",
+      "inner",
+      "cleanup-source"
+    )
+    for (const empty of [
+      join(outputDirectory, "cleanup-input", "empty"),
+      join(nested, "empty"),
+    ]) {
+      if (enabled) await assert.rejects(access(empty), { code: "ENOENT" })
+      else await access(join(empty, "a", "b"))
+    }
+    await access(join(outputDirectory, "cleanup-input", "existing", "empty"))
+    assert.equal(
+      await readFile(join(nested, "keep", ".hidden"), "utf8"),
+      "keep hidden file"
+    )
+    assert.equal((await readFile(join(nested, "zero.txt"))).length, 0)
+    if (enabled) assert.match(cleaned.message, /已清理 6 个空文件夹/)
+  }
+  await expect(flattenSwitch).not.toBeChecked()
+  await flattenSwitch.click()
+  await expect
+    .poll(
+      async () =>
+        (await invoke("settings_get")).recovery.flattenOutputDirectories
+    )
+    .toBe(true)
+  await expect(flattenSwitch).toBeEnabled()
+  const flatOutput = join(root, "flatten-output")
+  const flatTask = await invoke("recovery_start", {
+    request: {
+      archivePath: cleanupArchive,
+      outputDirectory: flatOutput,
+      recursive: true,
+      computeMode: "cpuOnly",
+      avoidOutputCollision: true,
+    },
+  })
+  await expect
+    .poll(
+      async () =>
+        (await invoke("recovery_status", { taskId: flatTask.taskId }))
+          .completed,
+      { timeout: 30_000 }
+    )
+    .toBe(true)
+  const flatResult = await invoke("recovery_status", {
+    taskId: flatTask.taskId,
+  })
+  assert.equal(flatResult.success, true, flatResult.message)
+  assert.equal(flatResult.extractedNestedArchiveCount, 1)
+  assert.equal(
+    await readFile(
+      join(
+        flatOutput,
+        "cleanup-input",
+        "inner",
+        "cleanup-source",
+        "keep",
+        ".hidden"
+      ),
+      "utf8"
+    ),
+    "keep hidden file"
+  )
+  assert.equal(
+    (
+      await readFile(
+        join(flatOutput, "cleanup-input", "inner", "cleanup-source", "zero.txt")
+      )
+    ).length,
+    0
+  )
+  await access(join(flatOutput, "cleanup-input", "inner.7z"))
+  assert.match(flatResult.message, /已去除 0 层多余嵌套/)
+  for (const path of flatResult.contentDirectories) await access(path)
+  // Exact repeated archive names may fold, but one original name and all
+  // meaningful child paths must remain. Verify both settings against real IPC.
+  const repeatedSource = join(root, "repeated")
+  const innerSource = join(root, "inner")
+  const innerContent = join(innerSource, "inner", "src", "main", "java")
+  const photos = join(repeatedSource, "repeated", "照片", "2026", "旅行")
+  const contents = Buffer.from([0, 255, 1, 128, 0, 42])
+  await mkdir(innerContent, { recursive: true })
+  await writeFile(join(innerContent, "data.bin"), contents)
+  await writeFile(join(innerContent, "zero.txt"), "")
+  await mkdir(join(innerSource, "inner", "empty", "leaf"), { recursive: true })
+  await mkdir(photos, { recursive: true })
+  await writeFile(join(photos, "photo.bin"), contents)
+  await mkdir(join(repeatedSource, "repeated", "empty", "leaf"), {
+    recursive: true,
+  })
+  const innerArchive = join(repeatedSource, "repeated", "inner.7z")
+  const repeatedArchive = join(root, "repeated.7z")
+  for (const [archivePath, source] of [
+    [innerArchive, innerSource],
+    [repeatedArchive, repeatedSource],
+  ]) {
+    const packed = spawnSync(sevenZip, ["a", "-t7z", archivePath, source], {
+      windowsHide: true,
+      encoding: "utf8",
+    })
+    assert.equal(packed.status, 0, packed.stderr)
+  }
+  const archiveBytes = await readFile(repeatedArchive)
+  const innerBytes = await readFile(innerArchive)
+  for (const enabled of [false, true]) {
+    await flattenSwitch.click()
+    await expect
+      .poll(
+        async () =>
+          (await invoke("settings_get")).recovery.flattenOutputDirectories
+      )
+      .toBe(enabled)
+    await expect(flattenSwitch).toBeEnabled()
+    const outputDirectory = join(root, `repeated-output-${enabled}`)
+    const started = await invoke("recovery_start", {
+      request: {
+        archivePath: repeatedArchive,
+        outputDirectory,
+        recursive: true,
+        computeMode: "cpuOnly",
+        avoidOutputCollision: true,
+      },
+    })
+    await expect
+      .poll(
+        async () =>
+          (await invoke("recovery_status", { taskId: started.taskId }))
+            .completed,
+        { timeout: 30_000 }
+      )
+      .toBe(true)
+    const result = await invoke("recovery_status", { taskId: started.taskId })
+    assert.equal(result.success, true, result.message)
+    assert.equal(result.extractedNestedArchiveCount, 1)
+    const outer = enabled
+      ? join(outputDirectory, "repeated")
+      : join(outputDirectory, "repeated", "repeated")
+    const inner = enabled
+      ? join(outer, "inner", "inner")
+      : join(outer, "inner", "inner", "inner")
+    assert.deepEqual(
+      await readFile(join(outer, "照片", "2026", "旅行", "photo.bin")),
+      contents
+    )
+    assert.deepEqual(
+      await readFile(join(inner, "src", "main", "java", "data.bin")),
+      contents
+    )
+    assert.equal(
+      (await readFile(join(inner, "src", "main", "java", "zero.txt"))).length,
+      0
+    )
+    assert.deepEqual(await readFile(join(outer, "inner.7z")), innerBytes)
+    assert.deepEqual(await readFile(repeatedArchive), archiveBytes)
+    assert.match(result.message, /已清理 4 个空文件夹/)
+    assert.match(result.message, enabled ? /已去除 2 层多余嵌套/ : /已清理/)
+    for (const path of result.contentDirectories) await access(path)
+  }
+  await page.screenshot({
+    path: join(evidence, "native-empty-folder-settings.png"),
+  })
+  await close()
+  await launch()
+  assert.equal(
+    (await invoke("settings_get")).recovery.removeEmptyDirectories,
+    true
+  )
+  assert.equal(
+    (await invoke("settings_get")).recovery.flattenOutputDirectories,
+    true
+  )
   // A distinct archive avoids successful-history reuse and stays busy on wrong candidates.
   const cancellable = join(root, "cancellable.7z")
   assert.equal(
@@ -368,7 +615,7 @@ try {
   }
   assert.deepEqual(errors, [])
   console.log(
-    `PASS: native UI / Rust IPC / restart / changed source / real 7-Zip / report files / cancellation / close cleanup. Screenshots: ${evidence}`
+    `PASS: native UI / Rust IPC / restart / changed source / real 7-Zip / report files / empty-folder cleanup / wrapper flattening / cancellation / close cleanup. Screenshots: ${evidence}`
   )
 } catch (error) {
   console.error(error)

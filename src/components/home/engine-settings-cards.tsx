@@ -34,6 +34,7 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Switch } from "@/components/ui/switch"
 import type { RecoveryCapabilities, RecoveryComputeMode } from "@/lib/recovery"
 import {
   type AppSettings,
@@ -56,6 +57,8 @@ export function DefaultRecoveryCard({
   scanLimitValue,
   onScanLimitChange,
   onSaveScanLimit,
+  onRemoveEmptyDirectoriesChange,
+  onFlattenOutputDirectoriesChange,
 }: {
   appSettings: AppSettings | null
   capabilities: RecoveryCapabilities | null
@@ -68,6 +71,8 @@ export function DefaultRecoveryCard({
   scanLimitValue: string
   onScanLimitChange: (value: string) => void
   onSaveScanLimit: () => void
+  onRemoveEmptyDirectoriesChange: (value: boolean) => void
+  onFlattenOutputDirectoriesChange: (value: boolean) => void
 }) {
   const hashcatCpuAvailable = Boolean(
     capabilities?.methods.find((method) => method.id === "hashcatCpu")
@@ -134,6 +139,42 @@ export function DefaultRecoveryCard({
             </FieldLabel>
           </RadioGroup>
         </FieldSet>
+        <Field orientation="horizontal">
+          <FieldContent>
+            <FieldLabel htmlFor="remove-empty-directories">
+              智能清理空文件夹
+            </FieldLabel>
+            <FieldDescription id="remove-empty-directories-help">
+              解压成功后，从内向外清理本次产生的多层空文件夹。保留文件、目录链接、
+              输出根目录、原有目录和带附加数据的目录，不移动文件。下次任务生效。
+            </FieldDescription>
+          </FieldContent>
+          <Switch
+            id="remove-empty-directories"
+            aria-describedby="remove-empty-directories-help"
+            checked={appSettings?.recovery?.removeEmptyDirectories ?? true}
+            disabled={settingsBusy || appSettings === null}
+            onCheckedChange={onRemoveEmptyDirectoriesChange}
+          />
+        </Field>
+        <Field orientation="horizontal">
+          <FieldContent>
+            <FieldLabel htmlFor="flatten-output-directories">
+              去除多层无效嵌套
+            </FieldLabel>
+            <FieldDescription id="flatten-output-directories-help">
+              仅整理新建解压目录顶部连续至少两层、与压缩包同名的重复目录，并保留一层原名。
+              普通目录层级、已有输出目录和含链接或附加数据的目录保持原样。默认开启；需完整保留原始路径时请关闭，下次任务生效。
+            </FieldDescription>
+          </FieldContent>
+          <Switch
+            id="flatten-output-directories"
+            aria-describedby="flatten-output-directories-help"
+            checked={appSettings?.recovery?.flattenOutputDirectories ?? true}
+            disabled={settingsBusy || appSettings === null}
+            onCheckedChange={onFlattenOutputDirectoriesChange}
+          />
+        </Field>
         <form
           onSubmit={(event) => {
             event.preventDefault()

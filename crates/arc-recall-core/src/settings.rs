@@ -21,6 +21,8 @@ pub enum SettingsUpdate {
     LogMaxDiskMib(u16),
     RecoveryComputeMode(RecoveryComputeMode),
     ScanMaxFilesPerDirectory(u32),
+    RemoveEmptyDirectories(bool),
+    FlattenOutputDirectories(bool),
 }
 
 /// Maximum log verbosity persisted by the desktop application.
@@ -94,6 +96,18 @@ pub struct RecoverySettings {
     pub compute_mode: RecoveryComputeMode,
     #[serde(default = "default_scan_max_files_per_directory")]
     pub scan_max_files_per_directory: u32,
+    #[serde(default = "default_remove_empty_directories")]
+    pub remove_empty_directories: bool,
+    #[serde(default = "default_flatten_output_directories")]
+    pub flatten_output_directories: bool,
+}
+
+const fn default_remove_empty_directories() -> bool {
+    true
+}
+
+const fn default_flatten_output_directories() -> bool {
+    true
 }
 
 const fn default_scan_max_files_per_directory() -> u32 {
@@ -105,6 +119,8 @@ impl Default for RecoverySettings {
         Self {
             compute_mode: RecoveryComputeMode::default(),
             scan_max_files_per_directory: default_scan_max_files_per_directory(),
+            remove_empty_directories: default_remove_empty_directories(),
+            flatten_output_directories: default_flatten_output_directories(),
         }
     }
 }
@@ -294,6 +310,12 @@ impl SettingsStore {
             SettingsUpdate::RecoveryComputeMode(value) => settings.recovery.compute_mode = value,
             SettingsUpdate::ScanMaxFilesPerDirectory(value) => {
                 settings.recovery.scan_max_files_per_directory = value
+            }
+            SettingsUpdate::RemoveEmptyDirectories(value) => {
+                settings.recovery.remove_empty_directories = value
+            }
+            SettingsUpdate::FlattenOutputDirectories(value) => {
+                settings.recovery.flatten_output_directories = value
             }
         }
         self.save(&settings)?;
@@ -495,6 +517,9 @@ mod tests {
             .update_preferences(SettingsUpdate::ScanMaxFilesPerDirectory(3))
             .unwrap();
         store
+            .update_preferences(SettingsUpdate::RemoveEmptyDirectories(false))
+            .unwrap();
+        store
             .update_preferences(SettingsUpdate::LogLevel(AppLogLevel::Debug))
             .unwrap();
         let saved = store
@@ -504,6 +529,7 @@ mod tests {
         assert_eq!(saved.ai, installed.ai);
         assert_eq!(saved.recovery.compute_mode, RecoveryComputeMode::CpuOnly);
         assert_eq!(saved.recovery.scan_max_files_per_directory, 3);
+        assert!(!saved.recovery.remove_empty_directories);
         assert_eq!(saved.logging.level, AppLogLevel::Debug);
         assert_eq!(saved.logging.max_disk_mib, 100);
         assert!(
@@ -522,6 +548,8 @@ mod tests {
         let store = SettingsStore::open(&path).unwrap();
         let mut settings = store.load().unwrap();
         assert_eq!(settings.recovery.scan_max_files_per_directory, 10);
+        assert!(settings.recovery.remove_empty_directories);
+        assert!(settings.recovery.flatten_output_directories);
         assert_eq!(settings.recovery.compute_mode, RecoveryComputeMode::CpuOnly);
         for limit in [0, 3, 10, 100] {
             settings.recovery.scan_max_files_per_directory = limit;
@@ -541,6 +569,40 @@ mod tests {
     }
 
     #[test]
+    fn empty_directory_cleanup_setting_survives_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SettingsStore::open(directory.path().join("settings.json")).unwrap();
+        for value in [false, true] {
+            let update = serde_json::from_value(serde_json::json!({
+                "kind": "removeEmptyDirectories",
+                "value": value,
+            }))
+            .unwrap();
+            store.update_preferences(update).unwrap();
+            assert_eq!(
+                store.load().unwrap().recovery.remove_empty_directories,
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn flatten_setting_survives_reload_without_changing_empty_cleanup() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SettingsStore::open(directory.path().join("settings.json")).unwrap();
+        for value in [false, true] {
+            let update = serde_json::from_value(serde_json::json!({
+                "kind": "flattenOutputDirectories", "value": value,
+            }))
+            .unwrap();
+            store.update_preferences(update).unwrap();
+            let saved = store.load().unwrap();
+            assert_eq!(saved.recovery.flatten_output_directories, value);
+            assert!(saved.recovery.remove_empty_directories);
+        }
+    }
+
+    #[test]
     fn creates_default_settings_when_missing() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
@@ -550,6 +612,9 @@ mod tests {
         assert!(loaded.engine.hashcat_path.is_empty());
         assert_eq!(loaded.logging.level, AppLogLevel::Info);
         assert_eq!(loaded.logging.max_disk_mib, DEFAULT_LOG_MAX_DISK_MIB);
+        assert!(loaded.recovery.remove_empty_directories);
+        assert!(loaded.recovery.flatten_output_directories);
+        assert!(crate::tools::RecursiveRecoveryOptions::default().flatten_output_directories);
     }
 
     #[test]

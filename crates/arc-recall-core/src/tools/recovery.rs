@@ -8,8 +8,10 @@ use super::runner::{
 };
 
 mod archive;
+mod cleanup;
 mod cracking;
 mod disk_budget;
+mod flatten;
 use disk_budget::TaskDiskBudget;
 mod recursive;
 mod repair;
@@ -341,6 +343,10 @@ pub struct RecoveryDictionary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecursiveRecoveryOptions {
     pub enabled: bool,
+    /// Remove only newly created empty directories after successful extraction.
+    pub remove_empty_directories: bool,
+    /// Fold repeated archive-name wrappers in new outputs, retaining one named directory.
+    pub flatten_output_directories: bool,
     /// Skip a directory and its descendants when it has more direct files.
     /// Zero disables this scan heuristic; extraction and password checks are unaffected.
     pub max_files_per_directory: u32,
@@ -355,6 +361,8 @@ impl Default for RecursiveRecoveryOptions {
     fn default() -> Self {
         Self {
             enabled: true,
+            remove_empty_directories: true,
+            flatten_output_directories: true,
             max_files_per_directory: DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY,
             max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
             max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,

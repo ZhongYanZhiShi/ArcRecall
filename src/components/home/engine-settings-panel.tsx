@@ -341,6 +341,37 @@ export function EngineSettingsPanel() {
       return { message: "解密引擎状态已刷新。" }
     })
 
+  const handleDirectorySettingChange = async (
+    kind: "removeEmptyDirectories" | "flattenOutputDirectories",
+    value: boolean
+  ) => {
+    if (recoveryBusy || appSettings === null) return
+    const label =
+      kind === "removeEmptyDirectories"
+        ? "智能清理空文件夹"
+        : "去除多层无效嵌套"
+    setRecoveryBusy(true)
+    setRecoveryError(false)
+    setRecoveryMessage("正在保存目录整理设置…")
+    try {
+      setAppSettings(await updateSettings({ kind, value }))
+      setRecoveryMessage(null)
+      toast.success(`已${value ? "开启" : "关闭"}${label}，下次任务生效。`, {
+        id: "recovery-settings",
+        duration: 4_000,
+      })
+    } catch (error) {
+      setRecoveryError(true)
+      setRecoveryMessage(null)
+      toast.error(`保存失败：${errorMessage(error)}`, {
+        id: "recovery-settings",
+        duration: 6_000,
+      })
+    } finally {
+      setRecoveryBusy(false)
+    }
+  }
+
   const scanLimitValue =
     scanLimitDraft ??
     String(
@@ -423,6 +454,12 @@ export function EngineSettingsPanel() {
         scanLimitValue={scanLimitValue}
         onScanLimitChange={setScanLimitDraft}
         onSaveScanLimit={() => void handleSaveScanLimit()}
+        onRemoveEmptyDirectoriesChange={(value) =>
+          void handleDirectorySettingChange("removeEmptyDirectories", value)
+        }
+        onFlattenOutputDirectoriesChange={(value) =>
+          void handleDirectorySettingChange("flattenOutputDirectories", value)
+        }
       />
       <FullBundleCard
         status={fullBundle}
