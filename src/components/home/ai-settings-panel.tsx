@@ -593,7 +593,7 @@ export const AiSettingsPanel = React.forwardRef<
             {renamePromptError ? (
               <FieldError>{renamePromptError}</FieldError>
             ) : null}
-            <FieldDescription>{prompt.length} / 2000 字符</FieldDescription>
+            <FieldDescription>{prompt.length} 字符</FieldDescription>
           </Field>
           <div className="flex justify-end">
             <Button

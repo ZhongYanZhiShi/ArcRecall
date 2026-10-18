@@ -273,13 +273,6 @@ export function useAiSettingsController({
       setPromptFeedback({ error: true, message: "提示词不能为空。" })
       return false
     }
-    if (prompt.length > 2_000) {
-      setPromptFeedback({
-        error: true,
-        message: "提示词不能超过 2000 个字符。",
-      })
-      return false
-    }
     setBusyScope("prompt")
     setPromptFeedback({
       error: false,
@@ -340,11 +333,7 @@ export function useAiSettingsController({
   const hasUnsavedChanges = profileDirty || promptDirty
   const providerMeta = AI_PROVIDER_DEFAULTS[draft.provider]
   const renamePromptError =
-    settings !== null && !prompt.trim()
-      ? "提示词不能为空。"
-      : prompt.length > 2_000
-        ? "提示词不能超过 2000 个字符。"
-        : null
+    settings !== null && !prompt.trim() ? "提示词不能为空。" : null
 
   const requestDraftAction = (action: PendingDraftAction) => {
     if (busy || (action.type === "select" && action.profile.id === draft.id)) {

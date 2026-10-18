@@ -225,9 +225,6 @@ pub(crate) fn ai_settings_update(
     if prompt.is_empty() {
         return Err("AI 重命名提示词不能为空。".into());
     }
-    if prompt.chars().count() > 2_000 {
-        return Err("AI 重命名提示词不能超过 2000 个字符。".into());
-    }
     {
         let store = state.settings.lock().map_err(|error| error.to_string())?;
         let mut settings = store.load().map_err(|error| error.to_string())?;
