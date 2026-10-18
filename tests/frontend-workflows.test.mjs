@@ -163,6 +163,59 @@ function sourceHarness(overrides) {
   }
 }
 
+test("文件夹选择不重放不可用的历史路径，文件选择仍记住父目录", async () => {
+  const previousWindow = globalThis.window
+  const reads = []
+  const writes = []
+  const calls = []
+  globalThis.window = {
+    localStorage: {
+      getItem(key) {
+        reads.push(key)
+        return "\\\\offline-server\\share"
+      },
+      setItem(key, value) {
+        writes.push([key, value])
+      },
+    },
+  }
+  let selected = "C:\\archives"
+  const harness = sourceHarness({
+    "@tauri-apps/plugin-dialog": {
+      open: async (options) => {
+        calls.push(options)
+        return selected
+      },
+    },
+  })
+  try {
+    const { openRememberingDirectory } = harness.load("src/lib/file-dialog.ts")
+    for (const location of [
+      "compression-folder",
+      "compression-output",
+      "extract-output",
+    ]) {
+      const options = { directory: true, multiple: false, title: location }
+      assert.equal(await openRememberingDirectory(location, options), selected)
+      assert.deepEqual(calls.at(-1), options)
+    }
+    assert.deepEqual(reads, [])
+    assert.deepEqual(writes, [])
+    selected = null
+    assert.equal(
+      await openRememberingDirectory("compression-folder", { directory: true }),
+      null
+    )
+    selected = "C:\\archives\\sample.zip"
+    await openRememberingDirectory("extract-source", { directory: false })
+    assert.equal(writes.at(-1)[1], "C:\\archives\\")
+    await openRememberingDirectory("extract-source", { directory: false })
+    assert.equal(calls.at(-1).defaultPath, "C:\\archives\\")
+  } finally {
+    globalThis.window = previousWindow
+  }
+})
+
 function find(node, predicate) {
   if (!node || typeof node !== "object") return null
   if (predicate(node)) return node

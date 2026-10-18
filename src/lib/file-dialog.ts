@@ -14,6 +14,13 @@ export async function openRememberingDirectory(
   location: DialogLocation,
   options: OpenDialogOptions
 ): Promise<string | string[] | null> {
+  // Let the native folder picker manage its starting location. Replaying a
+  // persisted directory makes Tauri stat it before showing the dialog, which
+  // can stall on disconnected network shares or unavailable removable drives.
+  if (options.directory) {
+    return open(options)
+  }
+
   const storageKey = `arc-recall:dialog-directory:${location}`
   let defaultPath = lastDirectories.get(location)
   try {
@@ -26,12 +33,10 @@ export async function openRememberingDirectory(
   const path = Array.isArray(selected) ? selected[0] : selected
   if (path) {
     // Keep the separator so drive roots (C:\) and POSIX roots remain absolute.
-    const directory = options.directory
-      ? path
-      : path.slice(
-          0,
-          Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1
-        )
+    const directory = path.slice(
+      0,
+      Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1
+    )
     if (directory) {
       lastDirectories.set(location, directory)
       try {
