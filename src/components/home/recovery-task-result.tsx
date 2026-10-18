@@ -72,8 +72,10 @@ export function RecoveryTaskResult({
   const incompleteScan = hasIncompleteRecursiveScan(task)
   const skippedDirectories = task.skippedScanDirectories ?? []
   const progress = resolveTaskProgress(task)
+  const dictionaryRunning =
+    task.running && ["internal", "hashcat", "john"].includes(task.phase)
   const hasCandidateProgress =
-    task.candidateCount > 0 && task.attemptedCount > 0
+    !task.running && task.candidateCount > 0 && task.attemptedCount > 0
   const hasRecursiveProgress =
     task.recursiveEnabled &&
     (task.completed ||
@@ -113,39 +115,12 @@ export function RecoveryTaskResult({
                 : "border-border"
       )}
     >
-      {task.running && !(task.phase === "hashcat" && task.hashcatProgress) ? (
+      {task.running && !dictionaryRunning ? (
         <Progress
           value={progress}
           aria-label="恢复进度"
           className="[&_[data-slot=progress-indicator]]:progress-live [&_[data-slot=progress-track]]:h-0.5 [&_[data-slot=progress-track]]:rounded-none"
         />
-      ) : null}
-      {task.running && task.phase === "hashcat" && task.hashcatProgress ? (
-        <div className="px-3 pt-3 text-xs text-muted-foreground tabular-nums">
-          <p>
-            当前引擎进度{" "}
-            {(
-              (task.hashcatProgress.completed / task.hashcatProgress.total) *
-              100
-            ).toFixed(1)}
-            % · {formatCount(task.hashcatProgress.hashesPerSecond)} H/s
-            {task.hashcatProgress.remainingSeconds !== null
-              ? ` · 预计剩余 ${formatElapsed(task.hashcatProgress.remainingSeconds * 1000)}`
-              : " · 正在估算剩余时间"}
-            {task.hashcatProgress.temperatureCelsius !== null
-              ? ` · ${task.hashcatProgress.temperatureCelsius}°C`
-              : ""}
-          </p>
-          <Progress
-            className="mt-2"
-            value={Math.min(
-              100,
-              (task.hashcatProgress.completed / task.hashcatProgress.total) *
-                100
-            )}
-            aria-label="Hashcat 当前引擎进度"
-          />
-        </div>
       ) : null}
       <div className="flex flex-col gap-3 p-4">
         <div className="min-w-0 flex-1">
@@ -170,6 +145,12 @@ export function RecoveryTaskResult({
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
               {task.message}
             </p>
+          ) : null}
+          {dictionaryRunning ? (
+            <DictionaryRecoveryProgress
+              key={`${task.taskId}:${task.phase}`}
+              task={task}
+            />
           ) : null}
           {task.running && task.rootExtractionCompleted ? (
             <p className="mt-1 text-xs text-success-foreground">
@@ -702,4 +683,92 @@ function recoveryEventMetadata(event: RecoveryTaskEvent): string {
     )
   }
   return parts.join(" · ")
+}
+
+function DictionaryRecoveryProgress({ task }: { task: RecoveryTaskStatus }) {
+  const [showCandidate, setShowCandidate] = React.useState(false)
+  const sample = task.dictionaryProgress
+  const hashcat = task.phase === "hashcat" ? task.hashcatProgress : null
+  const percent =
+    hashcat && hashcat.total > 0
+      ? (hashcat.completed / hashcat.total) * 100
+      : task.phase === "internal" && task.candidateCount > 0
+        ? (task.attemptedCount / task.candidateCount) * 100
+        : sample?.percent
+  const candidate = sample?.candidate
+  return (
+    <section
+      aria-label="字典恢复进度"
+      className="mt-3 space-y-2 rounded-xl border border-border/70 bg-muted/20 p-3 text-xs"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-medium">
+          字典恢复 · {task.engine ?? "正在启动引擎"}
+        </span>
+        <span className="text-muted-foreground tabular-nums">
+          共 {formatCount(task.candidateCount)} 条候选
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 tabular-nums">
+        <span>
+          {task.phase === "internal"
+            ? sample?.currentIndex != null
+              ? `正在测试第 ${formatCount(sample.currentIndex)} 条 · 已检查 ${formatCount(task.attemptedCount)} 条`
+              : `已检查 ${formatCount(task.attemptedCount)} / ${formatCount(task.candidateCount)} 条`
+            : hashcat
+              ? `引擎已处理 ${formatCount(hashcat.completed)} / ${formatCount(hashcat.total)} 个计算单位`
+              : sample
+                ? "正在批量测试候选密码"
+                : "引擎准备中，等待首个进度更新…"}
+        </span>
+        <span>
+          {percent != null
+            ? `${Math.min(100, Math.max(0, percent)).toFixed(1)}%`
+            : "进度待更新"}
+        </span>
+      </div>
+      {percent != null ? (
+        <Progress
+          value={Math.min(100, Math.max(0, percent))}
+          aria-label="当前字典进度"
+        />
+      ) : null}
+      {candidate ? (
+        <div className="flex min-w-0 items-center gap-2 border-t border-border/60 pt-2">
+          <span className="shrink-0 text-muted-foreground">
+            {sample?.batch ? "当前候选范围" : "当前候选"}
+          </span>
+          <code
+            className="min-w-0 flex-1 truncate select-text"
+            title={showCandidate ? candidate : undefined}
+          >
+            {showCandidate ? candidate : "••••••••"}
+          </code>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={() => setShowCandidate((value) => !value)}
+            aria-label={showCandidate ? "隐藏当前候选" : "显示当前候选"}
+          >
+            {showCandidate ? <EyeOff /> : <Eye />}
+          </Button>
+        </div>
+      ) : task.phase === "hashcat" ? (
+        <p className="text-muted-foreground">
+          并行批量验密，当前引擎不提供单条候选内容。
+        </p>
+      ) : null}
+      {hashcat ? (
+        <p className="text-muted-foreground tabular-nums">
+          {formatCount(hashcat.hashesPerSecond)} H/s
+          {hashcat.remainingSeconds != null
+            ? ` · 预计剩余 ${formatElapsed(hashcat.remainingSeconds * 1000)}`
+            : " · 正在估算剩余时间"}
+          {hashcat.temperatureCelsius != null
+            ? ` · ${hashcat.temperatureCelsius}°C`
+            : ""}
+        </p>
+      ) : null}
+    </section>
+  )
 }

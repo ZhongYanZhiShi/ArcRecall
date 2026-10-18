@@ -84,6 +84,7 @@ pub(crate) struct RecoveryTaskStatus {
     pub(super) failure_kind: Option<RecoveryFailureKind>,
     pub(super) failure_phase: Option<RecoveryPhase>,
     pub(super) gpu_started: bool,
+    pub(super) dictionary_progress: Option<arc_recall_core::DictionaryProgress>,
     pub(super) hashcat_progress: Option<arc_recall_core::HashcatProgress>,
     pub(super) archive_path: String,
     pub(super) archive_format: ArchiveFormat,
@@ -151,6 +152,7 @@ impl Drop for RecoveryTaskCompletionGuard {
                 status.failure_kind = Some(RecoveryFailureKind::Other);
                 status.failure_phase = Some(status.phase);
                 status.running = false;
+                status.dictionary_progress = None;
                 status.completed = true;
                 status.success = false;
                 status.phase = RecoveryPhase::Failed;
@@ -352,6 +354,7 @@ mod tests {
             failure_phase: None,
             gpu_started: false,
             hashcat_progress: None,
+            dictionary_progress: None,
             archive_path: "archive.7z".into(),
             archive_format: ArchiveFormat::SevenZip,
             archive_format_label: "7z".into(),

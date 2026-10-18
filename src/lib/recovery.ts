@@ -78,6 +78,12 @@ export type RecoveryTaskStatus = {
   cancelled: boolean
   failureKind: RecoveryFailureKind | null
   failurePhase: RecoveryPhase | null
+  dictionaryProgress?: {
+    currentIndex: number | null
+    candidate: string | null
+    percent: number | null
+    batch: boolean
+  } | null
   hashcatProgress?: {
     completed: number
     total: number

@@ -9,6 +9,12 @@ const task = {
   archivePath: "C:/private/source.zip",
   outputDirectory: "C:/private/output",
   recoveredPassword: "$HEX[616263]",
+  dictionaryProgress: {
+    currentIndex: 2,
+    candidate: "private-live-candidate",
+    percent: null,
+    batch: false,
+  },
   message: "secret message",
   events: [{ message: "secret event" }],
   success: true,
@@ -51,6 +57,7 @@ test("报告仅导出白名单，默认不含路径，显式开启也不含密�
     const serialized = JSON.stringify(buildRecoveryReport(task, includePaths))
     for (const secret of [
       task.recoveredPassword,
+      task.dictionaryProgress.candidate,
       task.message,
       "secret event",
       "must not export",
@@ -78,6 +85,7 @@ test("任务记忆默认关闭，开启后串行写入并阻止密码和事件�
   await journal.flush()
   assert.equal(writes.at(-1).items[0].state, "success")
   assert.ok(!JSON.stringify(writes).includes(task.recoveredPassword))
+  assert.ok(!JSON.stringify(writes).includes(task.dictionaryProgress.candidate))
   assert.ok(
     !JSON.stringify(journalItems(queue.getSnapshot())).includes("events")
   )

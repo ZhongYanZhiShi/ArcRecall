@@ -22,6 +22,8 @@ Both editions provide the same application features. Installers reuse the existi
 
 ## Features
 
+During dictionary recovery, 7-Zip shows the current candidate index and checked count; John shows its reported percentage and candidate range; Hashcat shows computation progress, speed, and estimated remaining time. Candidate previews are hidden by default and can be revealed with the eye button. They stay in live task state and are excluded from events, logs, and exported reports. Parallel engine progress does not identify a single candidate.
+
 - Identify formats from file contents and create copies with correct extensions, leaving originals unchanged.
 - Extract nested archives recursively, verify known passwords, and recover passwords using local dictionaries.
 - Process batches with cancellation, retry, and optional task queue persistence.

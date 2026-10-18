@@ -156,7 +156,7 @@ pub fn run_process(
     request: &ProcessRequest,
     cancellation: Option<&CancellationToken>,
 ) -> Result<ProcessOutput, ProcessRunnerError> {
-    run_process_impl(request, cancellation, false, |_| {}, || Ok(()))
+    run_process_impl(request, cancellation, false, false, |_| {}, || Ok(()))
 }
 
 /// Deliver bounded stdout lines while the child is alive. A slow consumer may
@@ -167,13 +167,23 @@ pub(crate) fn run_process_observed(
     on_stdout: impl FnMut(&str),
     check: impl FnMut() -> io::Result<()>,
 ) -> Result<ProcessOutput, ProcessRunnerError> {
-    run_process_impl(request, cancellation, true, on_stdout, check)
+    run_process_impl(request, cancellation, true, false, on_stdout, check)
+}
+
+/// Observe stderr status lines without mixing them with stdout results.
+pub(crate) fn run_process_stderr_observed(
+    request: &ProcessRequest,
+    cancellation: Option<&CancellationToken>,
+    on_stderr: impl FnMut(&str),
+) -> Result<ProcessOutput, ProcessRunnerError> {
+    run_process_impl(request, cancellation, false, true, on_stderr, || Ok(()))
 }
 
 fn run_process_impl(
     request: &ProcessRequest,
     cancellation: Option<&CancellationToken>,
     observe_stdout: bool,
+    observe_stderr: bool,
     mut on_stdout: impl FnMut(&str),
     mut check: impl FnMut() -> io::Result<()>,
 ) -> Result<ProcessOutput, ProcessRunnerError> {
@@ -220,10 +230,12 @@ fn run_process_impl(
         .expect("stderr is piped before spawning the child");
     let output_limit = request.max_output_bytes;
     let (sender, receiver) = mpsc::sync_channel(32);
+    let stderr_sender = observe_stderr.then(|| sender.clone());
     let stdout_reader = thread::spawn(move || {
         read_capped_observed(stdout, output_limit, observe_stdout.then_some(sender))
     });
-    let stderr_reader = thread::spawn(move || read_capped(stderr, output_limit));
+    let stderr_reader =
+        thread::spawn(move || read_capped_observed(stderr, output_limit, stderr_sender));
     let started = Instant::now();
 
     let status = loop {
@@ -269,10 +281,6 @@ fn run_process_impl(
         stdout_truncated: stdout.truncated,
         stderr_truncated: stderr.truncated,
     })
-}
-
-fn read_capped(reader: impl Read, limit: usize) -> io::Result<CapturedOutput> {
-    read_capped_observed(reader, limit, None)
 }
 
 fn read_capped_observed(
@@ -413,6 +421,23 @@ mod tests {
         assert!(received);
         assert!(matches!(result, Err(ProcessRunnerError::Cancelled)));
         assert!(start.elapsed() < Duration::from_secs(15));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn live_stderr_is_observed_before_exit_and_can_cancel() {
+        let mut request = ProcessRequest::new("powershell.exe");
+        request.args = ["-NoProfile", "-NonInteractive", "-Command", "[Console]::WriteLine('not-status'); [Console]::Error.WriteLine('0g 0:00:00:01 50.00% 0g/s 1p/s 1c/s 1C/s first..last'); [Console]::Error.Flush(); Start-Sleep -Seconds 30"].map(OsString::from).to_vec();
+        let cancellation = CancellationToken::default();
+        let mut lines = Vec::new();
+        let result = run_process_stderr_observed(&request, Some(&cancellation), |line| {
+            lines.push(line.to_owned());
+            cancellation.cancel();
+        });
+        assert!(matches!(result, Err(ProcessRunnerError::Cancelled)));
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("50.00%"));
+        assert!(!lines[0].contains("not-status"));
     }
 
     #[test]

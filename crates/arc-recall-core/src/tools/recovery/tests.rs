@@ -2170,6 +2170,35 @@ fn dictionary_recovery_falls_back_to_seven_zip_when_external_tools_are_missing()
     })
     .expect("fallback recovery");
 
+    let live: Vec<_> = updates
+        .iter()
+        .filter_map(|update| {
+            update
+                .dictionary_progress
+                .as_ref()
+                .map(|progress| (update, progress))
+        })
+        .collect();
+    assert_eq!(live.len(), candidates.len());
+    for (index, (update, progress)) in live.iter().enumerate() {
+        assert_eq!(progress.current_index, Some(index as u64 + 1));
+        assert_eq!(update.attempted_count, Some(index as u64));
+        assert!(
+            progress
+                .candidate
+                .as_ref()
+                .unwrap()
+                .starts_with(&candidates[index].chars().take(256).collect::<String>())
+        );
+        assert!(!update.message.contains(&candidates[index]));
+    }
+    assert_eq!(
+        updates
+            .iter()
+            .filter_map(|update| update.attempted_count)
+            .last(),
+        Some(candidates.len() as u64)
+    );
     assert!(result.success, "{}", result.message);
     assert_eq!(result.password.as_deref(), Some(password));
     assert_eq!(result.engine.as_deref(), Some("7-Zip CPU"));

@@ -3,7 +3,9 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
 use super::super::john::{SevenZipConverter, resolve_seven_zip_converter};
 use super::super::runner::{
@@ -185,7 +187,7 @@ pub(super) fn recover_with_dictionary(
                     format!("正在用 John CPU 尝试 {} 条候选。", job.dictionary_count)
                 },
             ));
-            match run_john(job, tools, records, cancellation) {
+            match run_john(job, tools, records, cancellation, report) {
                 Ok(attempt) => {
                     if let CrackAttempt::Exhausted(limit) = &attempt {
                         john_covered_bytes = Some(*limit);
@@ -569,8 +571,6 @@ fn run_internal_dictionary(
     let mut line = String::new();
     let mut attempted = 0u64;
     let mut reported_oversized_candidate = false;
-    let mut last_reported = 0u64;
-    let mut last_report_at = Instant::now();
 
     loop {
         ensure_not_cancelled(cancellation)?;
@@ -589,26 +589,25 @@ fn run_internal_dictionary(
         }
 
         attempted = attempted.saturating_add(1);
-        if attempted == 1 || last_report_at.elapsed() >= Duration::from_millis(250) {
-            report(RecoveryUpdate::progress(
-                RecoveryPhase::Internal,
-                "7-Zip CPU",
-                format!(
-                    "7-Zip CPU 正在检查字典：{} / {}。",
-                    attempted, job.dictionary_count
-                ),
-                attempted,
-                job.dictionary_count,
-            ));
-            last_reported = attempted;
-            last_report_at = Instant::now();
-        }
-
         if already_verified.contains(&line)
             || covered_password_bytes.is_some_and(|limit| line.len() <= limit)
         {
             continue;
         }
+        let mut update = RecoveryUpdate::progress(
+            RecoveryPhase::Internal,
+            "7-Zip CPU",
+            "7-Zip CPU 正在逐条检查字典。",
+            attempted - 1,
+            job.dictionary_count,
+        );
+        update.dictionary_progress = Some(super::DictionaryProgress {
+            current_index: Some(attempted),
+            candidate: Some(candidate_preview(&line)),
+            percent: None,
+            batch: false,
+        });
+        report(update);
         let verified =
             match super::timed_operation(super::RecoveryOperation::Verification, report, |_| {
                 verify_password(&job.archive_path, &line, tools, cancellation)
@@ -632,6 +631,13 @@ fn run_internal_dictionary(
                 Err(error) => return Err(error),
             };
         if verified {
+            report(RecoveryUpdate::progress(
+                RecoveryPhase::Internal,
+                "7-Zip CPU",
+                "候选密码已通过验证。",
+                attempted,
+                job.dictionary_count,
+            ));
             extract_with_password(input, tools, &line, cancellation, report)?;
             return Ok(Some(success_result(
                 job,
@@ -642,18 +648,16 @@ fn run_internal_dictionary(
         }
     }
 
-    if attempted != last_reported {
-        report(RecoveryUpdate::progress(
-            RecoveryPhase::Internal,
-            "7-Zip CPU",
-            format!(
-                "7-Zip CPU 已完成字典检查：{} / {}。",
-                attempted, job.dictionary_count
-            ),
-            attempted,
-            job.dictionary_count,
-        ));
-    }
+    report(RecoveryUpdate::progress(
+        RecoveryPhase::Internal,
+        "7-Zip CPU",
+        format!(
+            "7-Zip CPU 已完成字典检查：{} / {}。",
+            attempted, job.dictionary_count
+        ),
+        attempted,
+        job.dictionary_count,
+    ));
     Ok(None)
 }
 
@@ -953,11 +957,55 @@ fn parse_hashcat_progress(line: &str, now: u64) -> Option<super::HashcatProgress
     })
 }
 
+fn candidate_preview(value: &str) -> String {
+    let mut chars = value.chars();
+    let mut preview: String = chars.by_ref().take(256).collect();
+    if chars.next().is_some() {
+        preview.push('…');
+    }
+    preview
+}
+
+fn parse_john_progress(line: &str) -> Option<super::DictionaryProgress> {
+    // Status lines contain a guess count, elapsed time, percentages and p/s.
+    // Diagnostics and cracked-password output must not be mistaken for status.
+    let fields: Vec<_> = line.split_whitespace().collect();
+    fields.first()?.strip_suffix('g')?.parse::<u64>().ok()?;
+    let speed = fields.iter().position(|field| field.ends_with("p/s"))?;
+    let percent = fields[..speed].iter().find_map(|field| {
+        field
+            .strip_suffix('%')?
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))
+    });
+    let mut candidate_start = speed;
+    for suffix in ["c/s", "C/s"] {
+        if fields
+            .get(candidate_start + 1)
+            .is_some_and(|field| field.ends_with(suffix))
+        {
+            candidate_start += 1;
+        }
+    }
+    // Preserve spaces in candidates by locating the end of the speed token.
+    let token = fields[candidate_start];
+    let offset = token.as_ptr() as usize - line.as_ptr() as usize + token.len();
+    let candidates = line[offset..].trim();
+    Some(super::DictionaryProgress {
+        current_index: None,
+        candidate: (!candidates.is_empty()).then(|| candidate_preview(candidates)),
+        percent,
+        batch: true,
+    })
+}
+
 fn run_john(
     job: &RecoveryJob,
     tools: &RecoveryToolPaths,
     records: &[HashRecord],
     cancellation: &CancellationToken,
+    report: &mut impl FnMut(RecoveryUpdate),
 ) -> Result<CrackAttempt, RecoveryError> {
     let hash_file = job.work_directory.join("john.hash");
     let pot_file = job.work_directory.join("john.pot");
@@ -977,12 +1025,28 @@ fn run_john(
         OsString::from(format!("--pot={}", pot_file.display())),
         OsString::from(format!("--session={}", session_file.display())),
         OsString::from("--nolog"),
+        OsString::from("--progress-every=1"),
         hash_file.as_os_str().to_owned(),
     ];
     request.current_dir = Some(tools.john_tools_directory.clone());
     request.timeout = Duration::from_secs(7 * 24 * 60 * 60);
     request.max_output_bytes = 8 * 1024 * 1024;
-    let output = run_checked(&request, cancellation)?;
+    let output =
+        super::super::runner::run_process_stderr_observed(&request, Some(cancellation), |line| {
+            if let Some(progress) = parse_john_progress(line) {
+                let mut update = RecoveryUpdate::stage(
+                    RecoveryPhase::John,
+                    Some("John CPU"),
+                    "John CPU 正在批量检查字典。",
+                );
+                update.dictionary_progress = Some(progress);
+                report(update);
+            }
+        })
+        .map_err(|error| match error {
+            super::super::runner::ProcessRunnerError::Cancelled => RecoveryError::Cancelled,
+            other => RecoveryError::Process(other.to_string()),
+        })?;
 
     if pot_file.is_file() {
         let pot = fs::read_to_string(&pot_file)?;
@@ -1351,6 +1415,26 @@ mod tests {
             ),
             Err(RecoveryError::Cancelled)
         ));
+    }
+
+    #[test]
+    fn john_progress_parses_batches_without_fabricating_candidate_indices() {
+        let sample = parse_john_progress(
+            "0g 0:00:02:10 12.34% (ETA: 12:30) 0g/s 20p/s 40c/s 40C/s first word..last wordp/s",
+        )
+        .unwrap();
+        assert_eq!(sample.percent, Some(12.34));
+        assert_eq!(sample.current_index, None);
+        assert_eq!(
+            sample.candidate.as_deref(),
+            Some("first word..last wordp/s")
+        );
+        assert!(sample.batch);
+        assert!(parse_john_progress("Loaded 1 password hash").is_none());
+        assert!(parse_john_progress("secret (archive)").is_none());
+        let unknown = parse_john_progress("0g 0:00:00:01 NaN% 0g/s 1p/s 1c/s 1C/s value").unwrap();
+        assert_eq!(unknown.percent, None);
+        assert_eq!(candidate_preview(&"中".repeat(300)).chars().count(), 257);
     }
 
     #[test]

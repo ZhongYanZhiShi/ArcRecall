@@ -239,6 +239,7 @@ pub(crate) async fn recovery_start(
         failure_phase: None,
         gpu_started: false,
         hashcat_progress: None,
+        dictionary_progress: None,
         archive_path: analysis.archive_path.clone(),
         archive_format: analysis.format,
         archive_format_label: analysis.format_label.clone(),
@@ -414,6 +415,7 @@ pub(crate) async fn recovery_start(
                     if update.compute_device == Some(RecoveryComputeDevice::Gpu) {
                         task_status.gpu_started = true;
                     }
+                    task_status.dictionary_progress = update.dictionary_progress;
                     task_status.hashcat_progress = update.hashcat_progress;
                     task_status.phase = update.phase;
                     task_status.engine = update.engine;
@@ -506,6 +508,7 @@ pub(crate) async fn recovery_start(
         };
         {
             task_status.running = false;
+            task_status.dictionary_progress = None;
             task_status.completed = true;
             task_status.elapsed_ms = current_time_ms().saturating_sub(task_status.started_at_ms);
             match outcome {

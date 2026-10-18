@@ -939,6 +939,38 @@ try {
     avoidOutputCollision: true,
   }
   const cancelTask = await invoke("recovery_start", { request })
+  let liveDictionaryStatus
+  await expect
+    .poll(
+      async () => {
+        liveDictionaryStatus = await invoke("recovery_status", {
+          taskId: cancelTask.taskId,
+        })
+        return liveDictionaryStatus?.dictionaryProgress?.currentIndex ?? 0
+      },
+      { timeout: 15_000 }
+    )
+    .toBeGreaterThan(0)
+  assert.equal(
+    liveDictionaryStatus.attemptedCount,
+    liveDictionaryStatus.dictionaryProgress.currentIndex - 1
+  )
+  assert.ok(liveDictionaryStatus.dictionaryProgress.candidate)
+  assert.ok(
+    !JSON.stringify(liveDictionaryStatus.events).includes(
+      liveDictionaryStatus.dictionaryProgress.candidate
+    )
+  )
+  // Reload to attach to the real running worker through recovery_latest_task.
+  await page.reload()
+  const progressPanel = page.getByRole("region", { name: "字典恢复进度" })
+  await expect(progressPanel).toBeVisible({ timeout: 15_000 })
+  await expect(progressPanel).toContainText("正在测试第")
+  await progressPanel.getByRole("button", { name: "显示当前候选" }).click()
+  await expect(progressPanel.locator("code")).not.toHaveText("••••••••")
+  await page.screenshot({
+    path: join(evidence, "native-dictionary-progress.png"),
+  })
   assert.equal(
     await invoke("recovery_cancel", { taskId: cancelTask.taskId }),
     true
@@ -951,6 +983,12 @@ try {
       { timeout: 15_000 }
     )
     .toBe(true)
+  assert.equal(
+    (await invoke("recovery_status", { taskId: cancelTask.taskId }))
+      .dictionaryProgress,
+    null
+  )
+  await expect(progressPanel).not.toBeVisible()
   // Window close must cancel and join the active native worker before deleting its workspace.
   await invoke("recovery_start", { request })
   await close()

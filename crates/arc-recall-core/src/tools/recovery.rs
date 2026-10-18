@@ -167,6 +167,16 @@ pub struct HashcatProgress {
     pub temperature_celsius: Option<u64>,
 }
 
+/// Ephemeral UI telemetry; candidate text must never enter events or reports.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictionaryProgress {
+    pub current_index: Option<u64>,
+    pub candidate: Option<String>,
+    pub percent: Option<f64>,
+    pub batch: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryUpdate {
@@ -184,6 +194,8 @@ pub struct RecoveryUpdate {
     pub scanned_file_count: Option<u64>,
     pub root_extraction_completed: Option<bool>,
     pub hashcat_progress: Option<HashcatProgress>,
+    #[serde(default)]
+    pub dictionary_progress: Option<DictionaryProgress>,
     #[serde(default)]
     pub scan_progress: bool,
     #[serde(default)]
@@ -244,6 +256,7 @@ impl RecoveryUpdate {
             scanned_file_count: None,
             root_extraction_completed: None,
             hashcat_progress: None,
+            dictionary_progress: None,
             scan_progress: false,
             timing: None,
         }
@@ -271,6 +284,7 @@ impl RecoveryUpdate {
             scanned_file_count: None,
             root_extraction_completed: None,
             hashcat_progress: None,
+            dictionary_progress: None,
             scan_progress: false,
             timing: None,
         }
