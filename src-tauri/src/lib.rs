@@ -23,8 +23,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ai_commands::{
-    ai_connection_test, ai_generate_archive_name, ai_models_list, ai_profile_delete,
-    ai_profile_upsert, ai_profiles_list, ai_settings_update,
+    ai_connection_test, ai_generate_archive_name, ai_models_list, ai_preview_archive_reference,
+    ai_profile_delete, ai_profile_upsert, ai_profiles_list, ai_settings_update,
 };
 use arc_recall_core::{
     APP_DATA_FOLDER_NAME, AppLogLevel, AppPaths, DictionaryCandidateStore, LoggingSettings,
@@ -495,6 +495,7 @@ pub fn run() {
             ai_models_list,
             ai_connection_test,
             ai_generate_archive_name,
+            ai_preview_archive_reference,
             tool_full_bundle_status,
             recovery_capabilities,
             tool_full_bundle_install,

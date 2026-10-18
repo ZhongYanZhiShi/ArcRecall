@@ -47,6 +47,7 @@ pub fn health_status() -> &'static str {
     "ok"
 }
 pub use ai::{
-    AiClientConfig, AiConnectionTestResult, AiError, AiModelInfo, generate_archive_name,
-    list_ai_models, test_ai_connection, validate_ai_base_url,
+    AiClientConfig, AiConnectionTestResult, AiError, AiModelInfo, AiNameReferenceRequest,
+    AiReferencePreviewFile, generate_archive_name, list_ai_models, preview_archive_name_reference,
+    test_ai_connection, validate_ai_base_url,
 };

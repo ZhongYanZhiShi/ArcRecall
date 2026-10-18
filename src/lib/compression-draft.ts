@@ -15,6 +15,9 @@ export type CompressionDraft = {
   encryptFileNames: boolean
   openWhenDone: boolean
   useAiRename: boolean
+  useAiFileReference: boolean
+  aiReferenceExtensions: string
+  aiCustomReferenceExtensions: string[]
 }
 
 export function createCompressionDraft(): CompressionDraft {
@@ -30,7 +33,37 @@ export function createCompressionDraft(): CompressionDraft {
     encryptFileNames: false,
     openWhenDone: true,
     useAiRename: false,
+    useAiFileReference: false,
+    aiReferenceExtensions: "txt, md",
+    aiCustomReferenceExtensions: [],
   }
+}
+
+export const AI_REFERENCE_EXTENSION_OPTIONS = [
+  "txt",
+  "md",
+  "json",
+  "yaml",
+  "yml",
+  "csv",
+  "log",
+  "xml",
+]
+
+export function parseAiReferenceExtensions(value: string): string[] {
+  const extensions = value
+    .split(/[\s,，;；]+/)
+    .filter(Boolean)
+    .map((token) => token.replace(/^(?:\*\.|\.+)/, "").toLowerCase())
+  if (
+    extensions.some(
+      (extension) =>
+        !/^[a-z0-9_.+-]{1,32}$/.test(extension) || extension.endsWith(".")
+    )
+  ) {
+    throw new Error("请输入有效后缀，例如 txt、.md 或 *.json。")
+  }
+  return [...new Set(extensions)]
 }
 
 export function compressionPasswordError(

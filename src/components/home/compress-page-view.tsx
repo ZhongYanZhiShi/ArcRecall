@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   CircleAlert,
+  Check,
   Eye,
   EyeOff,
   FileArchive,
@@ -10,14 +11,17 @@ import {
   FolderPlus,
   KeyRound,
   PackagePlus,
+  Plus,
   Settings2,
   Square,
   Trash2,
   WandSparkles,
+  X,
 } from "lucide-react"
 import * as React from "react"
 
 import { CompressionTaskCard } from "@/components/home/compression-task-card"
+import { CompressionReferencePreview } from "@/components/home/compression-reference-preview"
 import { OutputLocationField } from "@/components/home/output-location-field"
 import {
   WorkbenchPage,
@@ -57,6 +61,7 @@ import {
   Field,
   FieldContent,
   FieldDescription,
+  FieldError,
   FieldLabel,
   FieldLegend,
   FieldSet,
@@ -87,13 +92,19 @@ import type {
   CompressionFormat,
   CompressionTaskStatus,
 } from "@/lib/compression"
-import type { CompressionDraft } from "@/lib/compression-draft"
+import {
+  AI_REFERENCE_EXTENSION_OPTIONS,
+  parseAiReferenceExtensions,
+  type CompressionDraft,
+} from "@/lib/compression-draft"
 import {
   compressionSourceFileName,
   compressionSourceIdentity,
   compressionSourceParent,
 } from "@/lib/compression-path"
 import { cn } from "@/lib/utils"
+import type { CompressionNamingPreferencesController } from "@/hooks/use-compression-naming-preferences"
+import type { AiReferencePreviewController } from "@/hooks/use-ai-reference-preview"
 
 type CompressionLevel = 0 | 1 | 3 | 5 | 7 | 9
 
@@ -118,6 +129,8 @@ const LEVEL_OPTIONS = LEVELS.map((item) => ({
 const COUNT_FORMATTER = new Intl.NumberFormat("zh-CN")
 
 type CompressPageViewProps = {
+  referencePreview: AiReferencePreviewController
+  referencePreferences: CompressionNamingPreferencesController
   draft: CompressionDraft
   dragOver: boolean
   busy: boolean
@@ -155,6 +168,8 @@ type CompressPageViewProps = {
 }
 
 export function CompressPageView({
+  referencePreview,
+  referencePreferences,
   draft,
   dragOver,
   busy,
@@ -199,8 +214,64 @@ export function CompressPageView({
     encryptFileNames,
     openWhenDone,
     useAiRename,
+    useAiFileReference,
+    aiReferenceExtensions,
+    aiCustomReferenceExtensions,
   } = draft
+  const [customReferenceExtension, setCustomReferenceExtension] =
+    React.useState("")
+  const [referenceExtensionError, setReferenceExtensionError] = React.useState<
+    string | null
+  >(null)
+  const customReferenceInput = React.useRef<HTMLInputElement>(null)
   const draftLocked = busy || running || passwordCredentialBusy
+  const referencePreferencesLocked = draftLocked || !referencePreferences.ready
+  const selectedReferenceExtensions = parseAiReferenceExtensions(
+    aiReferenceExtensions
+  )
+  const referenceExtensionOptions = [
+    ...new Set([
+      ...AI_REFERENCE_EXTENSION_OPTIONS,
+      ...aiCustomReferenceExtensions,
+      ...selectedReferenceExtensions,
+    ]),
+  ]
+  function addReferenceExtensions() {
+    if (referencePreferencesLocked || !customReferenceExtension.trim()) return
+    try {
+      const additions = parseAiReferenceExtensions(customReferenceExtension)
+      if (!additions.length) {
+        setReferenceExtensionError("请输入要添加的后缀，例如 rst。")
+        return
+      }
+      const selected = [
+        ...new Set([...selectedReferenceExtensions, ...additions]),
+      ]
+      if (selected.length > 32) {
+        setReferenceExtensionError("最多可选择 32 种参考文件后缀。")
+        return
+      }
+      referencePreferences.change(
+        selected,
+        [...new Set([...aiCustomReferenceExtensions, ...additions])].filter(
+          (extension) => !AI_REFERENCE_EXTENSION_OPTIONS.includes(extension)
+        )
+      )
+      setCustomReferenceExtension("")
+      setReferenceExtensionError(null)
+    } catch (reason) {
+      setReferenceExtensionError((reason as Error).message)
+    }
+  }
+  function removeReferenceExtension(suffix: string) {
+    if (referencePreferencesLocked) return
+    referencePreferences.change(
+      selectedReferenceExtensions.filter((extension) => extension !== suffix),
+      aiCustomReferenceExtensions.filter((extension) => extension !== suffix)
+    )
+    setReferenceExtensionError(null)
+    customReferenceInput.current?.focus()
+  }
   const defaultOutput = sources[0]
     ? compressionSourceParent(sources[0])
     : "首个来源的上级目录"
@@ -529,16 +600,17 @@ export function CompressPageView({
                         </Button>
                       </div>
                       <FieldDescription className="text-xs leading-relaxed">
-                        仅发送基础名称和提示词，不读取文件、路径或内容。
+                        根据基础名称和提示词命名，也可开启文件内容参考。
                       </FieldDescription>
                     </FieldContent>
                     <Switch
                       id="compress-ai-rename"
                       size="sm"
                       checked={useAiRename}
-                      disabled={draftLocked}
+                      disabled={referencePreferencesLocked}
                       onCheckedChange={(checked) => {
-                        updateDraft("useAiRename", checked)
+                        if (referencePreferencesLocked) return
+                        referencePreferences.setEnabled("useAiRename", checked)
                         setAiError(
                           checked && !activeAiProfile
                             ? "尚未配置可用的 AI 模型，请先前往设置。"
@@ -547,6 +619,235 @@ export function CompressPageView({
                       }}
                     />
                   </Field>
+
+                  {referencePreferences.error ? (
+                    <Alert variant="warning">
+                      <CircleAlert />
+                      <AlertDescription className="flex-1 text-xs">
+                        {referencePreferences.error}
+                      </AlertDescription>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        disabled={draftLocked}
+                        onClick={referencePreferences.retry}
+                      >
+                        {referencePreferences.ready ? "重试保存" : "重新读取"}
+                      </Button>
+                    </Alert>
+                  ) : !referencePreferences.ready ? (
+                    <p role="status" className="text-xs text-muted-foreground">
+                      正在读取 AI 命名设置…
+                    </p>
+                  ) : null}
+
+                  {useAiRename ? (
+                    <div className="grid gap-3 rounded-xl border border-border/80 p-3">
+                      <Field orientation="horizontal" className="items-center">
+                        <FieldContent>
+                          <FieldLabel
+                            htmlFor="compress-ai-file-reference"
+                            className="text-xs"
+                          >
+                            参考文件内容
+                          </FieldLabel>
+                          <FieldDescription className="text-xs leading-relaxed">
+                            读取压缩来源中匹配扩展名的文本，含子文件夹。内容摘录和文件名会发送给当前
+                            AI 服务。
+                          </FieldDescription>
+                        </FieldContent>
+                        <Switch
+                          id="compress-ai-file-reference"
+                          size="sm"
+                          checked={useAiFileReference}
+                          disabled={referencePreferencesLocked}
+                          onCheckedChange={(checked) =>
+                            referencePreferences.setEnabled(
+                              "useAiFileReference",
+                              checked
+                            )
+                          }
+                        />
+                      </Field>
+                      {useAiFileReference ? (
+                        <FieldSet className="gap-2">
+                          <FieldLegend
+                            id="compress-ai-reference-label"
+                            variant="label"
+                            className="text-xs"
+                          >
+                            参考文件扩展名
+                          </FieldLegend>
+                          <ToggleGroup
+                            multiple
+                            variant="outline"
+                            size="sm"
+                            spacing={1}
+                            value={selectedReferenceExtensions}
+                            disabled={referencePreferencesLocked}
+                            aria-label="选择参考文件后缀"
+                            aria-describedby="compress-ai-reference-hint"
+                            onValueChange={(values) => {
+                              if (referencePreferencesLocked) return
+                              if (values.length > 32) {
+                                setReferenceExtensionError(
+                                  "最多可选择 32 种参考文件后缀。"
+                                )
+                                return
+                              }
+                              referencePreferences.change(
+                                values,
+                                aiCustomReferenceExtensions
+                              )
+                              setReferenceExtensionError(null)
+                            }}
+                            className="w-full flex-wrap justify-start gap-1.5"
+                          >
+                            {referenceExtensionOptions.map((suffix) => {
+                              const custom =
+                                !AI_REFERENCE_EXTENSION_OPTIONS.includes(suffix)
+                              const selected =
+                                selectedReferenceExtensions.includes(suffix)
+                              return (
+                                <div
+                                  key={suffix}
+                                  className={cn(
+                                    "inline-flex max-w-full items-center rounded-3xl",
+                                    custom && "border border-input pr-1",
+                                    custom &&
+                                      selected &&
+                                      "border-primary/50 bg-primary/10 text-primary"
+                                  )}
+                                >
+                                  <ToggleGroupItem
+                                    value={suffix}
+                                    aria-label={`.${suffix}`}
+                                    className={cn(
+                                      "max-w-full gap-1.5 text-xs aria-pressed:border-primary/50 aria-pressed:bg-primary/10 aria-pressed:text-primary",
+                                      custom &&
+                                        "min-w-0 border-0 pr-1.5 aria-pressed:bg-transparent"
+                                    )}
+                                  >
+                                    <Check
+                                      aria-hidden
+                                      className={cn(
+                                        "size-3",
+                                        !selectedReferenceExtensions.includes(
+                                          suffix
+                                        ) && "invisible"
+                                      )}
+                                    />
+                                    <span className="truncate">.{suffix}</span>
+                                  </ToggleGroupItem>
+                                  {custom ? (
+                                    <Button
+                                      type="button"
+                                      size="icon-xs"
+                                      variant="ghost"
+                                      disabled={referencePreferencesLocked}
+                                      onClick={() =>
+                                        removeReferenceExtension(suffix)
+                                      }
+                                      aria-label={`删除 .${suffix} 标签`}
+                                      title={`删除 .${suffix} 标签`}
+                                      className="shrink-0 rounded-full text-muted-foreground hover:text-destructive"
+                                    >
+                                      <X aria-hidden />
+                                    </Button>
+                                  ) : null}
+                                </div>
+                              )
+                            })}
+                          </ToggleGroup>
+                          <Field
+                            className="gap-1.5"
+                            data-invalid={Boolean(referenceExtensionError)}
+                          >
+                            <FieldLabel
+                              htmlFor="compress-ai-reference-extensions"
+                              className="sr-only"
+                            >
+                              自定义后缀
+                            </FieldLabel>
+                            <InputGroup>
+                              <InputGroupInput
+                                id="compress-ai-reference-extensions"
+                                ref={customReferenceInput}
+                                value={customReferenceExtension}
+                                onChange={(event) => {
+                                  setCustomReferenceExtension(
+                                    event.target.value
+                                  )
+                                  setReferenceExtensionError(null)
+                                }}
+                                onKeyDown={(event) => {
+                                  if (
+                                    event.key === "Enter" &&
+                                    !event.nativeEvent.isComposing
+                                  ) {
+                                    event.preventDefault()
+                                    addReferenceExtensions()
+                                  }
+                                }}
+                                placeholder="输入自定义后缀，例如 rst"
+                                autoComplete="off"
+                                spellCheck={false}
+                                maxLength={1024}
+                                disabled={referencePreferencesLocked}
+                                aria-invalid={Boolean(referenceExtensionError)}
+                                aria-describedby="compress-ai-reference-add-hint compress-ai-reference-error"
+                              />
+                              <InputGroupAddon align="inline-end">
+                                <InputGroupButton
+                                  disabled={
+                                    referencePreferencesLocked ||
+                                    !customReferenceExtension.trim()
+                                  }
+                                  onClick={addReferenceExtensions}
+                                  aria-label="添加后缀标签"
+                                >
+                                  <Plus aria-hidden />
+                                  添加
+                                </InputGroupButton>
+                              </InputGroupAddon>
+                            </InputGroup>
+                            <FieldDescription
+                              id="compress-ai-reference-add-hint"
+                              className="text-xs leading-relaxed"
+                            >
+                              回车或点击添加后自动选中，多个后缀可用逗号或空格分隔。自定义标签可用
+                              × 删除，标签与选中状态会自动保存。
+                            </FieldDescription>
+                            {referenceExtensionError ? (
+                              <FieldError
+                                id="compress-ai-reference-error"
+                                className="text-xs"
+                              >
+                                {referenceExtensionError}
+                              </FieldError>
+                            ) : null}
+                          </Field>
+                          <FieldDescription
+                            id="compress-ai-reference-hint"
+                            className="text-xs leading-relaxed"
+                          >
+                            点击标签可多选或取消。最多参考 8 个文件，每个读取前
+                            8 KiB，总计 32
+                            KiB；跳过不可读文本，无匹配时仅参考基础名称。
+                          </FieldDescription>
+                        </FieldSet>
+                      ) : null}
+                      {useAiFileReference ? (
+                        <CompressionReferencePreview
+                          preview={referencePreview}
+                          hasSources={sources.length > 0}
+                          hasExtensions={Boolean(aiReferenceExtensions.trim())}
+                          disabled={draftLocked || !referencePreferences.ready}
+                        />
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   {useAiRename && (!activeAiProfile || aiError) ? (
                     <Alert
@@ -806,6 +1107,8 @@ export function CompressPageView({
                   disabled={
                     draftLocked ||
                     !permanentPasswordReady ||
+                    !referencePreferences.ready ||
+                    referencePreview.loading ||
                     sources.length === 0
                   }
                 >

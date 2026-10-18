@@ -254,3 +254,71 @@ test("浏览器预览与窄屏仍有可读入口，无框架错误或横向溢�
   ).toBe(true)
   expect(errors).toEqual([])
 })
+
+test("参考后缀标签支持多选、回车和按钮添加、自定义去重及切页保留", async ({
+  page,
+}) => {
+  const errors = []
+  page.on("pageerror", (error) => errors.push(error.message))
+  await page.goto("/")
+  await page.getByRole("button", { name: "压缩", exact: true }).click()
+  await page
+    .getByRole("switch", { name: "使用 AI 优化名称", exact: true })
+    .check()
+  await page.getByRole("switch", { name: "参考文件内容", exact: true }).check()
+  const suffixes = page.getByRole("group", {
+    name: "选择参考文件后缀",
+    exact: true,
+  })
+  const tag = (suffix) =>
+    suffixes.getByRole("button", { name: suffix, exact: true })
+  await expect(tag(".txt")).toHaveAttribute("aria-pressed", "true")
+  await expect(tag(".md")).toHaveAttribute("aria-pressed", "true")
+  await tag(".json").click()
+  await tag(".txt").click()
+  await expect(tag(".json")).toHaveAttribute("aria-pressed", "true")
+  await expect(tag(".md")).toHaveAttribute("aria-pressed", "true")
+  await expect(tag(".txt")).toHaveAttribute("aria-pressed", "false")
+  const custom = page.getByRole("textbox", { name: "自定义后缀", exact: true })
+  await custom.fill("*.RST")
+  await custom.press("Enter")
+  await expect(tag(".rst")).toHaveAttribute("aria-pressed", "true")
+  await expect(custom).toHaveValue("")
+  await custom.fill(".rst, custom")
+  await page.getByRole("button", { name: "添加后缀标签", exact: true }).click()
+  await expect(tag(".rst")).toHaveCount(1)
+  await expect(tag(".custom")).toHaveAttribute("aria-pressed", "true")
+  await page
+    .getByRole("button", { name: "删除 .custom 标签", exact: true })
+    .click()
+  await expect(tag(".custom")).toHaveCount(0)
+  await expect(custom).toBeFocused()
+  await expect(tag(".md")).toHaveAttribute("aria-pressed", "true")
+  await custom.fill("custom")
+  await custom.press("Enter")
+  await expect(tag(".custom")).toHaveAttribute("aria-pressed", "true")
+  await tag(".rst").focus()
+  await page.keyboard.press("Space")
+  await expect(tag(".rst")).toHaveAttribute("aria-pressed", "false")
+  await page.getByRole("button", { name: "解压", exact: true }).click()
+  await page.getByRole("button", { name: "压缩", exact: true }).click()
+  await expect(tag(".rst")).toHaveAttribute("aria-pressed", "false")
+  await expect(tag(".custom")).toHaveAttribute("aria-pressed", "true")
+  await custom.fill("../txt")
+  await custom.press("Enter")
+  await expect(custom).toHaveAttribute("aria-invalid", "true")
+  await expect(
+    page.getByText("请输入有效后缀，例如 txt、.md 或 *.json。", { exact: true })
+  ).toBeVisible()
+  await custom.fill("rst")
+  await expect(custom).toHaveAttribute("aria-invalid", "false")
+  await page.setViewportSize({ width: 960, height: 640 })
+  await custom.scrollIntoViewIfNeeded()
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth
+    )
+  ).toBe(true)
+  await page.screenshot({ path: "test-results/ai-reference-tags.png" })
+  expect(errors).toEqual([])
+})

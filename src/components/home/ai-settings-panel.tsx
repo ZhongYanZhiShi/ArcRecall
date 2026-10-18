@@ -571,7 +571,7 @@ export const AiSettingsPanel = React.forwardRef<
             {promptDirty ? <Badge variant="warning">有未保存更改</Badge> : null}
           </div>
           <CardDescription>
-            仅发送提示词和基础名称，不读取或上传文件、路径或内容。
+            默认发送提示词和基础名称；在压缩页开启文件内容参考后，还会发送匹配文本的内容摘录和文件名。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">

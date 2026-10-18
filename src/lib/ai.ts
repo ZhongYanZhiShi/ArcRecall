@@ -57,6 +57,28 @@ export type AiClientDraftRequest = {
   clearApiKey?: boolean
 }
 
+export type AiNameReferenceRequest = {
+  sources: string[]
+  extensions: string
+  selectedPaths?: string[]
+}
+
+export type AiReferencePreviewFile = {
+  fileName: string
+  sourcePath: string
+  content: string
+  truncated: boolean
+}
+
+export async function previewAiArchiveReference(
+  request: AiNameReferenceRequest
+): Promise<AiReferencePreviewFile[]> {
+  requireDesktopRuntime()
+  return invoke<AiReferencePreviewFile[]>("ai_preview_archive_reference", {
+    request,
+  })
+}
+
 export const DEFAULT_AI_RENAME_PROMPT =
   "命名规则要以windows的文件命名规则来进行"
 
@@ -131,13 +153,15 @@ export async function testAiConnection(
 export async function generateAiArchiveName(
   baseName: string,
   profileId?: string,
-  prompt?: string
+  prompt?: string,
+  reference?: AiNameReferenceRequest
 ): Promise<string> {
   requireDesktopRuntime()
   return invoke<string>("ai_generate_archive_name", {
     baseName,
     profileId: profileId || null,
     prompt: prompt || null,
+    reference: reference ?? null,
   })
 }
 

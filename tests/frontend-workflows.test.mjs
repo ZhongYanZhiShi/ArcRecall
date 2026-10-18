@@ -760,6 +760,7 @@ test("AI 准备阶段锁住实际输入、拖放和异步文件选择结果", as
   const output = deferred()
   let drop
   let submitted
+  let namingArguments
   let credentialSaves = 0
   let task = null
   const runningRef = { current: false }
@@ -778,7 +779,17 @@ test("AI 准备阶段锁住实际输入、拖放和异步文件选择结果", as
         profiles: [{ id: "local", name: "local" }],
         activeProfileId: "local",
       }),
-      generateAiArchiveName: () => ai.promise,
+      generateAiArchiveName: (...args) => {
+        namingArguments = args
+        return ai.promise
+      },
+      previewAiArchiveReference: async () =>
+        ["first", "second"].map((name) => ({
+          fileName: `${name}.txt`,
+          sourcePath: `C:\\${name}.txt`,
+          content: name,
+          truncated: false,
+        })),
     },
     "@/lib/compression": {
       getPermanentCompressionPasswordStatus: async () => ({
@@ -794,7 +805,10 @@ test("AI 准备阶段锁住实际输入、拖放和异步文件选择结果", as
         return { taskId: "test", running: true }
       },
     },
-    "@/lib/settings": {},
+    "@/lib/settings": {
+      getSettings: async () => ({}),
+      updateSettings: async () => ({}),
+    },
     "@/hooks/use-desktop-task": {
       useDesktopTask: () => ({
         task,
@@ -813,6 +827,8 @@ test("AI 准备阶段锁住实际输入、拖放和异步文件选择结果", as
     sources: ["C:\\first.txt", "C:\\second.txt"],
     baseName: "original",
     useAiRename: true,
+    useAiFileReference: true,
+    aiReferenceExtensions: "txt, md, custom",
   }
   const props = () => ({
     draft,
@@ -823,6 +839,16 @@ test("AI 准备阶段锁住实际输入、拖放和异步文件选择结果", as
   })
   harness.render(CompressPage, props())
   await settle()
+  const loading = harness.render(CompressPage, props())
+  await loading.props.handleStart()
+  assert.equal(
+    namingArguments,
+    undefined,
+    "Wait for the reference list before naming"
+  )
+  await settle()
+  const allSelected = harness.render(CompressPage, props())
+  allSelected.props.referencePreview.setSelected("C:\\second.txt", false)
   const ready = harness.render(CompressPage, props())
   const picked = ready.props.handlePickFiles()
   const pickedOutput = ready.props.handlePickOutput()
@@ -834,6 +860,8 @@ test("AI 准备阶段锁住实际输入、拖放和异步文件选择结果", as
     "archive-name",
     "compression-password",
     "compress-ai-rename",
+    "compress-ai-file-reference",
+    "compress-ai-reference-extensions",
   ]) {
     assert.equal(
       find(view, (node) => node.props?.id === id).props.disabled,
@@ -846,13 +874,37 @@ test("AI 准备阶段锁住实际输入、拖放和异步文件选择结果", as
       .props.disabled,
     true
   )
+  const suffixes = find(
+    view,
+    (node) => node.props?.["aria-label"] === "选择参考文件后缀"
+  )
+  assert.equal(suffixes.props.disabled, true)
+  assert.equal(suffixes.props.multiple, true)
+  assert.deepEqual(suffixes.props.value, ["txt", "md", "custom"])
   waiting.props.updateDraft("password", "unexpected")
+  waiting.props.updateDraft("aiReferenceExtensions", "unexpected")
   waiting.props.onRemoveSource(0)
+  waiting.props.referencePreview.setSelected("C:\\first.txt", false)
+  assert.deepEqual(
+    harness.render(CompressPage, props()).props.referencePreview.selectedPaths,
+    ["C:\\first.txt"]
+  )
   await waiting.props.handleSavePermanentPassword()
   drop({ payload: { type: "drop", paths: ["C:\\dropped.txt"] } })
   files.resolve(["C:\\picked.txt"])
   await picked
   assert.equal(draft.password, "")
+  assert.equal(draft.aiReferenceExtensions, "txt, md, custom")
+  assert.deepEqual(namingArguments, [
+    "original",
+    "local",
+    undefined,
+    {
+      sources: ["C:\\first.txt", "C:\\second.txt"],
+      extensions: "txt, md, custom",
+      selectedPaths: ["C:\\first.txt"],
+    },
+  ])
   assert.equal(draft.sources.length, 2)
   assert.equal(credentialSaves, 0)
   ai.resolve("AI_name")
@@ -866,6 +918,308 @@ test("AI 准备阶段锁住实际输入、拖放和异步文件选择结果", as
   await pickedOutput
   assert.equal(draft.outputDirectory, null)
   harness.hide()
+})
+
+test("参考文件预览跟随来源和后缀变化，忽略迟到结果，支持刷新与关闭", async () => {
+  const first = deferred()
+  const second = deferred()
+  const calls = []
+  const file = (name) => ({
+    fileName: name,
+    sourcePath: `C:/${name}`,
+    content: name,
+    truncated: false,
+  })
+  const harness = sourceHarness({
+    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/ai": {
+      previewAiArchiveReference: (request) => {
+        calls.push(request)
+        if (calls.length === 1) return first.promise
+        if (calls.length === 2) return second.promise
+        if (calls.length === 3) return Promise.reject(new Error("读取失败"))
+        return Promise.resolve([file("refreshed.md")])
+      },
+    },
+  })
+  const { useAiReferencePreview } = harness.load(
+    "src/hooks/use-ai-reference-preview.ts"
+  )
+  let sources = ["C:/first"]
+  let extensions = "txt"
+  let enabled = true
+  const Component = () => useAiReferencePreview(sources, extensions, enabled)
+  let preview = harness.render(Component)
+  assert.equal(preview.loading, true)
+  sources = ["C:/second"]
+  preview = harness.render(Component)
+  first.resolve([file("stale.txt")])
+  await settle()
+  preview = harness.render(Component)
+  assert.deepEqual(preview.files, [])
+  assert.equal(preview.loading, true)
+  second.resolve([file("current.txt")])
+  await settle()
+  preview = harness.render(Component)
+  assert.deepEqual(preview.files, [file("current.txt")])
+  extensions = "md"
+  preview = harness.render(Component)
+  assert.deepEqual(preview.files, [])
+  await settle()
+  preview = harness.render(Component)
+  assert.equal(preview.error, "读取失败")
+  preview.refresh()
+  harness.render(Component)
+  await settle()
+  preview = harness.render(Component)
+  assert.equal(preview.error, null)
+  assert.deepEqual(preview.files, [file("refreshed.md")])
+  assert.deepEqual(calls.at(-1), { sources: ["C:/second"], extensions: "md" })
+  enabled = false
+  preview = harness.render(Component)
+  await settle()
+  assert.deepEqual(preview.files, [])
+  assert.equal(calls.length, 4)
+  sources = []
+  enabled = true
+  harness.render(Component)
+  await settle()
+  assert.equal(calls.length, 4)
+  harness.hide()
+})
+
+test("参考文件默认全选，按路径区分重名文件，刷新和切换页面保留取消选择", async () => {
+  const files = ["C:/one/README.md", "C:/two/README.md"].map((sourcePath) => ({
+    fileName: "README.md",
+    sourcePath,
+    content: sourcePath,
+    truncated: false,
+  }))
+  let calls = 0
+  let locked = false
+  let extensions = "md"
+  const harness = sourceHarness({
+    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/ai": {
+      previewAiArchiveReference: async () => {
+        calls += 1
+        return files
+      },
+    },
+  })
+  const { useAiReferencePreview } = harness.load(
+    "src/hooks/use-ai-reference-preview.ts"
+  )
+  const Component = () =>
+    useAiReferencePreview(["C:/"], extensions, true, () => locked)
+  harness.render(Component)
+  await settle()
+  let preview = harness.render(Component)
+  assert.deepEqual(
+    preview.selectedPaths,
+    files.map((file) => file.sourcePath)
+  )
+  preview.setSelected(files[0].sourcePath, false)
+  preview = harness.render(Component)
+  assert.deepEqual(preview.selectedPaths, [files[1].sourcePath])
+  assert.equal(calls, 1, "Changing checkboxes must not reread files")
+  preview.refresh()
+  harness.render(Component)
+  await settle()
+  preview = harness.render(Component)
+  assert.deepEqual(preview.selectedPaths, [files[1].sourcePath])
+  extensions = "md, txt"
+  harness.render(Component)
+  await settle()
+  preview = harness.render(Component)
+  assert.deepEqual(preview.selectedPaths, [files[1].sourcePath])
+  harness.hide()
+  harness.render(Component)
+  await settle()
+  preview = harness.render(Component)
+  assert.deepEqual(preview.selectedPaths, [files[1].sourcePath])
+  locked = true
+  preview.setSelected(files[1].sourcePath, false)
+  preview.refresh()
+  preview = harness.render(Component)
+  assert.deepEqual(preview.selectedPaths, [files[1].sourcePath])
+  assert.equal(calls, 4)
+  locked = false
+  preview.setSelected("C:/outside.md", true)
+  preview.setSelected(files[1].sourcePath, false)
+  preview = harness.render(Component)
+  assert.deepEqual(preview.selectedPaths, [])
+  preview.setSelected(files[0].sourcePath, true)
+  preview = harness.render(Component)
+  assert.deepEqual(preview.selectedPaths, [files[0].sourcePath])
+  harness.hide()
+})
+
+test("后缀标签先读取再编辑，连续修改顺序保存且重新显示不会回写旧设置", async () => {
+  const load = deferred()
+  const firstWrite = deferred()
+  const saved = []
+  let loads = 0
+  let locked = false
+  const harness = sourceHarness({
+    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/settings": {
+      getSettings: () => {
+        loads += 1
+        return load.promise
+      },
+      updateSettings: (update) => {
+        saved.push(update)
+        return saved.length === 1 ? firstWrite.promise : Promise.resolve({})
+      },
+    },
+  })
+  let draft = harness
+    .load("src/lib/compression-draft.ts")
+    .createCompressionDraft()
+  const onDraftChange = (next) => {
+    draft = typeof next === "function" ? next(draft) : next
+  }
+  const isLocked = () => locked
+  const { useCompressionNamingPreferences } = harness.load(
+    "src/hooks/use-compression-naming-preferences.ts"
+  )
+  const Component = () =>
+    useCompressionNamingPreferences(draft, onDraftChange, isLocked)
+  let controller = harness.render(Component)
+  assert.equal(controller.ready, false)
+  controller.change(["json"], ["ignored"])
+  assert.deepEqual(draft.aiCustomReferenceExtensions, [])
+  load.resolve({
+    compressionNaming: {
+      useAiRename: true,
+      useAiFileReference: true,
+      selectedExtensions: ["md", "custom"],
+      customExtensions: ["custom", "unselected"],
+    },
+  })
+  await settle()
+  controller = harness.render(Component)
+  assert.equal(controller.ready, true)
+  assert.equal(draft.useAiRename, true)
+  assert.equal(draft.useAiFileReference, true)
+  assert.equal(draft.aiReferenceExtensions, "md, custom")
+  assert.deepEqual(draft.aiCustomReferenceExtensions, ["custom", "unselected"])
+  assert.equal(saved.length, 0)
+  controller.change(["md"], ["unselected"])
+  await settle()
+  controller.change([], ["unselected"])
+  await settle()
+  assert.equal(saved.length, 1)
+  firstWrite.resolve({})
+  await settle()
+  assert.deepEqual(
+    saved.map((update) => update.value),
+    [
+      {
+        useAiRename: true,
+        useAiFileReference: true,
+        selectedExtensions: ["md"],
+        customExtensions: ["unselected"],
+      },
+      {
+        useAiRename: true,
+        useAiFileReference: true,
+        selectedExtensions: [],
+        customExtensions: ["unselected"],
+      },
+    ]
+  )
+  assert.ok(saved.every((update) => update.kind === "compressionNaming"))
+  controller.setEnabled("useAiRename", false)
+  assert.equal(draft.useAiRename, false)
+  assert.equal(draft.useAiFileReference, true)
+  controller.setEnabled("useAiFileReference", false)
+  await settle()
+  assert.equal(draft.useAiFileReference, false)
+  assert.deepEqual(saved.at(-1).value, {
+    useAiRename: false,
+    useAiFileReference: false,
+    selectedExtensions: [],
+    customExtensions: ["unselected"],
+  })
+  locked = true
+  controller.change(["txt"], [])
+  controller.setEnabled("useAiRename", true)
+  assert.equal(draft.useAiRename, false)
+  assert.equal(draft.aiReferenceExtensions, "")
+  harness.hide()
+  harness.render(Component)
+  await settle()
+  assert.equal(loads, 1)
+  assert.equal(saved.length, 4)
+})
+
+test("后缀标签读取失败不覆盖保存内容，读取与保存失败都可重试", async () => {
+  let failLoad = true
+  let failSave = true
+  let writes = 0
+  const harness = sourceHarness({
+    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/settings": {
+      getSettings: async () => {
+        if (failLoad) throw new Error("unreadable")
+        return {
+          compressionNaming: {
+            selectedExtensions: [],
+            customExtensions: ["rst"],
+          },
+        }
+      },
+      updateSettings: async () => {
+        writes += 1
+        if (failSave) throw new Error("unwritable")
+        return {}
+      },
+    },
+  })
+  let draft = harness
+    .load("src/lib/compression-draft.ts")
+    .createCompressionDraft()
+  const onDraftChange = (next) => {
+    draft = typeof next === "function" ? next(draft) : next
+  }
+  const isLocked = () => false
+  const { useCompressionNamingPreferences } = harness.load(
+    "src/hooks/use-compression-naming-preferences.ts"
+  )
+  const Component = () =>
+    useCompressionNamingPreferences(draft, onDraftChange, isLocked)
+  harness.render(Component)
+  await settle()
+  let controller = harness.render(Component)
+  assert.equal(controller.ready, false)
+  assert.match(controller.error, /无法读取/)
+  controller.change(["txt"], [])
+  controller.setEnabled("useAiRename", true)
+  assert.equal(draft.useAiRename, false)
+  assert.equal(writes, 0)
+  failLoad = false
+  controller.retry()
+  harness.render(Component)
+  await settle()
+  controller = harness.render(Component)
+  assert.equal(controller.ready, true)
+  assert.equal(draft.aiReferenceExtensions, "")
+  assert.deepEqual(draft.aiCustomReferenceExtensions, ["rst"])
+  assert.equal(draft.useAiRename, false)
+  assert.equal(draft.useAiFileReference, false)
+  controller.change(["rst"], ["rst"])
+  await settle()
+  controller = harness.render(Component)
+  assert.match(controller.error, /保存失败/)
+  assert.equal(draft.aiReferenceExtensions, "rst")
+  failSave = false
+  controller.retry()
+  await settle()
+  controller = harness.render(Component)
+  assert.equal(controller.error, null)
+  assert.equal(writes, 2)
 })
 
 test("返回压缩页保留永久密码选择，凭据删除后取消使用", async (t) => {

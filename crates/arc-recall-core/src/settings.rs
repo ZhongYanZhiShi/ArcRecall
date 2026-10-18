@@ -23,6 +23,55 @@ pub enum SettingsUpdate {
     ScanMaxFilesPerDirectory(u32),
     RemoveEmptyDirectories(bool),
     FlattenOutputDirectories(bool),
+    CompressionNaming(CompressionNamingSettings),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompressionNamingSettings {
+    #[serde(default)]
+    pub use_ai_rename: bool,
+    #[serde(default)]
+    pub use_ai_file_reference: bool,
+    #[serde(default = "default_reference_extensions")]
+    pub selected_extensions: Vec<String>,
+    #[serde(default)]
+    pub custom_extensions: Vec<String>,
+}
+
+fn default_reference_extensions() -> Vec<String> {
+    vec!["txt".into(), "md".into()]
+}
+
+impl Default for CompressionNamingSettings {
+    fn default() -> Self {
+        Self {
+            use_ai_rename: false,
+            use_ai_file_reference: false,
+            selected_extensions: default_reference_extensions(),
+            custom_extensions: Vec::new(),
+        }
+    }
+}
+
+impl CompressionNamingSettings {
+    fn is_valid(&self) -> bool {
+        self.selected_extensions.len() <= 32
+            && self
+                .selected_extensions
+                .iter()
+                .chain(&self.custom_extensions)
+                .all(|extension| {
+                    !extension.is_empty()
+                        && extension.len() <= 32
+                        && !extension.starts_with('.')
+                        && !extension.ends_with('.')
+                        && extension.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric()
+                                || matches!(byte, b'.' | b'_' | b'-' | b'+')
+                        })
+                })
+    }
 }
 
 /// Maximum log verbosity persisted by the desktop application.
@@ -244,6 +293,8 @@ pub struct AppSettings {
     pub ai: AiSettings,
     #[serde(default)]
     pub recovery: RecoverySettings,
+    #[serde(default)]
+    pub compression_naming: CompressionNamingSettings,
 }
 
 impl Default for AppSettings {
@@ -255,6 +306,7 @@ impl Default for AppSettings {
             logging: LoggingSettings::default(),
             ai: AiSettings::default(),
             recovery: RecoverySettings::default(),
+            compression_naming: CompressionNamingSettings::default(),
         }
     }
 }
@@ -283,6 +335,8 @@ fn default_ai_rename_prompt() -> String {
 pub enum SettingsError {
     #[error("日志最大占用必须在 {MIN_LOG_MAX_DISK_MIB}–{MAX_LOG_MAX_DISK_MIB} MiB 之间。")]
     InvalidLogDiskLimit,
+    #[error("参考文件后缀无效，后缀长度须为 1–32 个字符，最多可选 32 种。")]
+    InvalidCompressionNaming,
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
@@ -316,6 +370,12 @@ impl SettingsStore {
             }
             SettingsUpdate::FlattenOutputDirectories(value) => {
                 settings.recovery.flatten_output_directories = value
+            }
+            SettingsUpdate::CompressionNaming(value) => {
+                if !value.is_valid() {
+                    return Err(SettingsError::InvalidCompressionNaming);
+                }
+                settings.compression_naming = value;
             }
         }
         self.save(&settings)?;
@@ -478,6 +538,96 @@ pub struct DatabaseInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compression_naming_tags_and_selection_survive_reopen_and_deletion() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"autoUpdate":false,"engine":{"hashcatPath":"keep-engine"}}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::open(&path).unwrap();
+        assert_eq!(
+            store.load().unwrap().compression_naming,
+            CompressionNamingSettings::default()
+        );
+        let preferences = CompressionNamingSettings {
+            use_ai_rename: true,
+            use_ai_file_reference: true,
+            selected_extensions: vec!["md".into(), "custom".into()],
+            custom_extensions: vec!["custom".into(), "unselected".into()],
+        };
+        store
+            .update_preferences(SettingsUpdate::CompressionNaming(preferences.clone()))
+            .unwrap();
+        let reopened = SettingsStore::open(&path).unwrap().load().unwrap();
+        assert_eq!(reopened.compression_naming, preferences);
+        assert!(!reopened.auto_update);
+        assert_eq!(reopened.engine.hashcat_path, "keep-engine");
+        store
+            .update_preferences(SettingsUpdate::CompressionNaming(
+                CompressionNamingSettings {
+                    selected_extensions: Vec::new(),
+                    custom_extensions: vec!["unselected".into()],
+                    ..preferences.clone()
+                },
+            ))
+            .unwrap();
+        let reopened = SettingsStore::open(&path).unwrap().load().unwrap();
+        assert!(reopened.compression_naming.selected_extensions.is_empty());
+        assert_eq!(
+            reopened.compression_naming.custom_extensions,
+            ["unselected"]
+        );
+        assert!(
+            store
+                .update_preferences(SettingsUpdate::CompressionNaming(
+                    CompressionNamingSettings {
+                        selected_extensions: vec!["../txt".into()],
+                        custom_extensions: Vec::new(),
+                        ..CompressionNamingSettings::default()
+                    }
+                ))
+                .is_err()
+        );
+        assert_eq!(store.load().unwrap(), reopened);
+    }
+
+    #[test]
+    fn compression_naming_switches_migrate_and_persist_independently() {
+        let legacy: CompressionNamingSettings =
+            serde_json::from_str(r#"{"selectedExtensions":["md"],"customExtensions":["rst"]}"#)
+                .unwrap();
+        assert!(!legacy.use_ai_rename);
+        assert!(!legacy.use_ai_file_reference);
+        assert_eq!(legacy.selected_extensions, ["md"]);
+        assert_eq!(legacy.custom_extensions, ["rst"]);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let store = SettingsStore::open(&path).unwrap();
+        for (use_ai_rename, use_ai_file_reference) in
+            [(true, true), (false, true), (true, false), (false, false)]
+        {
+            let preferences = CompressionNamingSettings {
+                use_ai_rename,
+                use_ai_file_reference,
+                ..legacy.clone()
+            };
+            store
+                .update_preferences(SettingsUpdate::CompressionNaming(preferences.clone()))
+                .unwrap();
+            assert_eq!(
+                SettingsStore::open(&path)
+                    .unwrap()
+                    .load()
+                    .unwrap()
+                    .compression_naming,
+                preferences
+            );
+        }
+    }
 
     #[test]
     fn automatic_updates_default_on_and_toggle_without_changing_other_preferences() {

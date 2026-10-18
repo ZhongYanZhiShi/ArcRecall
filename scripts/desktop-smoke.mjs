@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { createServer } from "node:net"
+import { createServer as createHttpServer } from "node:http"
 import { chromium, expect } from "@playwright/test"
 
 if (process.platform !== "win32")
@@ -154,8 +155,354 @@ async function pastePaths(paths) {
   }, paths)
 }
 
+async function verifyAiFileReference() {
+  const requests = []
+  const server = createHttpServer(async (request, response) => {
+    const chunks = []
+    for await (const chunk of request) chunks.push(chunk)
+    requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")))
+    response.setHeader("Content-Type", "application/json")
+    response.end(
+      JSON.stringify({
+        choices: [{ message: { content: "项目交付资料" } }],
+      })
+    )
+  }).listen(0, "127.0.0.1")
+  await once(server, "listening")
+  let profileId
+  try {
+    const settings = await invoke("ai_profile_upsert", {
+      request: {
+        name: "命名参考测试",
+        provider: "custom",
+        baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+        model: "fixture",
+        makeActive: true,
+      },
+    })
+    profileId = settings.activeProfileId
+    const sources = join(root, "naming-sources")
+    await mkdir(join(sources, "nested"), { recursive: true })
+    await writeFile(join(sources, "README.MD"), "# 中文项目交付说明")
+    await writeFile(join(sources, "nested", "info.custom"), "定制扩展名内容")
+    await writeFile(join(sources, "ignored.txt"), "不应发送的内容")
+    await writeFile(join(sources, "binary.custom"), Buffer.from([0, 1, 2]))
+    const args = { baseName: "原始名称", profileId, prompt: "使用简体中文命名" }
+    const reference = { sources: [sources], extensions: "*.md, custom" }
+    const previewFiles = await invoke("ai_preview_archive_reference", {
+      request: reference,
+    })
+    assert.deepEqual(previewFiles.map((file) => file.fileName).sort(), [
+      "README.MD",
+      "info.custom",
+    ])
+    for (const file of previewFiles) {
+      await access(file.sourcePath)
+      assert.equal(file.truncated, false)
+    }
+    assert.equal(requests.length, 0, "Preview must not contact the AI service")
+    const generatedName = await invoke("ai_generate_archive_name", {
+      ...args,
+      reference,
+    })
+    assert.equal(generatedName, "项目交付资料")
+    const input = JSON.parse(requests[0].messages[1].content)
+    assert.deepEqual(
+      input.referenceFiles,
+      previewFiles.map(({ fileName, content }) => ({ fileName, content }))
+    )
+    assert.equal(input.baseName, "原始名称")
+    assert.deepEqual(input.referenceFiles.map((file) => file.fileName).sort(), [
+      "README.MD",
+      "info.custom",
+    ])
+    assert.match(JSON.stringify(input), /中文项目交付说明/)
+    assert.match(JSON.stringify(input), /定制扩展名内容/)
+    assert.ok(!JSON.stringify(input).includes("不应发送的内容"))
+    assert.ok(!JSON.stringify(input).includes("naming-sources"))
+    for (const ref of [
+      null,
+      { ...reference, extensions: "unmatched" },
+      { ...reference, selectedPaths: [] },
+    ]) {
+      await invoke("ai_generate_archive_name", { ...args, reference: ref })
+      assert.equal(requests.at(-1).messages[1].content, "原始名称")
+    }
+    await assert.rejects(
+      invoke("ai_generate_archive_name", {
+        ...args,
+        reference: { ...reference, extensions: " " },
+      }),
+      /请至少填写一种参考文件扩展名/
+    )
+    assert.equal(requests.length, 4)
+    await page.getByRole("button", { name: "压缩", exact: true }).click()
+    await page
+      .getByRole("switch", { name: "完成后打开", exact: true })
+      .uncheck()
+    await page
+      .getByRole("switch", { name: "使用 AI 优化名称", exact: true })
+      .check()
+    await expect(
+      page.getByRole("switch", { name: "参考文件内容", exact: true })
+    ).not.toBeChecked()
+    await page
+      .getByRole("switch", { name: "参考文件内容", exact: true })
+      .check()
+    await expect
+      .poll(async () => {
+        await invoke("plugin:event|emit_to", {
+          target: { kind: "Webview", label: "main" },
+          event: "tauri://drag-drop",
+          payload: { paths: [sources], position: { x: 0, y: 0 } },
+        })
+        return page
+          .getByTestId("compress-source-scroll")
+          .getByText("naming-sources", { exact: true })
+          .count()
+      })
+      .toBe(1)
+    const referencePreview = page.getByRole("region", {
+      name: "AI 参考文件内容预览",
+      exact: true,
+    })
+    await expect(
+      referencePreview.getByText("# 中文项目交付说明", { exact: true })
+    ).toBeVisible()
+    await writeFile(join(sources, "README.MD"), "# 刷新后的项目说明")
+    await referencePreview
+      .getByRole("button", { name: "刷新参考文件预览", exact: true })
+      .click()
+    await expect(
+      referencePreview.getByText("# 刷新后的项目说明", { exact: true })
+    ).toBeVisible()
+    const suffixes = page.getByRole("group", {
+      name: "选择参考文件后缀",
+      exact: true,
+    })
+    await expect(
+      suffixes.getByRole("button", { name: ".txt", exact: true })
+    ).toHaveAttribute("aria-pressed", "true")
+    await expect(
+      suffixes.getByRole("button", { name: ".md", exact: true })
+    ).toHaveAttribute("aria-pressed", "true")
+    await page.getByLabel("自定义后缀", { exact: true }).fill("custom")
+    await page
+      .getByRole("button", { name: "添加后缀标签", exact: true })
+      .click()
+    await expect(
+      suffixes.getByRole("button", { name: ".custom", exact: true })
+    ).toHaveAttribute("aria-pressed", "true")
+    await page.getByLabel("自定义后缀", { exact: true }).fill("remove, spare")
+    await page
+      .getByRole("button", { name: "添加后缀标签", exact: true })
+      .click()
+    await suffixes.getByRole("button", { name: ".spare", exact: true }).click()
+    await page
+      .getByRole("button", { name: "删除 .remove 标签", exact: true })
+      .click()
+    await expect(
+      suffixes.getByRole("button", { name: ".remove", exact: true })
+    ).toHaveCount(0)
+    await suffixes.getByRole("button", { name: ".json", exact: true }).click()
+    await suffixes.getByRole("button", { name: ".txt", exact: true }).click()
+    await expect(
+      referencePreview.getByRole("button", {
+        name: "查看 info.custom 内容",
+        exact: true,
+      })
+    ).toBeVisible()
+    await expect(
+      referencePreview.getByRole("button", {
+        name: "查看 ignored.txt 内容",
+        exact: true,
+      })
+    ).toHaveCount(0)
+    await referencePreview
+      .getByRole("button", { name: "查看 info.custom 内容", exact: true })
+      .click()
+    await expect(
+      referencePreview.getByText("定制扩展名内容", { exact: true })
+    ).toBeVisible()
+    const readmeCheckbox = referencePreview.getByRole("checkbox", {
+      name: "将 README.MD 用于 AI 命名",
+      exact: true,
+    })
+    const customCheckbox = referencePreview.getByRole("checkbox", {
+      name: "将 info.custom 用于 AI 命名",
+      exact: true,
+    })
+    await expect(readmeCheckbox).toBeChecked()
+    await expect(customCheckbox).toBeChecked()
+    await readmeCheckbox.uncheck()
+    await referencePreview
+      .getByRole("button", {
+        name: "刷新参考文件预览",
+        exact: true,
+      })
+      .click()
+    await expect(readmeCheckbox).not.toBeChecked()
+    await expect(customCheckbox).toBeChecked()
+    await expect(
+      referencePreview.getByText("已选 1 / 2 个", { exact: true })
+    ).toBeVisible()
+    assert.equal(requests.length, 4, "Preview and selection must stay local")
+    await referencePreview.screenshot({
+      path: join(evidence, "native-ai-reference-preview.png"),
+    })
+    const preferences = {
+      useAiRename: true,
+      useAiFileReference: true,
+      selectedExtensions: ["md", "custom", "json"],
+      customExtensions: ["custom", "spare"],
+    }
+    await expect
+      .poll(async () => (await invoke("settings_get")).compressionNaming)
+      .toEqual(preferences)
+    const savedSettings = JSON.parse(
+      await readFile(join(data, "settings.json"), "utf8")
+    )
+    assert.deepEqual(savedSettings.compressionNaming, preferences)
+    await close()
+    await launch()
+    assert.deepEqual(
+      (await invoke("settings_get")).compressionNaming,
+      preferences
+    )
+    await page.getByRole("button", { name: "压缩", exact: true }).click()
+    await page
+      .getByRole("switch", { name: "完成后打开", exact: true })
+      .uncheck()
+    await expect(
+      page.getByRole("switch", { name: "使用 AI 优化名称", exact: true })
+    ).toBeChecked()
+    await expect(
+      page.getByRole("switch", { name: "参考文件内容", exact: true })
+    ).toBeChecked()
+    const restoredSuffixes = page.getByRole("group", {
+      name: "选择参考文件后缀",
+      exact: true,
+    })
+    for (const [suffix, selected] of [
+      [".md", true],
+      [".json", true],
+      [".custom", true],
+      [".txt", false],
+      [".spare", false],
+    ]) {
+      await expect(
+        restoredSuffixes.getByRole("button", { name: suffix, exact: true })
+      ).toHaveAttribute("aria-pressed", String(selected))
+    }
+    await expect(
+      restoredSuffixes.getByRole("button", { name: ".remove", exact: true })
+    ).toHaveCount(0)
+    await page.screenshot({ path: join(evidence, "native-ai-reference.png") })
+    await page
+      .getByRole("switch", { name: "参考文件内容", exact: true })
+      .uncheck()
+    await page
+      .getByRole("switch", { name: "使用 AI 优化名称", exact: true })
+      .uncheck()
+    const disabledPreferences = {
+      ...preferences,
+      useAiRename: false,
+      useAiFileReference: false,
+    }
+    await expect
+      .poll(async () => (await invoke("settings_get")).compressionNaming)
+      .toEqual(disabledPreferences)
+    await close()
+    await launch()
+    await page.getByRole("button", { name: "压缩", exact: true }).click()
+    await page
+      .getByRole("switch", { name: "完成后打开", exact: true })
+      .uncheck()
+    await expect(
+      page.getByRole("switch", { name: "使用 AI 优化名称", exact: true })
+    ).not.toBeChecked()
+    await page
+      .getByRole("switch", { name: "使用 AI 优化名称", exact: true })
+      .check()
+    await expect(
+      page.getByRole("switch", { name: "参考文件内容", exact: true })
+    ).not.toBeChecked()
+    await page
+      .getByRole("switch", { name: "使用 AI 优化名称", exact: true })
+      .uncheck()
+    await expect
+      .poll(async () => (await invoke("settings_get")).compressionNaming)
+      .toEqual(disabledPreferences)
+    await page
+      .getByRole("switch", { name: "使用 AI 优化名称", exact: true })
+      .check()
+    await page
+      .getByRole("switch", { name: "参考文件内容", exact: true })
+      .check()
+    await expect
+      .poll(async () => {
+        await invoke("plugin:event|emit_to", {
+          target: { kind: "Webview", label: "main" },
+          event: "tauri://drag-drop",
+          payload: { paths: [sources], position: { x: 0, y: 0 } },
+        })
+        return page
+          .getByTestId("compress-source-scroll")
+          .getByText("naming-sources", { exact: true })
+          .count()
+      })
+      .toBe(1)
+    const currentPreview = page.getByRole("region", {
+      name: "AI 参考文件内容预览",
+      exact: true,
+    })
+    const currentReadme = currentPreview.getByRole("checkbox", {
+      name: "将 README.MD 用于 AI 命名",
+      exact: true,
+    })
+    const currentCustom = currentPreview.getByRole("checkbox", {
+      name: "将 info.custom 用于 AI 命名",
+      exact: true,
+    })
+    await expect(currentReadme).toBeChecked()
+    await expect(currentCustom).toBeChecked()
+    await currentReadme.uncheck()
+    await page.getByRole("button", { name: "解压", exact: true }).click()
+    await page.getByRole("button", { name: "压缩", exact: true }).click()
+    await expect(currentReadme).not.toBeChecked()
+    await expect(currentCustom).toBeChecked()
+    await page.locator("#archive-name").fill("原始名称")
+    const requestCount = requests.length
+    await page.getByRole("button", { name: "开始压缩", exact: true }).click()
+    await expect
+      .poll(
+        async () =>
+          (await invoke("compression_status", { taskId: null }))?.completed
+      )
+      .toBe(true)
+    const result = await invoke("compression_status", {
+      taskId: null,
+    })
+    assert.equal(result.success, true, result.message)
+    assert.equal(requests.length, requestCount + 1)
+    const selectedInput = JSON.parse(requests.at(-1).messages[1].content)
+    assert.deepEqual(selectedInput.referenceFiles, [
+      { fileName: "info.custom", content: "定制扩展名内容" },
+    ])
+    assert.equal(selectedInput.baseName, "原始名称")
+    await access(result.outputPath)
+    assert.match(result.outputPath, /项目交付资料\.7z$/)
+
+    await page.getByRole("button", { name: "解压", exact: true }).click()
+  } finally {
+    if (profileId) await invoke("ai_profile_delete", { profileId })
+    await new Promise((done) => server.close(done))
+  }
+}
+
 try {
   await launch()
+  await verifyAiFileReference()
   assert.equal((await invoke("recovery_queue_load")).enabled, false)
   await page.getByLabel("记住任务队列").click()
   await expect(page.getByLabel("记住任务队列")).toBeChecked()
@@ -615,7 +962,7 @@ try {
   }
   assert.deepEqual(errors, [])
   console.log(
-    `PASS: native UI / Rust IPC / restart / changed source / real 7-Zip / report files / empty-folder cleanup / wrapper flattening / cancellation / close cleanup. Screenshots: ${evidence}`
+    `PASS: native UI / Rust IPC / AI file references / restart / changed source / real 7-Zip / report files / empty-folder cleanup / wrapper flattening / cancellation / close cleanup. Screenshots: ${evidence}`
   )
 } catch (error) {
   console.error(error)

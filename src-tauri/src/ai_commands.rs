@@ -2,8 +2,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arc_recall_core::{
-    AiClientConfig, AiConnectionTestResult, AiModelInfo, AiProfile, AiProviderKind, AiSettings,
-    SettingsStore, generate_archive_name, list_ai_models, test_ai_connection, validate_ai_base_url,
+    AiClientConfig, AiConnectionTestResult, AiModelInfo, AiNameReferenceRequest, AiProfile,
+    AiProviderKind, AiReferencePreviewFile, AiSettings, SettingsStore, generate_archive_name,
+    list_ai_models, preview_archive_name_reference, test_ai_connection, validate_ai_base_url,
 };
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -278,11 +279,23 @@ pub(crate) async fn ai_connection_test(
 }
 
 #[tauri::command]
+pub(crate) async fn ai_preview_archive_reference(
+    request: AiNameReferenceRequest,
+) -> Result<Vec<AiReferencePreviewFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_archive_name_reference(&request).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("参考文件预览任务失败：{error}"))?
+}
+
+#[tauri::command]
 pub(crate) async fn ai_generate_archive_name(
     state: State<'_, AppState>,
     base_name: String,
     profile_id: Option<String>,
     prompt: Option<String>,
+    reference: Option<AiNameReferenceRequest>,
 ) -> Result<String, String> {
     let (config, rename_prompt, provider) = {
         let store = state.settings.lock().map_err(|error| error.to_string())?;
@@ -317,7 +330,7 @@ pub(crate) async fn ai_generate_archive_name(
     };
     let input_character_count = base_name.chars().count();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        generate_archive_name(&config, &base_name, &rename_prompt)
+        generate_archive_name(&config, &base_name, &rename_prompt, reference.as_ref())
             .map_err(|error| error.to_string())
     })
     .await

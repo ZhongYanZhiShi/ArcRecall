@@ -2,9 +2,31 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import {
+  createCompressionDraft,
+  parseAiReferenceExtensions,
   shouldAutoOpenCompletedTask,
   shouldForgetArchiveBaseName,
 } from "../src/lib/compression-draft.ts"
+
+test("file content reference is opt-in with editable text extensions", () => {
+  const draft = createCompressionDraft()
+  assert.equal(draft.useAiFileReference, false)
+  assert.equal(draft.aiReferenceExtensions, "txt, md")
+  assert.deepEqual(draft.aiCustomReferenceExtensions, [])
+})
+
+test("custom reference suffixes normalize dotted and wildcard forms without duplicates", () => {
+  assert.deepEqual(parseAiReferenceExtensions(".TXT, *.md；txt rst，d.ts"), [
+    "txt",
+    "md",
+    "rst",
+    "d.ts",
+  ])
+  assert.deepEqual(parseAiReferenceExtensions(""), [])
+  for (const suffix of ["*", "../txt", "txt/path", "json.", "x".repeat(33)]) {
+    assert.throws(() => parseAiReferenceExtensions(suffix), /有效后缀/)
+  }
+})
 
 test("only an observed running task forgets its name after success", () => {
   const awaitingCompletion = new Set()

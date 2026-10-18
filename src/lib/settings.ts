@@ -29,12 +29,20 @@ export type AppSettings = {
   version?: number
   engine?: EngineSettings
   logging?: LoggingSettings
+  compressionNaming?: CompressionNamingSettings
   recovery?: {
     computeMode: RecoveryComputeMode
     scanMaxFilesPerDirectory?: number
     removeEmptyDirectories?: boolean
     flattenOutputDirectories?: boolean
   }
+}
+
+export type CompressionNamingSettings = {
+  useAiRename: boolean
+  useAiFileReference: boolean
+  selectedExtensions: string[]
+  customExtensions: string[]
 }
 
 export type DatabaseInfo = {
@@ -205,6 +213,7 @@ export type SettingsUpdate =
   | { kind: "scanMaxFilesPerDirectory"; value: number }
   | { kind: "removeEmptyDirectories"; value: boolean }
   | { kind: "flattenOutputDirectories"; value: boolean }
+  | { kind: "compressionNaming"; value: CompressionNamingSettings }
 
 export async function updateSettings(
   update: SettingsUpdate
@@ -233,6 +242,9 @@ export async function updateSettings(
       break
     case "flattenOutputDirectories":
       settings.recovery!.flattenOutputDirectories = update.value
+      break
+    case "compressionNaming":
+      settings.compressionNaming = update.value
       break
   }
   return settings

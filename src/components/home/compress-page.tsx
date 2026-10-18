@@ -40,6 +40,8 @@ import {
 import { isDesktopRuntime } from "@/lib/dictionary"
 import { openPath } from "@/lib/settings"
 import { useDesktopTask } from "@/hooks/use-desktop-task"
+import { useCompressionNamingPreferences } from "@/hooks/use-compression-naming-preferences"
+import { useAiReferencePreview } from "@/hooks/use-ai-reference-preview"
 
 export function CompressPage({
   draft,
@@ -62,6 +64,8 @@ export function CompressPage({
     encryptFileNames,
     openWhenDone,
     useAiRename,
+    useAiFileReference,
+    aiReferenceExtensions,
   } = draft
   const [showPassword, setShowPassword] = React.useState(false)
   const [passwordValidationRequested, setPasswordValidationRequested] =
@@ -95,6 +99,17 @@ export function CompressPage({
   const isDraftLocked = React.useCallback(
     () => operationBusy.current || runningRef.current,
     [runningRef]
+  )
+  const referencePreferences = useCompressionNamingPreferences(
+    draft,
+    onDraftChange,
+    isDraftLocked
+  )
+  const referencePreview = useAiReferencePreview(
+    sources,
+    aiReferenceExtensions,
+    referencePreferences.ready && useAiRename && useAiFileReference,
+    isDraftLocked
   )
 
   const setSources = React.useCallback(
@@ -365,7 +380,12 @@ export function CompressPage({
 
   const handleStart = React.useCallback(
     async (skipAiRename = false) => {
-      if (isDraftLocked() || !permanentPasswordReady) return
+      if (
+        isDraftLocked() ||
+        !permanentPasswordReady ||
+        !referencePreferences.ready
+      )
+        return
       setPasswordValidationRequested(true)
       if (passwordError) return
       if (sources.length === 0) {
@@ -392,7 +412,13 @@ export function CompressPage({
         setAiError("尚未配置可用的 AI 模型，请先前往设置。")
         return
       }
-
+      if (useAiRename && !skipAiRename && useAiFileReference) {
+        if (referencePreview.loading) return
+        if (referencePreview.error) {
+          setAiError("参考文件读取失败，请刷新列表后重试，或使用原名称压缩。")
+          return
+        }
+      }
       operationBusy.current = true
       operationVersion.current += 1
       setBusy(true)
@@ -403,7 +429,19 @@ export function CompressPage({
         const next = await startCompressionWithRename(baseName.trim(), {
           rename:
             useAiRename && !skipAiRename
-              ? (name) => generateAiArchiveName(name, activeAiProfile?.id)
+              ? (name) =>
+                  generateAiArchiveName(
+                    name,
+                    activeAiProfile?.id,
+                    undefined,
+                    useAiFileReference
+                      ? {
+                          sources,
+                          extensions: aiReferenceExtensions,
+                          selectedPaths: referencePreview.selectedPaths,
+                        }
+                      : undefined
+                  )
               : undefined,
           onRenamed: (name) =>
             onDraftChange((current) => ({ ...current, baseName: name })),
@@ -447,10 +485,16 @@ export function CompressPage({
       password,
       passwordError,
       permanentPasswordReady,
+      referencePreferences.ready,
+      referencePreview.loading,
+      referencePreview.error,
+      referencePreview.selectedPaths,
       onDraftChange,
       setTask,
       sources,
       useAiRename,
+      useAiFileReference,
+      aiReferenceExtensions,
       usePermanentPassword,
     ]
   )
@@ -487,6 +531,8 @@ export function CompressPage({
 
   return (
     <CompressPageView
+      referencePreview={referencePreview}
+      referencePreferences={referencePreferences}
       draft={draft}
       dragOver={dragOver}
       busy={busy}
