@@ -169,29 +169,26 @@ export function createRecoveryQueue(api: QueueApi) {
       const retryKeys = options ? requestedKeys : []
       publish({
         items: [
-          ...snapshot.items.map(
-            (item): QueueItem =>
-              retryKeys.includes(archivePathKey(item.path))
-                ? {
-                    id: ++sequence,
-                    path: item.path,
-                    state: "waiting",
-                    options,
-                    task: null,
-                    error: null,
-                  }
-                : item
+          ...snapshot.items.map((item): QueueItem =>
+            retryKeys.includes(archivePathKey(item.path))
+              ? {
+                  id: ++sequence,
+                  path: item.path,
+                  state: "waiting",
+                  options,
+                  task: null,
+                  error: null,
+                }
+              : item
           ),
-          ...additions.map(
-            (path): QueueItem => ({
-              id: ++sequence,
-              path,
-              state: "waiting",
-              task: null,
-              error: null,
-              options,
-            })
-          ),
+          ...additions.map((path): QueueItem => ({
+            id: ++sequence,
+            path,
+            state: "waiting",
+            task: null,
+            error: null,
+            options,
+          })),
         ],
         error: null,
       })
