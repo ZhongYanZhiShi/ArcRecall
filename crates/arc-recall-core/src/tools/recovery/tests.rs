@@ -190,6 +190,100 @@ fn standard_numbered_split_does_not_need_materialization() {
 }
 
 #[test]
+fn numbered_split_with_volume_suffixes_preserves_order_and_sources() {
+    for suffixes in [
+        ["删", "", "", "", ""],
+        ["删除后解压", "", "", "", ""],
+        [".bak", "", "", "", ""],
+        [" (1)", "", "", "", ""],
+        ["删", "删", "删", "删", "删"],
+        ["删", ".bak", "", "删除后解压", " (1)"],
+        ["", "删", ".bak", " (1)", "删"],
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join(format!("游戏.7z.001{}", suffixes[0]));
+        let tail = dir.path().join(format!("游戏.7z.005{}", suffixes[4]));
+        write_two_part_seven_zip_fixture(&first, &tail);
+        let mut header = fs::read(&first).unwrap();
+        let offset = u64::from_le_bytes(header[12..20].try_into().unwrap()) + 3 * 128;
+        header[12..20].copy_from_slice(&offset.to_le_bytes());
+        let crc = test_crc32(&header[12..32]);
+        header[8..12].copy_from_slice(&crc.to_le_bytes());
+        fs::write(&first, &header).unwrap();
+        let mut expected = vec![first.canonicalize().unwrap()];
+        for index in 2..=4 {
+            let path = dir
+                .path()
+                .join(format!("游戏.7z.{index:03}{}", suffixes[index - 1]));
+            fs::write(&path, vec![index as u8; 128]).unwrap();
+            expected.push(path.canonicalize().unwrap());
+        }
+        expected.push(tail.canonicalize().unwrap());
+        // A same-sized unrelated file must not become a middle volume.
+        fs::write(dir.path().join("unrelated.bin"), vec![9; 128]).unwrap();
+        for unrelated in ["游戏.7z.0020删", "游戏.7z.02删", "另一游戏.7z.002删"] {
+            fs::write(dir.path().join(unrelated), vec![9; 128]).unwrap();
+        }
+        let analysis = analyze_archive(&first).unwrap();
+        assert_eq!(analysis.volume_paths, expected, "suffixes: {suffixes:?}");
+        let work = dir.path().join("work");
+        fs::create_dir(&work).unwrap();
+        let materialized = materialize_split_archive(
+            &analysis,
+            &work,
+            &CancellationToken::default(),
+            &TaskDiskBudget::default(),
+        )
+        .unwrap()
+        .expect("nonstandard names need engine-compatible staging");
+        for (source, staged) in expected.iter().zip(materialized.volume_paths()) {
+            assert_eq!(fs::read(source).unwrap(), fs::read(staged).unwrap());
+        }
+        assert_eq!(fs::read(&first).unwrap(), header);
+        if !suffixes[0].is_empty() {
+            assert!(!dir.path().join("游戏.7z.001").exists());
+        }
+        drop(materialized);
+        let original_tail = fs::read(&tail).unwrap();
+        fs::write(&tail, vec![0; original_tail.len()]).unwrap();
+        assert!(
+            analyze_archive(&first)
+                .unwrap_err()
+                .to_string()
+                .contains("CRC 校验失败")
+        );
+        fs::write(&tail, original_tail).unwrap();
+        fs::remove_file(&expected[2]).unwrap();
+        let error = analyze_archive(&first).unwrap_err().to_string();
+        assert!(
+            error.contains("缺少") && error.contains("游戏.7z.003"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn numbered_split_rejects_duplicate_volume_numbers_even_with_a_unique_valid_tail() {
+    for duplicate_suffix in ["", ".bak"] {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("游戏.7z.001删");
+        let tail = dir.path().join("游戏.7z.002删");
+        write_two_part_seven_zip_fixture(&first, &tail);
+        // Only one tail has valid content; filename ambiguity must still fail.
+        fs::write(
+            dir.path().join(format!("游戏.7z.002{duplicate_suffix}")),
+            b"wrong",
+        )
+        .unwrap();
+        let error = analyze_archive(&first).unwrap_err().to_string();
+        assert!(
+            error.contains("编号 .002") && error.contains("多个"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn repaired_split_copy_preserves_every_volume_and_source() {
     let dir = tempfile::tempdir().unwrap();
     let first = dir.path().join("disguised.jpg");

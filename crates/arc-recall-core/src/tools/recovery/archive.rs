@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -168,12 +169,11 @@ fn resolve_split_volumes_by_content(
     declared_end: u64,
     header: &SevenZipStartHeader,
 ) -> Result<Vec<PathBuf>, RecoveryError> {
-    let numbered_failure =
-        match resolve_numbered_split_volumes(first_volume, first_size, declared_end) {
-            Ok(Some(volumes)) => return Ok(volumes),
-            Ok(None) => None,
-            Err(error) => Some(error.to_string()),
-        };
+    // Once sibling filenames establish a numbered set, do not hide gaps or
+    // duplicate numbers by falling back to content-based guesses.
+    if let Some(volumes) = resolve_numbered_split_volumes(first_volume, first_size, declared_end)? {
+        return Ok(volumes);
+    }
     let missing_size = declared_end - first_size;
     let exact_tail_candidates = find_tail_candidates(first_volume, missing_size, header)?;
     match exact_tail_candidates.len() {
@@ -184,9 +184,6 @@ fn resolve_split_volumes_by_content(
             ]);
         }
         count if count > 1 => {
-            if let Some(message) = &numbered_failure {
-                return Err(RecoveryError::Message(message.clone()));
-            }
             return Err(RecoveryError::Message(format!(
                 "检测到 {count} 个长度和末端头 CRC 都匹配的匿名尾卷，无法安全确定分卷组合。"
             )));
@@ -207,9 +204,6 @@ fn resolve_split_volumes_by_content(
         .map_err(|_| RecoveryError::Message("7z 分卷数量超出支持范围。".into()))?;
 
     if header.next_header_size == 0 || header.next_header_size > last_size {
-        if let Some(message) = numbered_failure {
-            return Err(RecoveryError::Message(message));
-        }
         return Err(RecoveryError::Message(
             "匿名 7z 分卷的末端头跨越了多个文件，无法仅凭内容安全确定顺序；请保留或补充分卷序号。"
                 .into(),
@@ -232,9 +226,6 @@ fn resolve_split_volumes_by_content(
     }
 
     if last_candidates.len() != 1 {
-        if let Some(message) = numbered_failure {
-            return Err(RecoveryError::Message(message));
-        }
         return Err(RecoveryError::Message(match last_candidates.len() {
             0 => format!(
                 "检测到 7z 数据尚缺少 {missing_size} 字节，但未找到通过末端头 CRC 校验的匿名尾卷。"
@@ -298,17 +289,15 @@ fn resolve_numbered_split_volumes(
     first_size: u64,
     declared_end: u64,
 ) -> Result<Option<Vec<PathBuf>>, RecoveryError> {
-    let Some(extension) = first_volume.extension().and_then(|value| value.to_str()) else {
+    let Some(numbered_first) = numbered_first_volume_path(first_volume) else {
         return Ok(None);
     };
-    if extension.len() < 2
-        || !extension.bytes().all(|byte| byte.is_ascii_digit())
-        || extension.parse::<u64>().ok() != Some(1)
-    {
+    let extension = numbered_first.extension().unwrap().to_str().unwrap();
+    let width = extension.len();
+    let candidates = numbered_volume_candidates(&numbered_first, width)?;
+    if candidates.is_empty() {
         return Ok(None);
     }
-
-    let width = extension.len();
     let mut volumes = vec![first_volume.to_path_buf()];
     let mut total_size = first_size;
     let mut index = 2u64;
@@ -319,13 +308,24 @@ fn resolve_numbered_split_volumes(
                 "标准 7z 分卷数量超过 .{extension} 编号可表示的范围。"
             )));
         }
-        let next_volume = first_volume.with_extension(&next_extension);
-        if !next_volume.is_file() {
+        let expected = numbered_first.with_extension(&next_extension);
+        let Some(matches) = candidates.get(&index) else {
             return Err(RecoveryError::Message(format!(
                 "标准 7z 分卷不完整：缺少 {}。",
-                path_for_display(&next_volume)
+                path_for_display(&expected)
+            )));
+        };
+        if matches.len() != 1 {
+            return Err(RecoveryError::Message(format!(
+                "7z 分卷编号 .{next_extension} 对应多个文件，无法安全选择：{}。",
+                matches
+                    .iter()
+                    .map(|path| path_for_display(path))
+                    .collect::<Vec<_>>()
+                    .join("、")
             )));
         }
+        let next_volume = &matches[0];
         let next_size = next_volume.metadata()?.len();
         total_size = total_size
             .checked_add(next_size)
@@ -340,6 +340,80 @@ fn resolve_numbered_split_volumes(
         index = index.saturating_add(1);
     }
     Ok(Some(volumes))
+}
+
+fn numbered_volume_candidates(
+    numbered_first: &Path,
+    width: usize,
+) -> Result<BTreeMap<u64, Vec<PathBuf>>, RecoveryError> {
+    let mut candidates: BTreeMap<u64, Vec<PathBuf>> = BTreeMap::new();
+    let Some(name) = numbered_first.file_name().and_then(|name| name.to_str()) else {
+        return Ok(candidates);
+    };
+    let prefix = &name[..name.len() - width];
+    for entry in fs::read_dir(numbered_first.parent().unwrap_or_else(|| Path::new(".")))? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        let Some(candidate_prefix) = name.get(..prefix.len()) else {
+            continue;
+        };
+        let prefix_matches = if cfg!(windows) {
+            candidate_prefix.eq_ignore_ascii_case(prefix)
+        } else {
+            candidate_prefix == prefix
+        };
+        if !prefix_matches {
+            continue;
+        }
+        let remainder = &name[prefix.len()..];
+        let digit_count = remainder.bytes().take_while(u8::is_ascii_digit).count();
+        // Read the complete digit run: .0020 must never match .002.
+        if digit_count != width {
+            continue;
+        }
+        if let Ok(index) = remainder[..digit_count].parse::<u64>() {
+            if index > 1 {
+                candidates.entry(index).or_default().push(entry.path());
+            }
+        }
+    }
+    Ok(candidates)
+}
+
+// This is only a lookup template: keep the actual first path for reading and
+// engine staging, and never rename the user's archive.
+fn numbered_first_volume_path(first_volume: &Path) -> Option<PathBuf> {
+    let is_first_number = |number: &str| {
+        number.len() >= 2
+            && number.bytes().all(|byte| byte.is_ascii_digit())
+            && number.parse::<u64>().ok() == Some(1)
+    };
+    if first_volume
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(is_first_number)
+    {
+        return Some(first_volume.to_path_buf());
+    }
+    let name = first_volume.file_name()?.to_str()?;
+    // Restrict suffix recovery to explicit .7z.<number> names so arbitrary
+    // digits elsewhere in a disguised filename are not treated as volume IDs.
+    let number_start = name.to_ascii_lowercase().rfind(".7z.")? + 4;
+    let width = name[number_start..]
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .count();
+    let number_end = number_start + width;
+    if !is_first_number(&name[number_start..number_end]) {
+        return None;
+    }
+    Some(first_volume.with_file_name(&name[..number_end]))
 }
 
 #[derive(Debug, Clone, Copy)]
