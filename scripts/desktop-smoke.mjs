@@ -956,6 +956,7 @@ try {
     liveDictionaryStatus.dictionaryProgress.currentIndex - 1
   )
   assert.ok(liveDictionaryStatus.dictionaryProgress.candidate)
+  assert.equal(liveDictionaryStatus.currentArchiveFormatLabel, "7z")
   assert.ok(
     !JSON.stringify(liveDictionaryStatus.events).includes(
       liveDictionaryStatus.dictionaryProgress.candidate
@@ -965,6 +966,7 @@ try {
   await page.reload()
   const progressPanel = page.getByRole("region", { name: "字典恢复进度" })
   await expect(progressPanel).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText(/^识别类型：/)).toHaveText("识别类型：7z")
   await expect(progressPanel).toContainText("正在测试第")
   await progressPanel.getByRole("button", { name: "显示当前候选" }).click()
   await expect(progressPanel.locator("code")).not.toHaveText("••••••••")

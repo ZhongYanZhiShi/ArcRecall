@@ -683,6 +683,7 @@ fn hash_extraction_request(
     archive_paths: &[PathBuf],
 ) -> Result<ProcessRequest, RecoveryError> {
     let john_dir = &tools.john_tools_directory;
+    let mut current_dir = john_dir.clone();
     let (program, args, uses_perl) = match format {
         ArchiveFormat::SevenZip => {
             let converter =
@@ -699,24 +700,40 @@ fn hash_extraction_request(
                 }
             }
         }
-        ArchiveFormat::Zip => (
-            john_dir.join("zip2john.exe"),
-            vec![job.archive_path.as_os_str().to_owned()],
-            false,
-        ),
-        ArchiveFormat::Rar3 | ArchiveFormat::Rar5 => (
-            john_dir.join("rar2john.exe"),
-            vec![job.archive_path.as_os_str().to_owned()],
-            false,
-        ),
+        ArchiveFormat::Zip | ArchiveFormat::Rar3 | ArchiveFormat::Rar5 => {
+            let archive = job.archive_path.canonicalize()?;
+            let filename = archive
+                .file_name()
+                .ok_or_else(|| RecoveryError::Message("无法确定归档文件名。".into()))?;
+            // Windows *2john tools can mis-handle verbatim paths and quoted
+            // Unicode/glob characters in parent directories. Only the child
+            // changes directory; keep its input relative and prefix option-like
+            // filenames with './'. No archive copy or global cwd change is needed.
+            current_dir = archive.parent().unwrap().to_path_buf();
+            (
+                john_dir.join(if format == ArchiveFormat::Zip {
+                    "zip2john.exe"
+                } else {
+                    "rar2john.exe"
+                }),
+                vec![Path::new(".").join(filename).into_os_string()],
+                false,
+            )
+        }
     };
     if !program.is_file() {
         return Err(RecoveryError::MissingTool(path_for_display(&program)));
     }
 
+    // Resolve before changing the child's cwd, including custom relative tool paths.
+    let program = if format == ArchiveFormat::SevenZip {
+        program
+    } else {
+        program.canonicalize()?
+    };
     let mut request = ProcessRequest::new(program);
     request.args = args;
-    request.current_dir = Some(john_dir.clone());
+    request.current_dir = Some(current_dir);
     if uses_perl {
         // Portable Strawberry needs c\bin (liblzma) on PATH for Compress::Raw::Lzma.
         request.path_prepend = strawberry_perl_path_entries(&tools.perl);

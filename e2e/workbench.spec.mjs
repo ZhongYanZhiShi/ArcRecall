@@ -46,7 +46,8 @@ const task = {
 
 async function mockDesktop(
   page,
-  journal = { version: 1, enabled: false, items: [] }
+  journal = { version: 1, enabled: false, items: [] },
+  activeTask = task
 ) {
   await page.addInitScript(
     ({ task, journal }) => {
@@ -58,6 +59,9 @@ async function mockDesktop(
         reports: [],
         saves: [],
         unexpected: [],
+        setTask(next) {
+          current = next
+        },
       }
       window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} }
       window.__TAURI_INTERNALS__ = {
@@ -140,9 +144,57 @@ async function mockDesktop(
         },
       }
     },
-    { task, journal }
+    { task: activeTask, journal }
   )
 }
+
+test("归档类型随恢复状态更新，兼容旧快照、改名文件与窄屏", async ({ page }) => {
+  const running = {
+    ...task,
+    phase: "hashcat",
+    running: true,
+    completed: false,
+    success: false,
+    engine: "Hashcat GPU",
+    archivePath: "C:/fixtures/root.dll",
+    recursiveDepth: 0,
+    rootExtractionCompleted: false,
+  }
+  // Older task snapshots have only the root format.
+  await mockDesktop(page, undefined, running)
+  await page.goto("/")
+  const format = page.getByText(/^识别类型：/)
+  await expect(format).toHaveText("识别类型：7z")
+
+  const nested = {
+    ...running,
+    phase: "john",
+    engine: "John CPU",
+    recursiveDepth: 1,
+    rootExtractionCompleted: true,
+    currentArchivePath: "C:/fixtures/output/嵌套归档.dll",
+    currentArchiveFormatLabel: "RAR5",
+  }
+  await page.evaluate((next) => window.__ARC_TEST__.setTask(next), nested)
+  await expect(format).toHaveText("识别类型：RAR5")
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(format).toBeVisible()
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth
+    )
+  ).toBe(true)
+
+  // The completed result describes the root even if the last child was a RAR.
+  await page.evaluate((next) => window.__ARC_TEST__.setTask(next), {
+    ...nested,
+    phase: "completed",
+    running: false,
+    completed: true,
+    success: true,
+  })
+  await expect(format).toHaveText("识别类型：7z")
+})
 
 test("真实 DOM：Sheet 勾选重试、切页保留状态、导出默认脱敏", async ({
   page,
@@ -151,6 +203,7 @@ test("真实 DOM：Sheet 勾选重试、切页保留状态、导出默认脱敏"
   page.on("pageerror", (error) => errors.push(error.message))
   await mockDesktop(page)
   await page.goto("/")
+  await expect(page.getByText(/^识别类型：/)).toHaveText("识别类型：7z")
   await expect(page.getByRole("button", { name: "详细过程" })).toBeVisible()
   if (process.env.ARC_RECALL_DOC_SCREENSHOTS === "1") {
     await mkdir("assets/screenshots", { recursive: true })

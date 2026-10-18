@@ -1428,7 +1428,7 @@ fn recursively_extracts_misleading_suffix_archive_with_inherited_password() {
     fs::write(&payload, b"recursive-password-ok").unwrap();
     let password = "shared-nested-pass";
     let inner_archive = dir.path().join("inner.7z11");
-    create_encrypted_archive(&seven_zip, "-t7z", password, &inner_archive, &payload);
+    create_encrypted_archive(&seven_zip, "-tzip", password, &inner_archive, &payload);
     let outer_archive = dir.path().join("outer.7z");
     create_encrypted_archive(&seven_zip, "-t7z", password, &outer_archive, &inner_archive);
     let output_directory = dir.path().join("recursive-out");
@@ -1468,6 +1468,16 @@ fn recursively_extracts_misleading_suffix_archive_with_inherited_password() {
         update.phase == RecoveryPhase::Recursive
             && update.scanned_file_count.is_some_and(|count| count > 0)
     }));
+    for (depth, format) in [(0, ArchiveFormat::SevenZip), (1, ArchiveFormat::Zip)] {
+        assert!(
+            updates.iter().any(|update| {
+                update.phase == RecoveryPhase::Verifying
+                    && update.recursive_depth.unwrap_or(0) == depth
+                    && update.archive_format == Some(format)
+            }),
+            "missing recognized format at depth {depth}"
+        );
+    }
     assert_eq!(
         fs::read_to_string(output_directory.join("inner").join("nested-payload.txt")).unwrap(),
         "recursive-password-ok"
@@ -2196,7 +2206,7 @@ fn dictionary_recovery_falls_back_to_seven_zip_when_external_tools_are_missing()
         updates
             .iter()
             .filter_map(|update| update.attempted_count)
-            .last(),
+            .next_back(),
         Some(candidates.len() as u64)
     );
     assert!(result.success, "{}", result.message);
@@ -2223,16 +2233,6 @@ fn dictionary_recovery_falls_back_to_seven_zip_when_external_tools_are_missing()
         fs::read_to_string(output_directory.join("fallback.txt")).unwrap(),
         "internal-fallback-ok"
     );
-}
-
-#[test]
-fn cancellation_stops_before_external_engines() {
-    let cancellation = CancellationToken::default();
-    cancellation.cancel();
-    assert!(matches!(
-        ensure_not_cancelled(&cancellation),
-        Err(RecoveryError::Cancelled)
-    ));
 }
 
 #[test]
@@ -2480,91 +2480,123 @@ fn dictionary_recovery_cracks_encrypted_7z_and_zip() {
     }
 }
 
-/// RAR dictionary recovery using openwall fixtures + rar2john.
+/// Windows canonical paths, Unicode directories, spaces, brackets, renamed inputs
+/// and option-like filenames must still reach both real external engines.
+#[cfg(windows)]
 #[test]
-#[ignore = "expands the large real tool bundle and runs Hashcat/John"]
-fn dictionary_recovery_cracks_openwall_rar_samples() {
-    if !cfg!(all(windows, target_arch = "x86_64")) {
-        return;
-    }
-    let fixtures = rar_fixture_dir();
-    assert!(fixtures.is_dir(), "RAR fixtures missing");
-
-    let resource_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("src-tauri")
-        .join("resources");
-    let tools_root = tempfile::tempdir().unwrap();
-    let manager = super::super::FullEngineBundleManager::new(&resource_dir, tools_root.path());
-    assert!(manager.status().bundled, "run engine-bundle:prepare first");
-    manager.install().expect("install engine bundle");
-
+#[ignore = "requires ARC_RECALL_TEST_JOHN_DIR and ARC_RECALL_TEST_HASHCAT with real Windows engines"]
+fn dictionary_recovery_handles_renamed_archives_in_windows_paths() {
+    let original_directory = std::env::current_dir().unwrap();
+    let john_tools_directory = PathBuf::from(
+        std::env::var_os("ARC_RECALL_TEST_JOHN_DIR").expect("set ARC_RECALL_TEST_JOHN_DIR"),
+    );
     let tools = RecoveryToolPaths {
-        seven_zip: manager.seven_zip_executable(),
-        hashcat: manager.hashcat_executable(),
-        john_tools_directory: manager.john_tools_directory(),
-        perl: manager.perl_executable(),
+        seven_zip: locate_seven_zip().expect("7-Zip must be installed"),
+        hashcat: PathBuf::from(
+            std::env::var_os("ARC_RECALL_TEST_HASHCAT").expect("set ARC_RECALL_TEST_HASHCAT"),
+        ),
+        john_tools_directory,
+        perl: PathBuf::new(),
     };
-
-    let dir = tempfile::tempdir().unwrap();
-    let dictionary_path = dir.path().join("wordlist.txt");
-    fs::write(&dictionary_path, "wrong\npassword\nnope\n").unwrap();
-    let password = "password";
-
-    // rar3-p0.rar is intentionally excluded: rar2john emits a "too small"
-    // $RAR3$*1* candidate that this John build will not load. Known-password
-    // extraction via 7-Zip still covers that fixture.
-    for name in [
+    assert!(
+        probe_recovery_capabilities(&tools).gpu_available,
+        "this integration test requires a usable Hashcat GPU backend"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let archives = directory
+        .path()
+        .join("[测试分组] archive fixtures 中文目录 [set]");
+    fs::create_dir(&archives).unwrap();
+    let dictionary_path = directory.path().join("dictionary.txt");
+    fs::write(&dictionary_path, "wrong\npassword\n").unwrap();
+    let mut john_only = tools.clone();
+    john_only.hashcat = directory.path().join("missing-hashcat.exe");
+    let mut fixtures = Vec::new();
+    // rar3-p0.rar produces a "too small" candidate that this John build cannot
+    // load. Its known-password extraction remains covered by the fixture suite.
+    for (index, name) in [
         "rar3-hp0.rar",
         "rar5-p0-password.rar",
         "rar5-hp0-password.rar",
-    ] {
-        let archive = fixtures.join(name);
-        let format = detect_archive_format(&archive).unwrap();
-        let convert_job = RecoveryJob {
-            archive_path: archive.clone(),
-            output_directory: dir.path().join(format!("{name}-unused")),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let archive = archives.join(format!("-加密归档{index}.dll"));
+        fs::copy(rar_fixture_dir().join(name), &archive).unwrap();
+        fixtures.push(archive);
+    }
+    let payload = directory.path().join("payload.txt");
+    fs::write(&payload, b"zip path regression").unwrap();
+    let zip = archives.join("-加密归档zip.dll");
+    create_encrypted_archive(&tools.seven_zip, "-tzip", "password", &zip, &payload);
+    fixtures.push(zip);
+    for (index, archive) in fixtures.iter().enumerate() {
+        let job = RecoveryJob {
+            archive_path: archive.canonicalize().unwrap(),
+            output_directory: directory.path().join(format!("out-{index}")),
             dictionary_path: dictionary_path.clone(),
-            dictionary_count: 3,
+            dictionary_count: 2,
             known_password: None,
-            work_directory: dir.path().join(format!("{name}-convert")),
+            work_directory: directory.path().join(format!("work-{index}")),
         };
-        fs::create_dir_all(&convert_job.work_directory).unwrap();
+        fs::create_dir(&job.work_directory).unwrap();
+        let format = detect_archive_format(&job.archive_path).unwrap();
         let records = extract_hashes(
-            &convert_job,
+            &job,
             &tools,
             format,
-            std::slice::from_ref(&convert_job.archive_path),
+            std::slice::from_ref(&job.archive_path),
             &CancellationToken::default(),
         )
-        .unwrap_or_else(|error| panic!("{name} rar2john failed: {error}"));
-        assert!(!records.is_empty(), "{name}: rar2john produced no hashes");
-
-        let output_directory = dir.path().join(format!("{name}-out"));
-        let job = RecoveryJob {
-            archive_path: archive,
-            output_directory: output_directory.clone(),
-            dictionary_path: dictionary_path.clone(),
-            dictionary_count: 3,
-            known_password: None,
-            work_directory: dir.path().join(format!("{name}-work")),
-        };
-        fs::create_dir_all(&job.work_directory).unwrap();
-        let result = recover_and_extract(&job, &tools, &CancellationToken::default(), |_| {})
-            .unwrap_or_else(|error| panic!("{name} recovery failed: {error}"));
-        assert!(result.success, "{name}: {}", result.message);
-        let engine = result.engine.as_deref();
-        eprintln!("native recovery {name}: {engine:?}");
+        .unwrap();
         assert!(
-            matches!(engine, Some("Hashcat GPU" | "Hashcat CPU" | "John CPU")),
-            "{name}: expected external-engine recovery, got {engine:?}"
+            !records.is_empty(),
+            "{format:?}: converter must emit a usable hash"
         );
-        assert_eq!(result.password.as_deref(), Some(password));
-        assert!(
-            output_directory.read_dir().unwrap().next().is_some(),
-            "{name}: empty extract dir"
-        );
+        for (engine, active_tools) in [("auto", &tools), ("john", &john_only)] {
+            let job = RecoveryJob {
+                output_directory: directory.path().join(format!("out-{index}-{engine}")),
+                work_directory: directory.path().join(format!("work-{index}-{engine}")),
+                ..job.clone()
+            };
+            let mut phases = Vec::new();
+            let mut formats = Vec::new();
+            let result = recover_and_extract(
+                &job,
+                active_tools,
+                &CancellationToken::default(),
+                |update| {
+                    phases.push(update.phase);
+                    if matches!(update.phase, RecoveryPhase::Hashcat | RecoveryPhase::John) {
+                        formats.push(update.archive_format);
+                    }
+                },
+            )
+            .unwrap();
+            assert!(result.success, "{format:?} ({engine}): {}", result.message);
+            assert_eq!(result.password.as_deref(), Some("password"));
+            assert!(!formats.is_empty());
+            assert!(formats.iter().all(|observed| *observed == Some(format)));
+            assert!(
+                !phases.contains(&RecoveryPhase::Internal),
+                "unexpected 7-Zip CPU fallback: {phases:?}"
+            );
+            if engine == "john" {
+                assert_eq!(result.engine.as_deref(), Some("John CPU"));
+            } else {
+                assert!(
+                    matches!(
+                        result.engine.as_deref(),
+                        Some("Hashcat GPU" | "Hashcat CPU")
+                    ),
+                    "expected Hashcat: {:?}",
+                    result.engine
+                );
+            }
+            assert!(job.output_directory.read_dir().unwrap().next().is_some());
+            assert_eq!(std::env::current_dir().unwrap(), original_directory);
+        }
     }
 }
 

@@ -333,7 +333,7 @@ fn resolve_numbered_split_volumes(
         if total_size > declared_end {
             return Err(RecoveryError::Message(format!(
                 "标准 7z 分卷 {} 超出了起始头声明的归档总大小。",
-                path_for_display(&next_volume)
+                path_for_display(next_volume)
             )));
         }
         volumes.push(next_volume.canonicalize()?);
@@ -377,10 +377,10 @@ fn numbered_volume_candidates(
         if digit_count != width {
             continue;
         }
-        if let Ok(index) = remainder[..digit_count].parse::<u64>() {
-            if index > 1 {
-                candidates.entry(index).or_default().push(entry.path());
-            }
+        if let Ok(index) = remainder[..digit_count].parse::<u64>()
+            && index > 1
+        {
+            candidates.entry(index).or_default().push(entry.path());
         }
     }
     Ok(candidates)

@@ -124,7 +124,7 @@ export function RecoveryTaskResult({
       ) : null}
       <div className="flex flex-col gap-3 p-4">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {task.running ? (
               <Spinner />
             ) : task.success && !incompleteScan ? (
@@ -140,6 +140,12 @@ export function RecoveryTaskResult({
               />
             )}
             <p className="text-sm font-semibold">{activePhaseLabel}</p>
+            <Badge variant="outline" className="font-normal">
+              识别类型：
+              {task.running && task.phase !== "recursive"
+                ? (task.currentArchiveFormatLabel ?? task.archiveFormatLabel)
+                : task.archiveFormatLabel}
+            </Badge>
           </div>
           {!task.success ? (
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">

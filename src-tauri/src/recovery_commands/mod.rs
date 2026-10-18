@@ -255,6 +255,7 @@ pub(crate) async fn recovery_start(
         recursive_enabled: request.recursive,
         recursive_depth: 0,
         current_archive_path: Some(analysis.archive_path.clone()),
+        current_archive_format_label: Some(analysis.format_label.clone()),
         nested_archive_count: 0,
         extracted_nested_archive_count: 0,
         skipped_nested_archive_count: 0,
@@ -420,6 +421,9 @@ pub(crate) async fn recovery_start(
                     task_status.phase = update.phase;
                     task_status.engine = update.engine;
                     task_status.message = update.message;
+                    if let Some(format) = update.archive_format {
+                        task_status.current_archive_format_label = Some(format.label().into());
+                    }
                     if let Some(attempted_count) = update.attempted_count {
                         task_status.attempted_count = attempted_count;
                     }

@@ -107,6 +107,7 @@ export type RecoveryTaskStatus = {
   recursiveEnabled: boolean
   recursiveDepth: number
   currentArchivePath: string | null
+  currentArchiveFormatLabel?: string | null
   nestedArchiveCount: number
   extractedNestedArchiveCount: number
   skippedNestedArchiveCount: number

@@ -188,6 +188,7 @@ pub struct RecoveryUpdate {
     pub total_count: Option<u64>,
     pub recursive_depth: Option<u32>,
     pub current_archive_path: Option<String>,
+    pub archive_format: Option<ArchiveFormat>,
     pub nested_archive_count: Option<u32>,
     pub extracted_nested_archive_count: Option<u32>,
     pub skipped_nested_archive_count: Option<u32>,
@@ -250,6 +251,7 @@ impl RecoveryUpdate {
             total_count: None,
             recursive_depth: None,
             current_archive_path: None,
+            archive_format: None,
             nested_archive_count: None,
             extracted_nested_archive_count: None,
             skipped_nested_archive_count: None,
@@ -278,6 +280,7 @@ impl RecoveryUpdate {
             total_count: Some(total_count),
             recursive_depth: None,
             current_archive_path: None,
+            archive_format: None,
             nested_archive_count: None,
             extracted_nested_archive_count: None,
             skipped_nested_archive_count: None,
@@ -526,6 +529,11 @@ fn recover_single_archive(
 ) -> Result<RecoveryResult, RecoveryError> {
     validate_base_job_inputs(job, tools)?;
     let analysis = analyze_archive(&job.archive_path)?;
+    let mut report_with_format = |mut update: RecoveryUpdate| {
+        update.archive_format = Some(analysis.format);
+        report(update);
+    };
+    let report = &mut report_with_format;
     fs::create_dir_all(&job.work_directory)?;
     let mut processing_job = job.clone();
     processing_job.archive_path = PathBuf::from(&analysis.archive_path);
