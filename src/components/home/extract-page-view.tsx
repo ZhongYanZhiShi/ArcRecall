@@ -289,10 +289,22 @@ export function ExtractPageView({
                   批量添加
                 </Button>
               </div>
-              <p className="basis-full text-xs text-muted-foreground">
-                支持多文件拖入或多行路径粘贴
-                <Kbd className="ml-1">Ctrl + V</Kbd>
-              </p>
+              <div className="flex basis-full flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2">
+                <p className="text-xs text-muted-foreground">
+                  支持多文件拖入或多行路径粘贴
+                  <Kbd className="ml-1">Ctrl + V</Kbd>
+                </p>
+                {analysis ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy || running}
+                    onClick={handleRepairCopy}
+                  >
+                    生成正确后缀副本
+                  </Button>
+                ) : null}
+              </div>
             </>
           ) : (
             <>
@@ -340,18 +352,6 @@ export function ExtractPageView({
           )}
         </Card>
 
-        {analysis ? (
-          <div className="mt-2 flex shrink-0 flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy || running}
-              onClick={handleRepairCopy}
-            >
-              生成正确后缀副本
-            </Button>
-          </div>
-        ) : null}
         {repairedCopyPath ? (
           <p
             role="status"
@@ -360,7 +360,6 @@ export function ExtractPageView({
             副本位置：{repairedCopyPath}
           </p>
         ) : null}
-        {queueContent}
         <button
           type="button"
           onClick={() => setOptionsOpen(true)}
@@ -557,63 +556,68 @@ export function ExtractPageView({
 
         {analysis ? (
           <section className="mt-3 flex shrink-0 flex-col gap-2 pr-1 pb-1">
-            <div className="workbench-panel rounded-2xl border border-border/80 bg-card p-3">
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <FieldLabel htmlFor="known-password" className="text-xs">
-                  已知密码（可选）
-                </FieldLabel>
-                <Badge variant="secondary" className="font-normal">
-                  {dictionaryCount == null
-                    ? "自动回退"
-                    : `${dictionaryCount} 条候选`}
-                </Badge>
-              </div>
+            <div className="workbench-panel overflow-hidden rounded-2xl border border-border/80 bg-card">
               <TaskPreflight
                 outputPath={outputSummaryLabel}
                 outputMode={outputMode}
                 computeMode={computeMode}
                 recursive={recursive}
               />
-              <div className="flex gap-2">
-                <InputGroup className="min-w-0 flex-1">
-                  <InputGroupInput
-                    id="known-password"
-                    type={showKnownPassword ? "text" : "password"}
-                    value={knownPassword}
-                    onChange={(event) => setKnownPassword(event.target.value)}
-                    placeholder="优先尝试此密码；留空使用历史密码和字典"
-                    disabled={busy || running}
-                    autoComplete="off"
-                  />
-                  <InputGroupAddon align="inline-end">
-                    <InputGroupButton
-                      size="icon-xs"
-                      onClick={() => setShowKnownPassword((value) => !value)}
-                      aria-label={showKnownPassword ? "隐藏密码" : "显示密码"}
+              <div className="space-y-3 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <FieldLabel htmlFor="known-password" className="text-xs">
+                    已知密码（可选）
+                  </FieldLabel>
+                  <Badge variant="secondary" className="font-normal">
+                    {dictionaryCount == null
+                      ? "自动回退"
+                      : `${dictionaryCount} 条候选`}
+                  </Badge>
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <InputGroup className="min-w-0 flex-1">
+                    <InputGroupInput
+                      id="known-password"
+                      type={showKnownPassword ? "text" : "password"}
+                      value={knownPassword}
+                      onChange={(event) => setKnownPassword(event.target.value)}
+                      placeholder="输入已知密码"
+                      disabled={busy || running}
+                      autoComplete="off"
+                    />
+                    <InputGroupAddon align="inline-end">
+                      <InputGroupButton
+                        size="icon-xs"
+                        onClick={() => setShowKnownPassword((value) => !value)}
+                        aria-label={showKnownPassword ? "隐藏密码" : "显示密码"}
+                      >
+                        {showKnownPassword ? <EyeOff /> : <Eye />}
+                      </InputGroupButton>
+                    </InputGroupAddon>
+                  </InputGroup>
+                  {running ? (
+                    <Button variant="outline" onClick={handleCancel}>
+                      <Square data-icon="inline-start" />
+                      取消
+                    </Button>
+                  ) : (
+                    <Button
+                      onClick={handleStart}
+                      disabled={busy}
+                      aria-describedby="recovery-start-summary"
                     >
-                      {showKnownPassword ? <EyeOff /> : <Eye />}
-                    </InputGroupButton>
-                  </InputGroupAddon>
-                </InputGroup>
-                {running ? (
-                  <Button variant="outline" onClick={handleCancel}>
-                    <Square data-icon="inline-start" />
-                    取消
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={handleStart}
-                    disabled={busy}
-                    aria-describedby="recovery-start-summary"
-                  >
-                    {busy ? (
-                      <Spinner data-icon="inline-start" />
-                    ) : (
-                      <KeyRound data-icon="inline-start" />
-                    )}
-                    开始恢复并解压
-                  </Button>
-                )}
+                      {busy ? (
+                        <Spinner data-icon="inline-start" />
+                      ) : (
+                        <KeyRound data-icon="inline-start" />
+                      )}
+                      开始恢复并解压
+                    </Button>
+                  )}
+                </div>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  优先尝试此密码；留空使用历史密码和字典。
+                </p>
               </div>
             </div>
 
@@ -681,6 +685,8 @@ export function ExtractPageView({
           </section>
         ) : null}
 
+        {queueContent}
+
         {error ? (
           <Alert variant="destructive" className="mt-2 shrink-0">
             <CircleAlert />
@@ -735,22 +741,29 @@ function TaskPreflight({
     <div
       id="recovery-start-summary"
       aria-label="任务启动摘要"
-      className="mb-2 grid gap-px overflow-hidden rounded-xl border border-border/70 bg-border sm:grid-cols-2 lg:grid-cols-4"
+      className="divide-y divide-border/60 border-b border-border/70 bg-muted/20"
     >
-      <PreflightItem label="输出位置" value={outputPath} />
-      <PreflightItem label="同名处理" value={collisionPolicy} />
-      <PreflightItem label="计算方式" value={computePolicy} />
-      <PreflightItem
-        label="任务控制"
-        value={`${recursive ? "最多扫描 5 层" : "仅主归档"} · 可取消，请保持应用开启`}
-      />
+      <div className="min-w-0 px-4 py-3">
+        <p className="text-xs font-medium text-muted-foreground">输出位置</p>
+        <p className="mt-1 truncate text-sm text-foreground" title={outputPath}>
+          {outputPath}
+        </p>
+      </div>
+      <div className="grid divide-y divide-border/60 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        <PreflightItem label="同名处理" value={collisionPolicy} />
+        <PreflightItem label="计算方式" value={computePolicy} />
+        <PreflightItem
+          label="任务控制"
+          value={`${recursive ? "最多扫描 5 层" : "仅主归档"} · 可取消，请保持应用开启`}
+        />
+      </div>
     </div>
   )
 }
 
 function PreflightItem({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 bg-card px-3 py-2">
+    <div className="min-w-0 px-4 py-3">
       <p className="text-xs font-medium text-muted-foreground">{label}</p>
       <p className="mt-0.5 text-xs break-words text-foreground" title={value}>
         {value}
