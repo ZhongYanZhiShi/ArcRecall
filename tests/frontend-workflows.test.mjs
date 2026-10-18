@@ -1581,6 +1581,36 @@ test("日志慢请求没有轮询堆积，快速搜索只查询最终关键词",
   harness.hide()
 })
 
+test("历史路径打开所在文件夹时保留中文、根目录和网络路径", async () => {
+  const opened = []
+  const harness = sourceHarness({
+    "@/lib/settings": { openPath: async (path) => opened.push(path) },
+  })
+  const { historyLocationDirectory, openHistoryLocation } = harness.load(
+    "src/lib/history-location.ts"
+  )
+  for (const [archive, parent] of [
+    [
+      String.raw`C:\[测试分组] 中文目录\加密归档.dll`,
+      String.raw`C:\[测试分组] 中文目录`,
+    ],
+    ["C:\\加密归档.dll", "C:\\"],
+    [String.raw`\\?\C:\加密归档.dll`, "\\\\?\\C:\\"],
+    [String.raw`\\服务器\共享目录\加密归档.dll`, String.raw`\\服务器\共享目录`],
+    ["/加密归档.zip", "/"],
+  ]) {
+    assert.equal(historyLocationDirectory(archive, "archive"), parent)
+    await openHistoryLocation(archive, "archive")
+    assert.equal(opened.at(-1), parent)
+  }
+  await openHistoryLocation(String.raw`D:\输出\中文目录`, "output")
+  assert.equal(opened.at(-1), String.raw`D:\输出\中文目录`)
+  assert.throws(
+    () => historyLocationDirectory("加密归档.dll", "archive"),
+    /没有可打开/
+  )
+})
+
 test("历史加载失败使用通知并可刷新恢复，查看密码失败不会插入页面提示", async (t) => {
   let fails = true
   const harness = sourceHarness({
@@ -1624,14 +1654,14 @@ test("历史加载失败使用通知并可刷新恢复，查看密码失败不�
     null
   )
   assert.equal(
-    find(tree, (node) => node.type?.name === "StateRow").props.title,
+    find(tree, (node) => node.type?.name === "HistoryState").props.title,
     "暂时无法显示历史"
   )
   fails = false
   button(tree, "刷新").props.onClick()
   await settle()
   tree = harness.render(HistoryPage)
-  const cell = find(tree, (node) => node.type?.name === "PasswordCell")
+  const cell = find(tree, (node) => node.type?.name === "HistoryEntry")
   assert.ok(cell)
   cell.props.onReveal()
   await settle()
@@ -1645,10 +1675,7 @@ test("历史加载失败使用通知并可刷新恢复，查看密码失败不�
     null
   )
   fails = true
-  find(
-    tree,
-    (node) => node.props?.["aria-label"] === "删除此条历史记录"
-  ).props.onClick()
+  find(tree, (node) => node.type?.name === "HistoryEntry").props.onDelete()
   tree = harness.render(HistoryPage)
   find(
     tree,
@@ -1699,7 +1726,7 @@ test("历史明文按绝对期限隐藏，Activity 清理后异步结果不能�
   })
   const { HistoryPage } = harness.load("src/components/home/history-page.tsx")
   const passwordCell = (tree) =>
-    find(tree, (node) => node.type?.name === "PasswordCell")
+    find(tree, (node) => node.type?.name === "HistoryEntry")
   harness.render(HistoryPage)
   await settle()
   let tree = harness.render(HistoryPage)
@@ -1980,7 +2007,7 @@ test("历史页面每次恢复都刷新，隐藏前的迟到响应不能覆盖�
   pending[0].resolve(result(1))
   await settle()
   let tree = harness.render(HistoryPage)
-  const row = () => find(tree, (node) => node.type?.name === "PasswordCell")
+  const row = () => find(tree, (node) => node.type?.name === "HistoryEntry")
   assert.equal(row().props.entry.id, 1)
   harness.hide()
   harness.render(HistoryPage)

@@ -202,11 +202,46 @@ export function DictionaryPageLoading() {
 
 export function HistoryPageLoading() {
   return (
-    <LoadingFrame label="正在载入历史记录…">
-      <LoadingHeader actions={2} />
-      <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2">
-        <LoadingToolbar />
-        <LoadingTable />
+    <LoadingFrame label="正在载入历史记录…" width="wide">
+      <div className="flex shrink-0 items-center justify-between gap-3">
+        <Skeleton className="h-6 w-12 rounded-md" />
+        <LoadingHeader actions={2} />
+      </div>
+      <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3">
+        <div className="flex h-10 shrink-0 gap-2">
+          <Skeleton className="h-full min-w-0 flex-1 rounded-full" />
+          <Skeleton className="h-full w-16 rounded-full" />
+        </div>
+        <LoadingSurface className="min-h-0 flex-1 overflow-hidden">
+          <div className="divide-y divide-border/70">
+            {ROWS.slice(0, 4).map((row) => (
+              <div key={row} className="space-y-3 p-4">
+                <div className="flex items-center gap-3">
+                  <Skeleton className="size-8 rounded-lg" />
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <Skeleton className="h-4 w-1/2 rounded-md" />
+                    <Skeleton className="h-3 w-48 max-w-full rounded-md" />
+                  </div>
+                </div>
+                <div className="flex flex-col gap-3 md:flex-row md:gap-6 md:pl-11">
+                  <div className="min-w-0 flex-1 space-y-3 py-2">
+                    <Skeleton className="h-4 w-full rounded-md" />
+                    <Skeleton className="h-4 w-4/5 rounded-md" />
+                    <Skeleton className="h-4 w-20 rounded-md" />
+                  </div>
+                  <div className="space-y-2 border-t border-border/60 pt-3 md:w-72 md:shrink-0 md:border-t-0 md:border-l md:pt-0 md:pl-5">
+                    <Skeleton className="h-3 w-16 rounded-md" />
+                    <Skeleton className="h-9 w-full rounded-lg" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </LoadingSurface>
+        <LoadingSurface className="flex h-14 shrink-0 items-center justify-between px-3">
+          <Skeleton className="h-3 w-16 rounded-md" />
+          <Skeleton className="h-8 w-48 rounded-lg" />
+        </LoadingSurface>
       </div>
     </LoadingFrame>
   )

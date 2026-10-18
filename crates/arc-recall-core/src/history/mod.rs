@@ -1,3 +1,5 @@
+mod grouped;
+
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -21,6 +23,7 @@ CREATE TABLE IF NOT EXISTS recovery_history (
     archive_name          TEXT,
     archive_path          TEXT,
     output_directory      TEXT,
+    root_fingerprint_sha256 TEXT,
     CHECK (length(fingerprint_sha256) = 64),
     CHECK (file_size >= 0),
     CHECK (volume_count > 0),
@@ -55,6 +58,7 @@ pub struct RecoveryHistoryRecord {
     pub volume_count: u32,
     pub verified_at_ms: u64,
     pub protected_password: Option<String>,
+    pub root_fingerprint_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +85,8 @@ pub struct RecoveryHistoryEntry {
     pub last_verified_at_ms: u64,
     pub verification_count: u64,
     pub has_password: bool,
+    #[serde(default)]
+    pub children: Vec<RecoveryHistoryEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +142,7 @@ impl RecoveryHistoryStore {
             conn.execute_batch(SCHEMA_SQL)?;
             migrate_password_column(conn)?;
             migrate_location_columns(conn)?;
+            grouped::migrate(conn)?;
             Ok(())
         })?;
         Ok(store)
@@ -174,6 +181,12 @@ impl RecoveryHistoryStore {
         record: &RecoveryHistoryRecord,
     ) -> Result<(), RecoveryHistoryError> {
         let fingerprint = normalize_fingerprint(&record.fingerprint_sha256)?;
+        let root_fingerprint = record
+            .root_fingerprint_sha256
+            .as_deref()
+            .map(normalize_fingerprint)
+            .transpose()?
+            .filter(|root| root != &fingerprint);
         let file_size = i64::try_from(record.file_size)
             .map_err(|_| RecoveryHistoryError::InvalidFingerprint)?;
         let verified_at_ms = i64::try_from(record.verified_at_ms)
@@ -188,8 +201,8 @@ impl RecoveryHistoryStore {
             "INSERT INTO recovery_history (
                     fingerprint_sha256, archive_format, file_size, volume_count,
                     first_success_at_ms, last_verified_at_ms, verification_count, password_protected,
-                    archive_name, archive_path, output_directory
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 1, ?6, ?7, ?8, ?9)
+                    archive_name, archive_path, output_directory, root_fingerprint_sha256
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 1, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(fingerprint_sha256) DO UPDATE SET
                     archive_name = COALESCE(recovery_history.archive_name, excluded.archive_name),
                     archive_path = CASE
@@ -201,6 +214,11 @@ impl RecoveryHistoryStore {
                         WHEN excluded.last_verified_at_ms >= recovery_history.last_verified_at_ms
                         THEN COALESCE(excluded.output_directory, recovery_history.output_directory)
                         ELSE recovery_history.output_directory
+                    END,
+                    root_fingerprint_sha256 = CASE
+                        WHEN excluded.last_verified_at_ms >= recovery_history.last_verified_at_ms
+                        THEN excluded.root_fingerprint_sha256
+                        ELSE recovery_history.root_fingerprint_sha256
                     END,
                     archive_format = excluded.archive_format,
                     file_size = excluded.file_size,
@@ -229,7 +247,18 @@ impl RecoveryHistoryStore {
             record.archive_name,
             record.archive_path,
             record.output_directory,
+            root_fingerprint,
         ])?;
+        // If a former top-level archive becomes nested, keep its old children
+        // attached to the new top-level archive in the same transaction.
+        conn.execute(
+            "UPDATE recovery_history SET root_fingerprint_sha256 = (
+                SELECT root_fingerprint_sha256 FROM recovery_history WHERE fingerprint_sha256 = ?1
+             ) WHERE root_fingerprint_sha256 = ?1
+               AND (SELECT root_fingerprint_sha256 FROM recovery_history WHERE fingerprint_sha256 = ?1) IS NOT NULL
+               AND fingerprint_sha256 <> (SELECT root_fingerprint_sha256 FROM recovery_history WHERE fingerprint_sha256 = ?1);",
+            [&fingerprint],
+        )?;
         Ok(())
     }
 
@@ -237,80 +266,7 @@ impl RecoveryHistoryStore {
         &self,
         query: &RecoveryHistoryQuery,
     ) -> Result<RecoveryHistoryListResult, RecoveryHistoryError> {
-        self.with_connection(|conn| {
-            let search = query.search_text.trim().to_ascii_lowercase();
-            let skip = query.skip.max(0);
-            let take = query.take.max(1);
-
-            // Recovery workers use independent store connections. Keep every
-            // count and the displayed page in one snapshot while they write.
-            let tx = conn.unchecked_transaction()?;
-            let total_count = count_query(&tx, "SELECT COUNT(*) FROM recovery_history;", None)?;
-            let password_count = count_query(
-                &tx,
-                "SELECT COUNT(*) FROM recovery_history WHERE password_protected IS NOT NULL;",
-                None,
-            )?;
-            let matched_count = count_query(
-                &tx,
-                "SELECT COUNT(*) FROM recovery_history
-                 WHERE ?1 = '' OR instr(fingerprint_sha256, ?1) = 1
-                    OR instr(lower(archive_name), ?1) > 0
-                    OR instr(lower(archive_path), ?1) > 0
-                    OR instr(lower(output_directory), ?1) > 0;",
-                Some(&search),
-            )?;
-
-            let mut statement = tx.prepare_cached(
-                "SELECT
-                    id,
-                    substr(fingerprint_sha256, 1, ?2),
-                    archive_format,
-                    file_size,
-                    volume_count,
-                    first_success_at_ms,
-                    last_verified_at_ms,
-                    verification_count,
-                    password_protected IS NOT NULL,
-                    archive_name, archive_path, output_directory
-                 FROM recovery_history
-                 WHERE ?1 = '' OR instr(fingerprint_sha256, ?1) = 1
-                    OR instr(lower(archive_name), ?1) > 0
-                    OR instr(lower(archive_path), ?1) > 0
-                    OR instr(lower(output_directory), ?1) > 0
-                 ORDER BY last_verified_at_ms DESC, id DESC
-                 LIMIT ?3 OFFSET ?4;",
-            )?;
-            let rows = statement.query_map(
-                params![search, HASH_PREFIX_LENGTH as i64, take, skip],
-                |row| {
-                    Ok(RecoveryHistoryEntry {
-                        id: row.get(0)?,
-                        fingerprint_prefix: row.get(1)?,
-                        archive_format: row.get(2)?,
-                        file_size: row.get::<_, i64>(3)?.max(0) as u64,
-                        volume_count: row.get::<_, i64>(4)?.max(1) as u32,
-                        first_success_at_ms: row.get::<_, i64>(5)?.max(0) as u64,
-                        last_verified_at_ms: row.get::<_, i64>(6)?.max(0) as u64,
-                        verification_count: row.get::<_, i64>(7)?.max(0) as u64,
-                        has_password: row.get(8)?,
-                        archive_name: row.get(9)?,
-                        archive_path: row.get(10)?,
-                        output_directory: row.get(11)?,
-                    })
-                },
-            )?;
-            let entries = rows.collect::<Result<Vec<_>, _>>()?;
-            drop(statement);
-            tx.commit()?;
-
-            Ok(RecoveryHistoryListResult {
-                entries,
-                total_count,
-                matched_count,
-                password_count,
-            })
-        })
+        self.with_connection(|conn| grouped::list(conn, query))
     }
 
     pub fn protected_password_by_fingerprint(
@@ -491,18 +447,6 @@ fn normalize_fingerprint(value: &str) -> Result<String, RecoveryHistoryError> {
     Ok(normalized)
 }
 
-fn count_query(
-    conn: &Connection,
-    sql: &str,
-    value: Option<&str>,
-) -> Result<u64, RecoveryHistoryError> {
-    let count: i64 = match value {
-        Some(value) => conn.query_row(sql, [value], |row| row.get(0))?,
-        None => conn.query_row(sql, [], |row| row.get(0))?,
-    };
-    Ok(count.max(0) as u64)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,6 +469,7 @@ mod tests {
             volume_count: 1,
             verified_at_ms: timestamp,
             protected_password: password.map(str::to_owned),
+            root_fingerprint_sha256: None,
         }
     }
 
@@ -830,6 +775,134 @@ mod tests {
                 "inconsistent read snapshot: {mismatch:?}"
             );
         });
+    }
+
+    #[test]
+    fn nested_history_stays_with_root_across_search_pagination_and_deletion() {
+        let (_directory, store) = store();
+        let mut root = record('a', 100, None);
+        root.archive_name = Some("顶层归档.zip".into());
+        let mut child = record('b', 100, Some("child-secret"));
+        child.archive_name = Some("嵌套归档.zip".into());
+        child.root_fingerprint_sha256 = Some(root.fingerprint_sha256.clone());
+        let mut sibling = record('c', 100, None);
+        sibling.root_fingerprint_sha256 = Some(root.fingerprint_sha256.clone());
+        store
+            .upsert_many(&[root.clone(), child, sibling, record('d', 200, None)])
+            .unwrap();
+        let page = store
+            .list(&RecoveryHistoryQuery {
+                skip: 1,
+                take: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(page.total_count, 2);
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(
+            page.entries[0].archive_name.as_deref(),
+            Some("顶层归档.zip")
+        );
+        assert_eq!(page.entries[0].children.len(), 2);
+        assert_eq!(page.password_count, 1);
+        let found = store
+            .list(&RecoveryHistoryQuery {
+                search_text: "嵌套归档".into(),
+                take: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(found.matched_count, 1);
+        assert_eq!(found.entries[0].id, page.entries[0].id);
+        assert_eq!(found.entries[0].children.len(), 2);
+        let root_id = found.entries[0].id;
+        assert!(store.delete(found.entries[0].children[0].id).unwrap());
+        assert_eq!(
+            store.list(&Default::default()).unwrap().entries[1]
+                .children
+                .len(),
+            1
+        );
+        assert!(store.delete(root_id).unwrap());
+        let remaining = store.list(&Default::default()).unwrap();
+        assert_eq!(remaining.total_count, 2);
+        assert!(
+            remaining
+                .entries
+                .iter()
+                .all(|entry| entry.children.is_empty())
+        );
+    }
+
+    #[test]
+    fn moving_a_former_root_keeps_its_existing_children_in_the_new_group() {
+        let (_directory, store) = store();
+        let mut old_root = record('a', 100, None);
+        let mut child = record('b', 100, None);
+        child.root_fingerprint_sha256 = Some(old_root.fingerprint_sha256.clone());
+        store.upsert_many(&[old_root.clone(), child]).unwrap();
+        let new_root = record('c', 200, None);
+        old_root.root_fingerprint_sha256 = Some(new_root.fingerprint_sha256.clone());
+        old_root.verified_at_ms = 200;
+        store.upsert_many(&[new_root, old_root]).unwrap();
+        let result = store.list(&Default::default()).unwrap();
+        assert_eq!(result.total_count, 1);
+        assert_eq!(result.entries[0].children.len(), 2);
+    }
+
+    #[test]
+    fn legacy_history_groups_same_batch_paths_without_matching_neighboring_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("history.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(&SCHEMA_SQL.replace("    root_fingerprint_sha256 TEXT,\n", ""))
+            .unwrap();
+        for (fingerprint, name, archive, output, timestamp) in [
+            (
+                'a',
+                "顶层归档.zip",
+                r"D:\输入\顶层归档.zip",
+                r"D:\输出\顶层",
+                100,
+            ),
+            (
+                'b',
+                "嵌套归档.zip",
+                "d:/输出/顶层/嵌套归档.zip",
+                r"D:\输出\顶层\内层",
+                100,
+            ),
+            (
+                'c',
+                "独立归档.zip",
+                r"D:\输出\顶层-other\独立归档.zip",
+                r"D:\输出\独立",
+                100,
+            ),
+            (
+                'd',
+                "其他批次.zip",
+                r"D:\输出\顶层\其他批次.zip",
+                r"D:\输出\顶层\其他",
+                200,
+            ),
+        ] {
+            conn.execute("INSERT INTO recovery_history (fingerprint_sha256,archive_format,file_size,first_success_at_ms,last_verified_at_ms,archive_name,archive_path,output_directory) VALUES (?1,'ZIP',1,?2,?2,?3,?4,?5)", params![fingerprint.to_string().repeat(64), timestamp, name, archive, output]).unwrap();
+        }
+        drop(conn);
+        let store = RecoveryHistoryStore::open(&path).unwrap();
+        let result = store.list(&Default::default()).unwrap();
+        assert_eq!(result.total_count, 3);
+        let root = result
+            .entries
+            .iter()
+            .find(|entry| entry.archive_name.as_deref() == Some("顶层归档.zip"))
+            .unwrap();
+        assert_eq!(root.children.len(), 1);
+        assert_eq!(
+            root.children[0].archive_name.as_deref(),
+            Some("嵌套归档.zip")
+        );
     }
 
     #[test]

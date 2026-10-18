@@ -1,56 +1,251 @@
 import { test, expect } from "@playwright/test"
 
-test("历史表头保持清晰，渐变只出现在表头下方", async ({ page }) => {
+for (const width of [1280, 390]) {
+  test(`嵌套归档默认收起，展开后可打开文件夹（${width}px）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 844 })
+    await page.goto("/")
+    await page.getByRole("button", { name: "历史", exact: true }).click()
+    await expect(page.getByRole("combobox", { name: "每页条数" })).toBeEnabled()
+    await page.evaluate(() => {
+      window.__HISTORY_OPENED__ = []
+      const child = {
+        id: 2,
+        archiveName: "嵌套归档.zip",
+        archivePath: "D:\\输出\\顶层\\嵌套归档.zip",
+        outputDirectory: "D:\\输出\\顶层\\嵌套",
+        archiveFormat: "ZIP",
+        fileSize: 1024,
+        volumeCount: 1,
+        lastVerifiedAtMs: 1_792_324_800_000,
+        hasPassword: true,
+      }
+      const root = {
+        ...child,
+        id: 1,
+        archiveName: "顶层归档.zip",
+        archivePath: "C:\\[测试分组] 中文目录\\顶层归档.zip",
+        outputDirectory: "D:\\输出\\顶层",
+        children: [child],
+      }
+      window.__TAURI_INTERNALS__ = {
+        async invoke(command, args) {
+          if (command === "history_list")
+            return {
+              entries: [root],
+              totalCount: 1,
+              matchedCount: 1,
+              passwordCount: 2,
+            }
+          if (command === "history_reveal_password") {
+            if (window.__HISTORY_DEFER_REVEAL__) {
+              return new Promise((resolve) => {
+                window.__HISTORY_REVEAL_RESOLVE__ = resolve
+              })
+            }
+            return "nested-secret"
+          }
+          if (command === "open_path") {
+            if (window.__HISTORY_OPEN_FAIL__) throw new Error("路径不存在。")
+            window.__HISTORY_OPENED__.push(args.path)
+          }
+          return null
+        },
+      }
+    })
+    await page.getByRole("button", { name: "刷新", exact: true }).click()
+    const root = page.getByRole("article", {
+      name: "顶层归档.zip",
+      exact: true,
+    })
+    const nested = page.getByRole("list", {
+      name: "顶层归档.zip的嵌套压缩包",
+      exact: true,
+    })
+    const child = nested.getByRole("article", {
+      name: "嵌套归档.zip",
+      exact: true,
+    })
+    const toggle = page.getByRole("button", {
+      name: "嵌套压缩包 · 1",
+      exact: true,
+    })
+    await expect(toggle).toHaveAttribute("aria-expanded", "false")
+    await expect(child).not.toBeVisible()
+    await toggle.click()
+    await expect(toggle).toHaveAttribute("aria-expanded", "true")
+    await expect(child).toBeVisible()
+    expect((await child.boundingBox()).y).toBeGreaterThan(
+      (await root.boundingBox()).y
+    )
+    expect((await child.boundingBox()).x).toBeGreaterThan(
+      (await root.boundingBox()).x
+    )
+    await expect(
+      page.getByRole("combobox", { name: "每页条数" })
+    ).toContainText("100 组/页")
+    await root
+      .getByRole("button", { name: "打开压缩包所在文件夹", exact: true })
+      .click()
+    await child
+      .getByRole("button", { name: "打开解压目录", exact: true })
+      .click()
+    expect(await page.evaluate(() => window.__HISTORY_OPENED__)).toEqual([
+      "C:\\[测试分组] 中文目录",
+      "D:\\输出\\顶层\\嵌套",
+    ])
+    await child.getByRole("button", { name: "查看密码", exact: true }).click()
+    await expect(child.locator("code")).toHaveText("nested-secret")
+    await toggle.click()
+    await expect(child).not.toBeVisible()
+    await toggle.click()
+    await expect(child.locator("code")).toHaveText("••••••••")
+    await page.evaluate(() => {
+      window.__HISTORY_DEFER_REVEAL__ = true
+    })
+    await child.getByRole("button", { name: "查看密码", exact: true }).click()
+    await expect
+      .poll(() => page.evaluate(() => typeof window.__HISTORY_REVEAL_RESOLVE__))
+      .toBe("function")
+    await toggle.click()
+    await page.evaluate(() => window.__HISTORY_REVEAL_RESOLVE__("late-secret"))
+    await toggle.click()
+    await expect(
+      child.getByRole("button", { name: "查看密码", exact: true })
+    ).toBeEnabled()
+    await expect(child.locator("code")).toHaveText("••••••••")
+    await page.screenshot({
+      path: test.info().outputPath("history-nested.png"),
+      animations: "disabled",
+    })
+    await page.evaluate(() => {
+      window.__HISTORY_OPEN_FAIL__ = true
+    })
+    await root
+      .getByRole("button", { name: "打开解压目录", exact: true })
+      .click()
+    await expect(
+      page.locator('[data-sonner-toast][data-type="error"]')
+    ).toHaveText("路径不存在。")
+  })
+}
+
+for (const width of [1280, 900, 390, 320]) {
+  test(`长路径默认紧凑展示，展开和复制保留完整内容（${width}px）`, async ({
+    page,
+    context,
+  }) => {
+    const errors = []
+    page.on("pageerror", (error) => errors.push(error.message))
+    await context.grantPermissions(["clipboard-read", "clipboard-write"])
+    await page.setViewportSize({ width, height: 844 })
+    await page.goto("/")
+    await page.getByRole("button", { name: "历史", exact: true }).click()
+    await expect(page.getByRole("combobox", { name: "每页条数" })).toBeEnabled()
+    const archivePath = `D:\\下载\\[测试分组] 中文目录\\${"归档资料与设计素材 ".repeat(12)}\\加密归档.dll`
+    await page.evaluate((archivePath) => {
+      window.__TAURI_INTERNALS__ = {
+        async invoke(command) {
+          if (command === "history_list") {
+            return {
+              entries: [
+                {
+                  id: 1,
+                  archiveName: "加密归档.dll",
+                  archivePath,
+                  outputDirectory: archivePath.slice(0, -4),
+                  archiveFormat: "RAR5",
+                  fileSize: 209 * 1024 * 1024,
+                  volumeCount: 1,
+                  lastVerifiedAtMs: 1_792_324_800_000,
+                  hasPassword: true,
+                },
+              ],
+              totalCount: 1,
+              matchedCount: 1,
+              passwordCount: 1,
+            }
+          }
+          return null
+        },
+      }
+    }, archivePath)
+    await page.getByRole("button", { name: "刷新", exact: true }).click()
+    const record = page.getByRole("article").filter({ hasText: "加密归档.dll" })
+    const path = record.getByTitle(archivePath, { exact: true })
+    await expect(path).toBeVisible()
+    await expect
+      .poll(() => path.evaluate((el) => el.scrollWidth > el.clientWidth))
+      .toBe(true)
+    const collapsed = await record.boundingBox()
+    expect(collapsed.height).toBeLessThan(340)
+    await page.screenshot({
+      path: test.info().outputPath("history-long-paths.png"),
+      animations: "disabled",
+    })
+    const toggle = record.getByRole("button", { name: /^(展开|收起)路径$/ })
+    await toggle.focus()
+    await toggle.press("Enter")
+    await expect(toggle).toHaveAttribute("aria-expanded", "true")
+    await expect
+      .poll(() => path.evaluate((el) => el.scrollWidth <= el.clientWidth))
+      .toBe(true)
+    expect((await record.boundingBox()).height).toBeGreaterThan(
+      collapsed.height
+    )
+    await record
+      .getByRole("button", { name: "复制压缩包路径", exact: true })
+      .click()
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toBe(archivePath)
+    await record.getByRole("button", { name: "收起路径", exact: true }).click()
+    await expect(toggle).toHaveAttribute("aria-expanded", "false")
+    expect((await record.boundingBox()).height).toBe(collapsed.height)
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <= innerWidth &&
+          document.documentElement.scrollHeight <= innerHeight
+      )
+    ).toBe(true)
+    expect(errors).toEqual([])
+  })
+}
+
+test("历史列表局部滚动，搜索和分页固定且没有表格", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 480 })
   await page.goto("/")
   await page.getByRole("button", { name: "历史", exact: true }).click()
-  const area = page.locator(".table-scroll-fade:visible")
+  await expect(page.getByRole("article")).toHaveCount(3)
+  await expect(page.getByRole("table")).toHaveCount(0)
+  const area = page.locator('[data-slot="history-scroll-area"]')
   const viewport = area.locator('[data-slot="scroll-area-viewport"]')
-  const header = area.locator('[data-slot="table-header"]')
-  await expect(page.getByRole("combobox", { name: "每页条数" })).toBeEnabled()
-  const before = await header.boundingBox()
+  const search = page.getByRole("searchbox", { name: "搜索压缩包名称或路径" })
+  const pagination = page.getByRole("navigation", { name: "历史分页" })
+  const beforeSearch = await search.boundingBox()
+  const beforePagination = await pagination.boundingBox()
   expect(
     await viewport.evaluate((el) => el.scrollHeight > el.clientHeight)
   ).toBe(true)
-  await expect
-    .poll(() =>
-      header.evaluate((el) => getComputedStyle(el, "::after").opacity)
-    )
-    .toBe("0")
   await viewport.evaluate((el) => {
-    el.scrollTop = 80
+    el.scrollTop = 120
   })
-  await expect
-    .poll(() =>
-      header.evaluate((el) => getComputedStyle(el, "::after").opacity)
-    )
-    .toBe("1")
-  const after = await header.boundingBox()
-  expect(Math.abs(after.y - before.y)).toBeLessThan(1)
+  expect(await viewport.evaluate((el) => el.scrollTop)).toBeGreaterThan(0)
+  expect((await search.boundingBox()).y).toBe(beforeSearch.y)
+  expect((await pagination.boundingBox()).y).toBe(beforePagination.y)
   expect(
-    await viewport.evaluate((el) =>
-      getComputedStyle(el).getPropertyValue("--scroll-fade-t-size").trim()
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <= innerWidth &&
+        document.documentElement.scrollHeight <= innerHeight
     )
-  ).toBe("0px")
-  expect(
-    Math.abs(
-      (await header.evaluate((el) =>
-        parseFloat(getComputedStyle(el, "::after").top)
-      )) - after.height
-    )
-  ).toBeLessThan(1)
+  ).toBe(true)
   await page.screenshot({
     path: test.info().outputPath("history-scrolled.png"),
     animations: "disabled",
   })
-  await viewport.evaluate((el) => {
-    el.scrollTop = 0
-  })
-  await expect
-    .poll(() =>
-      header.evaluate((el) => getComputedStyle(el, "::after").opacity)
-    )
-    .toBe("0")
 })
 
 for (const width of [1280, 390]) {
@@ -62,11 +257,21 @@ for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 844 })
     await page.goto("/")
     await page.getByRole("button", { name: "历史", exact: true }).click()
-    const records = page.locator("table:visible, article:visible")
+    const records = page.getByRole("article")
     await expect(
       records.getByText("项目设计素材.7z", { exact: true })
     ).toBeVisible()
     await expect(records.getByText("—", { exact: true })).toHaveCount(3)
+    await expect(page.getByRole("table")).toHaveCount(0)
+    const first = await records.nth(0).boundingBox()
+    const second = await records.nth(1).boundingBox()
+    expect(second.y).toBeGreaterThan(first.y)
+    expect(second.x).toBe(first.x)
+    expect(second.width).toBe(first.width)
+    await page.screenshot({
+      path: test.info().outputPath("history-list.png"),
+      animations: "disabled",
+    })
     await expect(page.getByText("内容指纹", { exact: true })).toHaveCount(0)
     await expect(
       page.getByText(
@@ -82,7 +287,7 @@ for (const width of [1280, 390]) {
     ).toHaveCount(0)
     await page
       .getByRole("button", {
-        name: width === 1280 ? "查看密码" : "查看",
+        name: "查看密码",
         exact: true,
       })
       .click()
@@ -96,7 +301,7 @@ for (const width of [1280, 390]) {
     })
     await page
       .getByRole("button", {
-        name: width === 1280 ? "复制密码" : "复制",
+        name: "复制密码",
         exact: true,
       })
       .click()
@@ -108,7 +313,7 @@ for (const width of [1280, 390]) {
     ).toHaveCount(0)
     await page
       .getByRole("button", {
-        name: width === 1280 ? "复制密码" : "复制",
+        name: "复制密码",
         exact: true,
       })
       .click()
@@ -164,16 +369,10 @@ for (const width of [1280, 390]) {
     await expect(
       toaster.getByText("历史记录已刷新", { exact: true })
     ).toBeVisible()
-    const deleteButton =
-      width === 1280
-        ? page.getByRole("button", {
-            name: "删除 项目设计素材.7z 的记录",
-            exact: true,
-          })
-        : page
-            .getByRole("article")
-            .filter({ hasText: "项目设计素材.7z" })
-            .getByRole("button", { name: "删除", exact: true })
+    const deleteButton = page.getByRole("button", {
+      name: "删除 项目设计素材.7z 的记录",
+      exact: true,
+    })
     await deleteButton.click()
     await page
       .getByRole("alertdialog")
@@ -211,7 +410,7 @@ for (const width of [1280, 390]) {
     await page.goto("/")
     await page.getByRole("button", { name: "历史", exact: true }).click()
     const size = page.getByRole("combobox", { name: "每页条数" })
-    await expect(size).toContainText("100 行/页")
+    await expect(size).toContainText("100 组/页")
     await size.click()
     await page.getByRole("option", { name: "自定义", exact: true }).click()
     await page.getByRole("spinbutton", { name: "自定义每页条数" }).fill("1")
@@ -227,7 +426,7 @@ for (const width of [1280, 390]) {
     await jump.press("Enter")
     await expect(jump).toHaveValue("2")
     await expect(
-      page.getByText("第 2 / 3 页 · 共 3 条", { exact: true })
+      page.getByText("第 2 / 3 页 · 共 3 组", { exact: true })
     ).toBeVisible()
     await jump.fill("1")
     await jump.press("Tab")
@@ -239,8 +438,8 @@ for (const width of [1280, 390]) {
       animations: "disabled",
     })
     await size.click()
-    await page.getByRole("option", { name: "1000 行/页", exact: true }).click()
-    await expect(size).toContainText("1000 行/页")
+    await page.getByRole("option", { name: "1000 组/页", exact: true }).click()
+    await expect(size).toContainText("1000 组/页")
     await expect(page.getByLabel("共 1 页", { exact: true })).toBeVisible()
     const search = page.getByRole("searchbox")
     await search.fill("no-such-history")

@@ -521,6 +521,7 @@ mod tests {
         history
             .upsert_many(&[RecoveryHistoryRecord {
                 fingerprint_sha256: "a".repeat(64),
+                root_fingerprint_sha256: None,
                 archive_name: None,
                 archive_path: None,
                 output_directory: None,

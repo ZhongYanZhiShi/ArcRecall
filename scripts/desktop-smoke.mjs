@@ -11,6 +11,7 @@ import {
   readFile,
   readdir,
   access,
+  unlink,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -29,7 +30,9 @@ const sevenZip =
 await access(binary)
 await access(sevenZip)
 const root = await mkdtemp(join(tmpdir(), "arc-recall-desktop-e2e-"))
-const evidence = resolve("test-results/native")
+const evidence = resolve(
+  process.env.ARC_RECALL_TEST_EVIDENCE ?? "test-results/native"
+)
 await mkdir(evidence, { recursive: true })
 const data = join(root, "data")
 const tools = join(data, "tools", "7zip", "26.02")
@@ -500,6 +503,178 @@ async function verifyAiFileReference() {
   }
 }
 
+// A focused acceptance path uses the same isolated WebView and real IPC setup.
+if (process.argv.includes("--history-only")) {
+  const sources = join(root, "[测试分组] 中文目录")
+  const inner = join(sources, "嵌套归档.zip")
+  const outer = join(sources, "顶层归档.7z")
+  const openedDirectories = []
+  const explorerPaths = () => {
+    const result = spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $shell = New-Object -ComObject Shell.Application; @($shell.Windows() | ForEach-Object { try { $_.Document.Folder.Self.Path } catch {} }) | ConvertTo-Json -Compress",
+      ],
+      { windowsHide: true, encoding: "utf8" }
+    )
+    assert.equal(result.status, 0, result.stderr)
+    const paths = JSON.parse(result.stdout.trim() || "[]")
+    return (Array.isArray(paths) ? paths : [paths]).filter(
+      (value) => typeof value === "string"
+    )
+  }
+  try {
+    await mkdir(sources, { recursive: true })
+    for (const [format, target, source] of [
+      ["zip", inner, payload],
+      ["7z", outer, inner],
+    ]) {
+      const created = spawnSync(
+        sevenZip,
+        ["a", `-t${format}`, `-p${password}`, target, source],
+        { windowsHide: true, encoding: "utf8" }
+      )
+      assert.equal(created.status, 0, created.stderr)
+    }
+    await launch()
+    const started = await invoke("recovery_start", {
+      request: {
+        archivePath: outer,
+        outputDirectory: join(root, "解压结果"),
+        knownPassword: password,
+        recursive: true,
+        computeMode: "cpuOnly",
+      },
+    })
+    await expect
+      .poll(
+        async () =>
+          (await invoke("recovery_status", { taskId: started.taskId }))
+            ?.completed,
+        { timeout: 60_000 }
+      )
+      .toBe(true)
+    const status = await invoke("recovery_status", { taskId: started.taskId })
+    assert.equal(status.success, true, status.message)
+    assert.equal(status.extractedNestedArchiveCount, 1, status.message)
+    const history = await invoke("history_list", {
+      query: { searchText: "嵌套归档", skip: 0, take: 1 },
+    })
+    assert.equal(history.totalCount, 1)
+    assert.equal(history.matchedCount, 1)
+    assert.equal(history.entries[0].archiveName, "顶层归档.7z")
+    assert.equal(history.entries[0].children.length, 1)
+    assert.equal(history.entries[0].children[0].archiveName, "嵌套归档.zip")
+    await close()
+    await launch()
+    await page.getByRole("button", { name: "历史", exact: true }).click()
+    const rootEntry = page.getByRole("article", {
+      name: "顶层归档.7z",
+      exact: true,
+    })
+    const nestedEntry = page.getByRole("article", {
+      name: "嵌套归档.zip",
+      exact: true,
+    })
+    const toggle = page.getByRole("button", {
+      name: "嵌套压缩包 · 1",
+      exact: true,
+    })
+    await expect(toggle).toHaveAttribute("aria-expanded", "false")
+    await expect(nestedEntry).not.toBeVisible()
+    await toggle.click()
+    await expect(nestedEntry).toBeVisible()
+    assert.ok(
+      (await nestedEntry.boundingBox()).y > (await rootEntry.boundingBox()).y
+    )
+    await nestedEntry
+      .getByRole("button", { name: "查看密码", exact: true })
+      .click()
+    await expect(nestedEntry.locator("code")).toHaveText(password)
+    await toggle.click()
+    await expect(nestedEntry).not.toBeVisible()
+    await toggle.click()
+    await expect(nestedEntry.locator("code")).toHaveText("••••••••")
+    await unlink(outer)
+    // The archive may have been removed; its containing directory still opens.
+    await rootEntry
+      .getByRole("button", { name: "打开压缩包所在文件夹", exact: true })
+      .click()
+    await expect(
+      rootEntry.getByRole("button", {
+        name: "打开压缩包所在文件夹",
+        exact: true,
+      })
+    ).toBeEnabled()
+    openedDirectories.push(sources)
+    await expect
+      .poll(
+        () =>
+          explorerPaths().some(
+            (path) =>
+              resolve(path).toLowerCase() === resolve(sources).toLowerCase()
+          ),
+        { timeout: 15_000 }
+      )
+      .toBe(true)
+    const output = history.entries[0].children[0].outputDirectory
+    await nestedEntry
+      .getByRole("button", { name: "打开解压目录", exact: true })
+      .click()
+    openedDirectories.push(output)
+    await expect
+      .poll(
+        () =>
+          explorerPaths().some(
+            (path) =>
+              resolve(path).toLowerCase() === resolve(output).toLowerCase()
+          ),
+        { timeout: 15_000 }
+      )
+      .toBe(true)
+    const search = page.getByRole("searchbox", { name: "搜索压缩包名称或路径" })
+    await search.fill("嵌套归档")
+    await search.press("Enter")
+    await expect(rootEntry).toBeVisible()
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+      await toggle.click()
+    }
+    await expect(nestedEntry).toBeVisible()
+    await page.screenshot({ path: join(evidence, "native-nested-history.png") })
+    assert.deepEqual(errors, [])
+    console.log(
+      "PASS: real nested extraction / grouped search and pagination / restart / DPAPI password / Explorer folder shortcuts."
+    )
+  } catch (error) {
+    await page
+      ?.screenshot({ path: join(evidence, "native-history-failure.png") })
+      .catch(() => {})
+    throw error
+  } finally {
+    await close(false)
+    spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        "$targets = ConvertFrom-Json $env:ARC_HISTORY_TEST_FOLDERS; $shell = New-Object -ComObject Shell.Application; foreach ($window in @($shell.Windows())) { try { if ($targets -contains $window.Document.Folder.Self.Path) { $window.Quit() } } catch {} }",
+      ],
+      {
+        windowsHide: true,
+        stdio: "ignore",
+        env: {
+          ...process.env,
+          ARC_HISTORY_TEST_FOLDERS: JSON.stringify(openedDirectories),
+        },
+      }
+    )
+    console.log(`Isolated history test data: ${root}`)
+  }
+  process.exit(0)
+}
+
 try {
   await launch()
   await verifyAiFileReference()
@@ -614,19 +789,19 @@ try {
   await close()
   await launch()
   await page.getByRole("button", { name: "历史", exact: true }).click()
-  const historyTable = page.getByRole("table")
+  const historyEntries = page.getByRole("article")
   await expect(
-    historyTable.getByText("literal-password.7z", { exact: true })
+    historyEntries.getByText("literal-password.7z", { exact: true })
   ).toBeVisible()
   await expect(
-    historyTable.getByText(savedArchive.archivePath, { exact: true })
+    historyEntries.getByText(savedArchive.archivePath, { exact: true })
   ).toBeVisible()
   await expect(
-    historyTable.getByText(savedArchive.outputDirectory, { exact: true })
+    historyEntries.getByText(savedArchive.outputDirectory, { exact: true })
   ).toBeVisible()
   await page.getByRole("button", { name: "查看密码", exact: true }).click()
   await expect(
-    historyTable.locator("code").filter({ hasText: password })
+    historyEntries.locator("code").filter({ hasText: password })
   ).toBeVisible()
   const historySearch = page.getByRole("searchbox", {
     name: "搜索压缩包名称或路径",
@@ -634,7 +809,7 @@ try {
   await historySearch.fill("pending.7z")
   await historySearch.press("Enter")
   await expect(
-    historyTable.getByText("literal-password.7z", { exact: true })
+    historyEntries.getByText("literal-password.7z", { exact: true })
   ).toBeVisible()
   await expect(
     page.getByRole("button", { name: "查看密码", exact: true })

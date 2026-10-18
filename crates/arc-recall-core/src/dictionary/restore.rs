@@ -107,14 +107,41 @@ impl DictionaryCandidateStore {
                 [snapshot.to_string_lossy().as_ref()],
             )
             .map_err(|error| error.to_string())?;
+        let source_columns = {
+            let mut statement = connection
+                .prepare("PRAGMA restore_source.table_info(recovery_history);")
+                .map_err(|error| error.to_string())?;
+            statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?
+        };
+        let optional_columns = [
+            "archive_name",
+            "archive_path",
+            "output_directory",
+            "root_fingerprint_sha256",
+        ];
+        let optional_values = optional_columns
+            .iter()
+            .map(|column| {
+                if source_columns.iter().any(|name| name == column) {
+                    *column
+                } else {
+                    "NULL"
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",");
         let tx = connection
             .transaction()
             .map_err(|error| error.to_string())?;
-        tx.execute_batch("DELETE FROM dictionary_candidates;
+        tx.execute_batch(&format!("DELETE FROM dictionary_candidates;
             INSERT INTO dictionary_candidates (id,candidate_text,byte_count,success_count) SELECT id,candidate_text,byte_count,success_count FROM restore_source.dictionary_candidates;
             DELETE FROM recovery_history;
-            INSERT INTO recovery_history (id,fingerprint_sha256,archive_format,file_size,volume_count,first_success_at_ms,last_verified_at_ms,verification_count,password_protected)
-            SELECT id,fingerprint_sha256,archive_format,file_size,volume_count,first_success_at_ms,last_verified_at_ms,verification_count,password_protected FROM restore_source.recovery_history;")
+            INSERT INTO recovery_history (id,fingerprint_sha256,archive_format,file_size,volume_count,first_success_at_ms,last_verified_at_ms,verification_count,password_protected,{})
+            SELECT id,fingerprint_sha256,archive_format,file_size,volume_count,first_success_at_ms,last_verified_at_ms,verification_count,password_protected,{optional_values} FROM restore_source.recovery_history;", optional_columns.join(",")))
             .map_err(|error| format!("恢复失败，当前数据已回滚：{error}"))?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(info)
@@ -125,6 +152,37 @@ impl DictionaryCandidateStore {
 mod tests {
     use super::*;
     use crate::RecoveryHistoryStore;
+
+    #[test]
+    fn restore_preserves_history_locations_and_nested_groups() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.db");
+        DictionaryCandidateStore::open(&source).unwrap();
+        RecoveryHistoryStore::open(&source).unwrap();
+        let conn = Connection::open(&source).unwrap();
+        conn.execute("INSERT INTO recovery_history (fingerprint_sha256,archive_format,file_size,first_success_at_ms,last_verified_at_ms,archive_name,archive_path,output_directory) VALUES (?1,'ZIP',1,100,100,'顶层归档.zip','D:/输入/顶层归档.zip','D:/输出/顶层')", ["a".repeat(64)]).unwrap();
+        conn.execute("INSERT INTO recovery_history (fingerprint_sha256,archive_format,file_size,first_success_at_ms,last_verified_at_ms,archive_name,archive_path,root_fingerprint_sha256) VALUES (?1,'ZIP',1,100,100,'嵌套归档.zip','D:/输出/顶层/嵌套归档.zip',?2)", [&"b".repeat(64), &"a".repeat(64)]).unwrap();
+        drop(conn);
+        let snapshot = dir.path().join("snapshot.db");
+        snapshot_database_restore(&source, &snapshot).unwrap();
+        let target = dir.path().join("target.db");
+        let dictionary = DictionaryCandidateStore::open(&target).unwrap();
+        let history = RecoveryHistoryStore::open(&target).unwrap();
+        dictionary
+            .restore_snapshot(&snapshot, &dir.path().join("safety.db"))
+            .unwrap();
+        let result = history.list(&Default::default()).unwrap();
+        assert_eq!(result.total_count, 1);
+        assert_eq!(
+            result.entries[0].archive_path.as_deref(),
+            Some("D:/输入/顶层归档.zip")
+        );
+        assert_eq!(result.entries[0].children.len(), 1);
+        assert_eq!(
+            result.entries[0].children[0].archive_path.as_deref(),
+            Some("D:/输出/顶层/嵌套归档.zip")
+        );
+    }
 
     #[test]
     fn snapshot_is_consistent_and_restore_keeps_safety_backup() {

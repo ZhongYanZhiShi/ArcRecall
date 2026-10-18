@@ -17,6 +17,7 @@ export type RecoveryHistoryEntry = {
   lastVerifiedAtMs: number
   verificationCount: number
   hasPassword: boolean
+  children?: RecoveryHistoryEntry[]
 }
 
 export type RecoveryHistoryQuery = {

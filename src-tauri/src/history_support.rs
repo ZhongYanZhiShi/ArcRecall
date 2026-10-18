@@ -75,6 +75,9 @@ pub fn save_recovered_history(
             ..HistorySaveReport::default()
         };
     };
+    let root_fingerprint = archives
+        .first()
+        .map(|archive| archive.fingerprint_sha256.as_str());
     let mut report = HistorySaveReport::default();
     let mut records = Vec::with_capacity(archives.len());
     for archive in archives {
@@ -94,6 +97,9 @@ pub fn save_recovered_history(
                 volume_count: archive.volume_count,
                 verified_at_ms,
                 protected_password,
+                root_fingerprint_sha256: root_fingerprint
+                    .filter(|root| *root != archive.fingerprint_sha256)
+                    .map(str::to_owned),
             }),
             Err(_) => report.failed_count += 1,
         }

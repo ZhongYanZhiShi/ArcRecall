@@ -25,6 +25,7 @@ import {
 
 type TablePaginationProps = {
   label: string
+  itemUnit?: "行" | "条" | "组"
   pageIndex: number
   pageSize: number
   totalCount: number
@@ -36,6 +37,7 @@ type TablePaginationProps = {
 /** Shared pagination interactions; callers own fetching and committed query state. */
 export function TablePagination({
   label,
+  itemUnit = "行",
   pageIndex,
   pageSize,
   totalCount,
@@ -50,6 +52,7 @@ export function TablePagination({
   const displayedPage = pageCount === 0 ? 0 : pageIndex + 1
   const hasPreviousPage = pageIndex > 0 && pageCount > 0
   const hasNextPage = pageIndex + 1 < pageCount
+  const countUnit = itemUnit === "组" ? "组" : "条"
 
   const changePage = (index: number) => {
     setJumpPage(null)
@@ -70,7 +73,7 @@ export function TablePagination({
   return (
     <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-3 py-2">
       <span className="text-xs text-muted-foreground tabular-nums">
-        共 {totalCount} 条
+        共 {totalCount} {countUnit}
       </span>
       <div className="flex flex-wrap items-center gap-1">
         {customSizeMode ? (
@@ -128,12 +131,14 @@ export function TablePagination({
               aria-label="每页条数"
               className="bg-transparent px-1 text-xs text-muted-foreground"
             >
-              <SelectValue>{pageSize} 行/页</SelectValue>
+              <SelectValue>
+                {pageSize} {itemUnit}/页
+              </SelectValue>
             </SelectTrigger>
             <SelectContent side="top" align="end" alignItemWithTrigger={false}>
               {[50, 100, 500, 1000].map((size) => (
                 <SelectItem key={size} value={String(size)}>
-                  {size} 行/页
+                  {size} {itemUnit}/页
                 </SelectItem>
               ))}
               <SelectItem value="custom">自定义</SelectItem>
@@ -243,7 +248,7 @@ export function TablePagination({
         <span
           role="status"
           className="sr-only"
-        >{`第 ${displayedPage} / ${pageCount} 页 · 共 ${totalCount} 条`}</span>
+        >{`第 ${displayedPage} / ${pageCount} 页 · 共 ${totalCount} ${countUnit}`}</span>
       </div>
     </div>
   )
