@@ -413,7 +413,7 @@ export function LogsPage() {
     <WorkbenchPage data-workbench="logs">
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
-          title="运行日志"
+          title="日志"
           actions={
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -611,7 +611,7 @@ export function LogsPage() {
 
             <div
               ref={listRef}
-              className="min-h-0 flex-1 scroll-fade overflow-y-auto"
+              className="byte-log-console min-h-0 flex-1 scroll-fade overflow-y-auto"
               onFocusCapture={() => setListFocused(true)}
               onBlurCapture={(event) => {
                 if (!event.currentTarget.contains(event.relatedTarget)) {

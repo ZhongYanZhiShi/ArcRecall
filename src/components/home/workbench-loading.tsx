@@ -19,6 +19,7 @@ function LoadingFrame({
   return (
     <div
       role="status"
+      data-slot="workbench-page-content"
       className={cn(
         "mx-auto flex h-full min-h-0 w-full flex-col overflow-hidden px-5 pt-6 pb-2",
         width === "default" ? "workbench-page" : "max-w-6xl"

@@ -29,15 +29,7 @@ export function ArchiveStage({
   const root = task?.archivePath ?? analysis?.archivePath
   const rootAnalysis = analysis?.archivePath === root ? analysis : null
   const layers = React.useMemo<ArchiveLayer[]>(() => {
-    if (!root)
-      return [
-        {
-          id: "unopened",
-          depth: null,
-          name: "等待选择压缩包",
-          state: "unknown",
-        },
-      ]
+    if (!root) return []
     const completed = new Set(task?.completedArchivePaths ?? [])
     if (task?.rootExtractionCompleted) completed.add(root)
     const skipped = new Set(task?.skippedArchivePaths ?? [])
@@ -92,6 +84,8 @@ export function ArchiveStage({
       }
     })
   }, [root, rootAnalysis, task])
+
+  if (layers.length === 0) return null
 
   return (
     <div className="min-w-0" data-slot="archive-stage">

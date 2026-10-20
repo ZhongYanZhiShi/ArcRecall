@@ -78,6 +78,7 @@ async function mockDesktop(
           callbacks.delete(id)
         },
         async invoke(command, args) {
+          if (command === "plugin:window|is_minimized") return false
           if (command === "plugin:event|listen") return 1
           if (
             command === "plugin:event|unlisten" ||
@@ -279,11 +280,13 @@ test("真实 DOM：恢复队列等待手动启动、源文件错误和记录关�
     ],
   })
   await page.goto("/")
-  await expect(page.getByText(/已找回 2 项/)).toBeVisible()
   await expect(
     page.getByRole("button", { name: "按顺序处理 1 项" })
   ).toBeEnabled()
   expect(await page.evaluate(() => window.__ARC_TEST__.starts)).toEqual([])
+  await expect(page.getByLabel("记住任务队列")).toBeHidden()
+  await page.getByRole("button", { name: "打开解压选项" }).click()
+  await expect(page.getByText(/已找回 2 项/)).toBeVisible()
   await page.getByLabel("记住任务队列").uncheck()
   await expect
     .poll(() => page.evaluate(() => window.__ARC_TEST__.saves.at(-1)?.enabled))
@@ -299,7 +302,11 @@ test("浏览器预览与窄屏仍有可读入口，无框架错误或横向溢�
   await expect(
     page.getByRole("button", { name: "选择压缩包", exact: true })
   ).toBeVisible()
-  await expect(page.getByLabel("记住任务队列")).toBeDisabled()
+  await expect(page.getByLabel("记住任务队列")).toBeHidden()
+  await page.getByRole("button", { name: "打开解压选项" }).click()
+  await expect(
+    page.getByRole("dialog").getByLabel("记住任务队列")
+  ).toBeDisabled()
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth
@@ -374,4 +381,177 @@ test("参考后缀标签支持多选、回车和按钮添加、自定义去重�
   ).toBe(true)
   await page.screenshot({ path: "test-results/ai-reference-tags.png" })
   expect(errors).toEqual([])
+})
+
+test("字节流跟随运行和等待密码状态，后台暂停后从原位置恢复", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await mockDesktop(page, undefined, {
+    ...task,
+    phase: "internal",
+    running: true,
+    completed: false,
+    success: false,
+  })
+  await page.goto("/")
+  const stream = page.locator(".byte-stream")
+  await expect(stream).toHaveAttribute("data-activity", "running")
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")))
+  await expect(stream).toHaveAttribute("data-paused", "false")
+  await expect
+    .poll(() =>
+      stream.evaluate(
+        (e) => e.getAnimations({ subtree: true })[0]?.playbackRate
+      )
+    )
+    .toBe(1.15)
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")))
+  await expect(stream).toHaveAttribute("data-paused", "false")
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    })
+    document.dispatchEvent(new Event("visibilitychange"))
+  })
+  await expect(stream).toHaveAttribute("data-paused", "true")
+  const time = await stream.evaluate(async (e) => {
+    const animation = e.getAnimations({ subtree: true })[0]
+    await animation.ready
+    return animation.currentTime
+  })
+  await page.waitForTimeout(200)
+  expect(
+    await stream.evaluate(
+      (e) => e.getAnimations({ subtree: true })[0].currentTime
+    )
+  ).toBe(time)
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    })
+    document.dispatchEvent(new Event("visibilitychange"))
+  })
+  await expect
+    .poll(() =>
+      stream.evaluate((e) => e.getAnimations({ subtree: true })[0].currentTime)
+    )
+    .toBeGreaterThan(time)
+  await page.evaluate((next) => window.__ARC_TEST__.setTask(next), {
+    ...task,
+    phase: "exhausted",
+    running: false,
+    success: false,
+  })
+  await expect(stream).toHaveAttribute("data-activity", "waiting")
+  await expect
+    .poll(() =>
+      stream.evaluate(
+        (e) => e.getAnimations({ subtree: true })[0]?.playbackRate
+      )
+    )
+    .toBe(0.35)
+  await page.emulateMedia({ reducedMotion: "reduce" })
+  await expect
+    .poll(() =>
+      stream.evaluate((e) => e.getAnimations({ subtree: true }).length)
+    )
+    .toBe(0)
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await expect
+    .poll(() =>
+      stream.evaluate(
+        (e) => e.getAnimations({ subtree: true })[0]?.playbackRate
+      )
+    )
+    .toBe(0.35)
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "压缩", exact: true })
+    .click()
+  await expect(stream).toHaveAttribute("data-activity", "idle")
+})
+
+test("解压舞台区分等待密码、完成和仍有待处理项", async ({ context }) => {
+  for (const [label, next] of [
+    ["需要密码", { ...task, phase: "exhausted", success: false }],
+    ["解压完成，仍有待处理项", task],
+    [
+      "解压完成",
+      {
+        ...task,
+        pendingArchivePaths: [],
+        skippedArchivePaths: [],
+        skippedNestedArchiveCount: 0,
+        scanInterrupted: false,
+      },
+    ],
+  ]) {
+    const page = await context.newPage()
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await mockDesktop(page, undefined, next)
+    await page.goto("/")
+    await expect(page.locator(".byte-archive-heading .byte-lead")).toHaveText(
+      label
+    )
+    if (next.success)
+      await expect(page.getByLabel("本次任务统计")).toBeVisible()
+    else await expect(page.getByLabel("本次任务统计")).toHaveCount(0)
+    await page.setViewportSize({ width: 390, height: 844 })
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth
+      )
+    ).toBe(true)
+    if (next.success)
+      await expect(
+        page.getByRole("button", { name: "打开解压文件夹", exact: true })
+      ).toBeVisible()
+    await page.close()
+  }
+})
+
+test("完成后收起重试与层级，主要结果留在首屏且可重新填写密码", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await mockDesktop(page)
+  await page.goto("/")
+  await expect(page.locator("[data-slot=recovery-result]")).toBeVisible()
+  await page.evaluate(() => {
+    const data = new DataTransfer()
+    data.setData("text/plain", "C:/fixtures/中文目录/多层归档.zip")
+    window.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data }))
+  })
+  await expect(page.getByLabel("已知密码（可选）")).toBeVisible()
+  await page
+    .getByRole("button", { name: "开始恢复并解压", exact: true })
+    .click()
+  await expect(
+    page.getByText("重新解压 / 修改密码与策略", { exact: true })
+  ).toBeVisible()
+  await expect(page.getByLabel("已知密码（可选）")).toBeHidden()
+  await expect(page.locator("[data-slot=archive-stage]")).toBeHidden()
+  const content = page.locator(
+    '[data-workbench="extract"] [data-slot="workbench-page-content"]'
+  )
+  await content.evaluate((el) => {
+    el.scrollTop = 0
+  })
+  await expect(
+    page.getByRole("button", { name: "打开解压文件夹", exact: true })
+  ).toBeInViewport()
+  await page.getByText("归档层级与处理状态", { exact: true }).click()
+  await expect(page.locator("[data-slot=archive-stage]")).toBeVisible()
+  await page.getByText("重新解压 / 修改密码与策略", { exact: true }).click()
+  await page.getByLabel("已知密码（可选）").fill("retry-password")
+  await expect(
+    page.getByRole("button", { name: "开始恢复并解压", exact: true })
+  ).toBeEnabled()
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await content.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(
+    true
+  )
 })

@@ -423,7 +423,7 @@ export function EngineSettingsPanel() {
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="byte-settings-grid flex flex-col gap-2">
       {loadError ? (
         <Alert variant="warning">
           <CircleAlert />

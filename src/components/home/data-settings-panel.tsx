@@ -46,7 +46,7 @@ export function DataSettingsPanel({ onRestored }: { onRestored: () => void }) {
   }, [load])
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="byte-settings-grid flex flex-col gap-2">
       {error ? (
         <Alert variant="warning">
           <CircleAlert />

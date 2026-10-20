@@ -62,6 +62,7 @@ await copyFile(archive, pending)
 await copyFile(archive, changed)
 
 let child, browser, page
+let motionWindowHandle = null
 const errors = []
 const delay = (ms) => new Promise((done) => setTimeout(done, ms))
 const invoke = (command, args = {}) =>
@@ -70,6 +71,7 @@ const invoke = (command, args = {}) =>
     { command, args }
   )
 async function launch() {
+  motionWindowHandle = null
   const server = createServer().listen(0, "127.0.0.1")
   await once(server, "listening")
   const port = server.address().port
@@ -107,7 +109,9 @@ async function launch() {
     context.pages()[0] ??
     (await context.waitForEvent("page"))
   page.on("pageerror", (error) => errors.push(error.message))
+  await page.getByRole("button", { name: "打开解压选项" }).click()
   await expect(page.getByLabel("记住任务队列")).toBeEnabled({ timeout: 30_000 })
+  await page.keyboard.press("Escape")
   const info = await invoke("database_info")
   assert.equal(
     resolve(info.rootPath),
@@ -124,7 +128,9 @@ async function close(requireGraceful = true) {
     [
       "-NoProfile",
       "-Command",
-      `[Diagnostics.Process]::GetProcessById(${child.pid}).CloseMainWindow()`,
+      motionWindowHandle
+        ? `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class CloseMotionWindow { [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l); }'; [CloseMotionWindow]::PostMessage([IntPtr]${motionWindowHandle}, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)`
+        : `[Diagnostics.Process]::GetProcessById(${child.pid}).CloseMainWindow()`,
     ],
     { windowsHide: true, stdio: "ignore" }
   )
@@ -679,8 +685,10 @@ try {
   await launch()
   await verifyAiFileReference()
   assert.equal((await invoke("recovery_queue_load")).enabled, false)
+  await page.getByRole("button", { name: "打开解压选项" }).click()
   await page.getByLabel("记住任务队列").click()
   await expect(page.getByLabel("记住任务队列")).toBeChecked()
+  await page.keyboard.press("Escape")
   await pastePaths([archive, pending, changed])
   await expect(
     page.getByRole("button", { name: "按顺序处理 3 项" })
@@ -698,7 +706,9 @@ try {
     Buffer.concat([await readFile(changed), Buffer.from("changed")])
   )
   await launch()
+  await page.getByRole("button", { name: "打开解压选项" }).click()
   await expect(page.getByText(/已找回 3 项/)).toBeVisible()
+  await page.keyboard.press("Escape")
   await expect(
     page.getByText("源文件或分卷的大小、修改时间已改变，请移除后重新添加。")
   ).toBeVisible()
@@ -827,8 +837,10 @@ try {
   await expect(
     page.getByRole("button", { name: "暂无待处理任务", exact: true })
   ).toBeDisabled()
+  await page.getByRole("button", { name: "打开解压选项" }).click()
   await page.getByLabel("记住任务队列").click()
   await expect(page.getByLabel("记住任务队列")).not.toBeChecked()
+  await page.keyboard.press("Escape")
   await expect
     .poll(async () => {
       try {
@@ -1148,6 +1160,55 @@ try {
   await page.screenshot({
     path: join(evidence, "native-dictionary-progress.png"),
   })
+  await expect(page.locator(".byte-stream")).toHaveAttribute(
+    "data-activity",
+    "running"
+  )
+  const setWindowVisibility = (show) => {
+    const result = spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        `
+      Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class MotionWindow { [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h); }'
+      $taskWindow = ${motionWindowHandle ? `[IntPtr]${motionWindowHandle}` : `[Diagnostics.Process]::GetProcessById(${child.pid}).MainWindowHandle`}
+      [MotionWindow]::ShowWindow($taskWindow, ${show ? 9 : 6}) | Out-Null
+      ${show ? "[MotionWindow]::SetForegroundWindow($taskWindow) | Out-Null" : ""}
+      [MotionWindow]::IsIconic($taskWindow)
+      $taskWindow.ToInt64()
+    `,
+      ],
+      { windowsHide: true, encoding: "utf8" }
+    )
+    assert.equal(result.status, 0, result.stderr)
+    const [minimized, handle] = result.stdout.trim().split(/\r?\n/)
+    assert.equal(minimized, show ? "False" : "True")
+    assert.match(handle, /^[1-9][0-9]*$/)
+    motionWindowHandle = handle
+  }
+  setWindowVisibility(false)
+  await expect(page.locator(".byte-stream")).toHaveAttribute(
+    "data-paused",
+    "true"
+  )
+  const animationTime = await page
+    .locator(".byte-stream")
+    .evaluate((e) => e.getAnimations({ subtree: true })[0]?.currentTime)
+  assert.equal(typeof animationTime, "number")
+  await delay(200)
+  assert.equal(
+    await page
+      .locator(".byte-stream")
+      .evaluate((e) => e.getAnimations({ subtree: true })[0]?.currentTime),
+    animationTime
+  )
+  setWindowVisibility(true)
+  await page.bringToFront()
+  await expect(page.locator(".byte-stream")).toHaveAttribute(
+    "data-paused",
+    "false"
+  )
   assert.equal(
     await invoke("recovery_cancel", { taskId: cancelTask.taskId }),
     true
@@ -1166,6 +1227,10 @@ try {
     null
   )
   await expect(progressPanel).not.toBeVisible()
+  await expect(page.locator(".byte-stream")).toHaveAttribute(
+    "data-activity",
+    "idle"
+  )
   // Window close must cancel and join the active native worker before deleting its workspace.
   await invoke("recovery_start", { request })
   await close()

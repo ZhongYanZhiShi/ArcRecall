@@ -349,7 +349,7 @@ export function HistoryPage() {
     <WorkbenchPage data-workbench="history">
       <WorkbenchPageContent width="wide" className="gap-3">
         <WorkbenchPageHeader
-          title="指纹档案"
+          title="历史"
           description="回看归档层级、恢复密码与输出位置。"
           actions={
             <>

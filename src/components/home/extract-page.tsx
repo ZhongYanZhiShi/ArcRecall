@@ -35,12 +35,18 @@ import { RecoveryQueuePanel } from "@/components/home/recovery-queue-panel"
 import { createRecoveryTaskSubscription } from "@/lib/recovery-task-attachment"
 import { copySensitiveText } from "@/lib/sensitive-clipboard"
 import { getSettings, updateSettings } from "@/lib/settings"
+import {
+  recoveryStreamActivity,
+  type ByteStreamActivity,
+} from "@/lib/byte-stream-motion"
 import { useDesktopTask } from "@/hooks/use-desktop-task"
 
 export function ExtractPage({
   onOpenEngineSettings,
+  onStreamActivityChange,
 }: {
   onOpenEngineSettings: () => void
+  onStreamActivityChange?: (activity: ByteStreamActivity) => void
 }) {
   const queue = React.useSyncExternalStore(
     recoveryQueue.subscribe,
@@ -113,6 +119,11 @@ export function ExtractPage({
     },
     onSettled: refreshDictionaryCount,
   })
+  const streamActivity = recoveryStreamActivity(activeTask, queue.running)
+  React.useEffect(() => {
+    onStreamActivityChange?.(streamActivity)
+    return () => onStreamActivityChange?.("idle")
+  }, [streamActivity, onStreamActivityChange])
   const selectedTask = queue.items.find(
     (item) => item.id === selectedQueueItemId
   )?.task
@@ -630,9 +641,11 @@ export function ExtractPage({
       handlePickBatch={handlePickBatch}
       handleRepairCopy={handleRepairCopy}
       repairedCopyPath={repairedCopyPath}
+      queueMemorySettings={
+        <QueueMemoryPanel disabled={busy || running || queue.running} />
+      }
       queueContent={
         <>
-          <QueueMemoryPanel disabled={busy || running || queue.running} />
           <RecoveryQueuePanel
             queue={queue}
             knownPassword={knownPassword}

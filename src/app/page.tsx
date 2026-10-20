@@ -32,6 +32,7 @@ import {
   createCompressionDraft,
   type CompressionDraft,
 } from "@/lib/compression-draft"
+import type { ByteStreamActivity } from "@/lib/byte-stream-motion"
 import { cn } from "@/lib/utils"
 
 const loadExtractPage = () => import("@/components/home/extract-page")
@@ -49,6 +50,7 @@ const CompressPage = dynamic<{
   draft: CompressionDraft
   onDraftChange: React.Dispatch<React.SetStateAction<CompressionDraft>>
   onOpenAiSettings: () => void
+  onStreamActivityChange?: (activity: ByteStreamActivity) => void
 }>(() => loadCompressPage().then((module) => module.CompressPage), {
   loading: CompressPageLoading,
 })
@@ -106,6 +108,10 @@ function prefersReducedMotion() {
  * Effect，重新显示时恢复监听与轮询。入场动画仅作用于当前可见层。
  */
 export default function Page() {
+  const [extractActivity, setExtractActivity] =
+    React.useState<ByteStreamActivity>("idle")
+  const [compressActivity, setCompressActivity] =
+    React.useState<ByteStreamActivity>("idle")
   const [databaseRevision, setDatabaseRevision] = React.useState(0)
   const settingsPageRef = React.useRef<SettingsPageHandle>(null)
   const [activeNav, setActiveNav] = React.useState<NavId>("extract")
@@ -273,17 +279,28 @@ export default function Page() {
       <ClientLoggingBridge />
       <AppShell
         activeNav={activeNav}
+        streamActivity={
+          activeNav === "extract"
+            ? extractActivity
+            : activeNav === "compress"
+              ? compressActivity
+              : "idle"
+        }
         onNavChange={handleDockNavChange}
         onNavPreload={preloadNavPage}
       >
         <div className="relative h-full min-h-0 overflow-hidden">
           {renderActivity(
             "extract",
-            <ExtractPage onOpenEngineSettings={handleOpenEngineSettings} />
+            <ExtractPage
+              onOpenEngineSettings={handleOpenEngineSettings}
+              onStreamActivityChange={setExtractActivity}
+            />
           )}
           {renderActivity(
             "compress",
             <CompressPage
+              onStreamActivityChange={setCompressActivity}
               draft={compressionDraft}
               onDraftChange={setCompressionDraft}
               onOpenAiSettings={handleOpenAiSettings}

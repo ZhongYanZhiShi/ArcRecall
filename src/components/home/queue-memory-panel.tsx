@@ -34,8 +34,8 @@ export function QueueMemoryPanel({ disabled }: { disabled: boolean }) {
           <span className="font-normal text-muted-foreground">正在保存…</span>
         ) : null}
       </label>
-      <p className="mt-1 leading-relaxed text-muted-foreground">
-        默认关闭。启用后保存文件路径、选项和状态，不保存密码。重启后手动重新运行未完成项，计算进度不恢复。关闭会删除记录。
+      <p className="byte-memory-help mt-1 leading-relaxed text-muted-foreground">
+        保存路径、选项和状态，不保存密码。重启后需手动重跑未完成项，进度不恢复；关闭后删除记录。
       </p>
       {journal.restored > 0 ? (
         <p className="mt-1">

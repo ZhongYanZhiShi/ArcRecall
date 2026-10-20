@@ -3,6 +3,7 @@
 import { isTauri } from "@tauri-apps/api/core"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import * as React from "react"
+import type { ByteStreamActivity } from "@/lib/byte-stream-motion"
 import { toast } from "sonner"
 
 import { WorkbenchHeader } from "@/components/redesign/workbench-header"
@@ -27,6 +28,7 @@ export const NAV_ORDER: NavId[] = [
 ]
 
 type AppShellProps = {
+  streamActivity?: ByteStreamActivity
   activeNav: NavId
   onNavChange: (id: NavId) => void
   onNavPreload?: (id: NavId) => void
@@ -36,6 +38,7 @@ type AppShellProps = {
 /** 文字导航与整片任务舞台；业务页面的状态由主入口保留。 */
 export function AppShell({
   activeNav,
+  streamActivity = "idle",
   onNavChange,
   onNavPreload,
   children,
@@ -61,7 +64,7 @@ export function AppShell({
       data-active-page={activeNav}
       className="byte-app relative isolate flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground"
     >
-      <ByteStreamBackground />
+      <ByteStreamBackground activity={streamActivity} />
       <WorkbenchHeader
         active={activeNav}
         onSelect={onNavChange}

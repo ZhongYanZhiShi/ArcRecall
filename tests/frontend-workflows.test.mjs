@@ -1517,10 +1517,7 @@ test("归档层级只展示实际路径，切换任务不沿用其他归档的�
   assert.equal(rows[2].props["data-state"], "waiting")
   assert.equal(rows[2].props["data-depth"], undefined)
   const empty = harness.render(ArchiveStage, { task: null, analysis: null })
-  assert.equal(
-    find(empty, (node) => node.type === "li").props["data-state"],
-    "unknown"
-  )
+  assert.equal(empty, null)
 })
 
 test("打开仓库链接失败仅使用通知，不再创建页内提示", async (t) => {
@@ -2031,7 +2028,7 @@ test("批次在页面隐藏期间换任务并完成，返回页面恢复最新�
   assert.equal(view.props.task.completed, true)
   assert.equal(view.props.running, false)
   assert.equal(view.props.busy, false)
-  assert.equal(view.props.queueContent.props.children[1].props.disabled, false)
+  assert.equal(view.props.queueContent.props.children.props.disabled, false)
 })
 
 test("历史页面每次恢复都刷新，隐藏前的迟到响应不能覆盖新结果", async (t) => {
@@ -2158,7 +2155,7 @@ test("批次轮询保留选中详情，新任务密码默认隐藏且执行状�
   view = render()
   assert.equal(view.props.task.taskId, "batch-2")
   assert.equal(view.props.task.recoveredPassword, undefined)
-  view.props.queueContent.props.children[1].props.onView(
+  view.props.queueContent.props.children.props.onView(
     recoveryQueue.getSnapshot().items[0].id
   )
   view = render()
@@ -2187,7 +2184,7 @@ test("批次轮询保留选中详情，新任务密码默认隐藏且执行状�
   view = render()
   assert.equal(view.props.task.taskId, "batch-1")
   assert.equal(view.props.running, false)
-  view.props.queueContent.props.children[1].props.onView(
+  view.props.queueContent.props.children.props.onView(
     recoveryQueue.getSnapshot().items[1].id
   )
   view = render()

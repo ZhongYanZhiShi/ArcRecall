@@ -27,6 +27,7 @@ import {
   formatFileSize,
   pathForDisplay,
   recoveryComputeSummary,
+  hasIncompleteRecursiveScan,
 } from "@/components/home/recovery-view-utils"
 import {
   WorkbenchPage,
@@ -83,6 +84,7 @@ type ExtractPageViewProps = {
   handleRepairCopy?: () => void
   repairedCopyPath?: string | null
   queueContent?: React.ReactNode
+  queueMemorySettings?: React.ReactNode
   outputMode: OutputMode
   setOutputMode: React.Dispatch<React.SetStateAction<OutputMode>>
   outputDir: string | null
@@ -133,6 +135,7 @@ export function ExtractPageView({
   handleRepairCopy,
   repairedCopyPath,
   queueContent,
+  queueMemorySettings,
   outputMode,
   setOutputMode,
   outputDir,
@@ -202,10 +205,16 @@ export function ExtractPageView({
     ? archiveNameFromPath(analyzingPath)
     : null
 
+  const PreflightContainer = task ? "details" : "div"
+  const collapseRestart = Boolean(
+    task?.completed && task.phase !== "exhausted" && task.phase !== "failed"
+  )
+  const PasswordContainer = collapseRestart ? "details" : "div"
+
   return (
-    <WorkbenchPage data-workbench="extract">
+    <WorkbenchPage data-workbench="extract" data-task-active={Boolean(task)}>
       <WorkbenchPageContent className="overflow-y-auto pb-4">
-        <WorkbenchPageHeader title="恢复并解压" titleHidden />
+        <WorkbenchPageHeader title="解压" />
 
         <div
           className="byte-extract-stage"
@@ -258,12 +267,28 @@ export function ExtractPageView({
                   aria-busy={Boolean(analyzingPath)}
                   className="byte-archive-heading min-w-0 flex-1"
                 >
-                  <CardTitle className="byte-lead">
-                    {task?.running && task.currentArchivePath
-                      ? `第 ${task.recursiveDepth + 1} 层 · ${archiveNameFromPath(task.currentArchivePath)}`
-                      : (analyzingName ??
-                        analysis?.fileName ??
-                        (task ? archiveNameFromPath(task.archivePath) : ""))}
+                  <p
+                    className="byte-archive-origin"
+                    title={task?.archivePath ?? analysis?.archivePath}
+                  >
+                    {task?.archivePath ??
+                      analysis?.archivePath ??
+                      analyzingPath}
+                  </p>
+                  <CardTitle className="byte-lead" data-phase={task?.phase}>
+                    {task?.phase === "exhausted"
+                      ? "需要密码"
+                      : task?.success && !task.running
+                        ? hasIncompleteRecursiveScan(task)
+                          ? "解压完成，仍有待处理项"
+                          : "解压完成"
+                        : task?.running && task.currentArchivePath
+                          ? `第 ${task.recursiveDepth + 1} 层 · ${archiveNameFromPath(task.currentArchivePath)}`
+                          : (analyzingName ??
+                            analysis?.fileName ??
+                            (task
+                              ? archiveNameFromPath(task.archivePath)
+                              : ""))}
                   </CardTitle>
                   <CardDescription className="mt-0.5 truncate text-xs leading-relaxed">
                     {analyzingName
@@ -359,7 +384,14 @@ export function ExtractPageView({
               </>
             )}
           </Card>
-          <ArchiveStage analysis={analysis} task={task} />
+          {task?.completed ? (
+            <details className="byte-disclosure" key={`layers:${task.taskId}`}>
+              <summary>归档层级与处理状态</summary>
+              <ArchiveStage analysis={analysis} task={task} />
+            </details>
+          ) : (
+            <ArchiveStage analysis={analysis} task={task} />
+          )}
         </div>
 
         {repairedCopyPath ? (
@@ -422,44 +454,57 @@ export function ExtractPageView({
         </button>
 
         <Sheet open={optionsOpen} onOpenChange={setOptionsOpen}>
-          <SheetContent side="right" className="gap-0 p-0">
+          <SheetContent
+            side="right"
+            className="byte-extract-options gap-0 overflow-hidden p-0"
+          >
             <SheetHeader className="shrink-0 border-b border-border/80 px-5 py-4 pr-14">
               <SheetTitle>解压选项</SheetTitle>
-              <SheetDescription className="sr-only">
-                设置输出位置、递归扫描与解密方式。
+              <SheetDescription>
+                设置输出、扫描方式与任务记忆。
               </SheetDescription>
             </SheetHeader>
 
-            <div className="flex min-h-0 flex-1 scroll-fade flex-col gap-4 overflow-y-auto px-5 py-4">
-              <OutputLocationField
-                mode={outputMode}
-                onModeChange={setOutputMode}
-                siblingLabel="目标同级"
-                path={
-                  outputMode === "custom"
-                    ? outputDir
-                      ? pathForDisplay(outputDir)
-                      : null
-                    : analysis
-                      ? pathForDisplay(analysis.suggestedOutputDirectory)
-                      : null
-                }
-                pathTitle={
-                  outputMode === "custom"
-                    ? outputDir
-                    : analysis?.suggestedOutputDirectory
-                }
-                emptyLabel={
-                  outputMode === "custom"
-                    ? "尚未选择输出目录"
-                    : "解压到源文件同级同名文件夹"
-                }
-                onPick={handlePickOutputDir}
-                onClear={() => setOutputDir(null)}
-                disabled={busy || running}
-              />
+            <div
+              className="byte-options-scroll min-h-0 flex-1 overflow-y-auto"
+              role="region"
+              aria-label="解压选项设置"
+              tabIndex={0}
+            >
+              <section
+                className="byte-options-group"
+                aria-labelledby="extract-output-heading"
+              >
+                <h3 id="extract-output-heading">输出与完成</h3>
+                <OutputLocationField
+                  className="byte-options-output"
+                  mode={outputMode}
+                  onModeChange={setOutputMode}
+                  siblingLabel="目标同级"
+                  path={
+                    outputMode === "custom"
+                      ? outputDir
+                        ? pathForDisplay(outputDir)
+                        : null
+                      : analysis
+                        ? pathForDisplay(analysis.suggestedOutputDirectory)
+                        : null
+                  }
+                  pathTitle={
+                    outputMode === "custom"
+                      ? outputDir
+                      : analysis?.suggestedOutputDirectory
+                  }
+                  emptyLabel={
+                    outputMode === "custom"
+                      ? "尚未选择输出目录"
+                      : "解压到源文件同级同名文件夹"
+                  }
+                  onPick={handlePickOutputDir}
+                  onClear={() => setOutputDir(null)}
+                  disabled={busy || running}
+                />
 
-              <div className="grid gap-3">
                 <Field
                   orientation="horizontal"
                   className="min-w-0 rounded-xl border border-border/70 bg-muted/20 p-3"
@@ -479,6 +524,12 @@ export function ExtractPageView({
                     onCheckedChange={setOpenWhenDone}
                   />
                 </Field>
+              </section>
+              <section
+                className="byte-options-group"
+                aria-labelledby="extract-scan-heading"
+              >
+                <h3 id="extract-scan-heading">嵌套归档</h3>
                 <Field
                   orientation="horizontal"
                   data-disabled={busy || running || undefined}
@@ -500,79 +551,102 @@ export function ExtractPageView({
                     onCheckedChange={setRecursive}
                   />
                 </Field>
-              </div>
+              </section>
 
-              <FieldSet className="gap-2">
-                <FieldLegend variant="label" className="mb-0 text-xs">
-                  解密方式
-                </FieldLegend>
-                <ToggleGroup
-                  aria-label="解密算力"
-                  variant="outline"
-                  size="sm"
-                  spacing={0}
-                  value={[computeMode]}
-                  disabled={busy || running || computeModeBusy}
-                  onValueChange={(values) => {
-                    const next = values[0] as RecoveryComputeMode | undefined
-                    if (next) {
-                      void handleComputeModeChange(next)
-                    }
-                  }}
-                  className="w-full"
-                >
-                  <ToggleGroupItem
-                    value="gpuPreferred"
-                    className="flex-1 text-xs"
+              <section className="byte-options-group" aria-label="解密方式">
+                <FieldSet className="gap-3">
+                  <FieldLegend variant="label" className="mb-0">
+                    解密方式
+                  </FieldLegend>
+                  <ToggleGroup
+                    aria-label="解密算力"
+                    variant="outline"
+                    size="sm"
+                    spacing={0}
+                    value={[computeMode]}
+                    disabled={busy || running || computeModeBusy}
+                    onValueChange={(values) => {
+                      const next = values[0] as RecoveryComputeMode | undefined
+                      if (next) {
+                        void handleComputeModeChange(next)
+                      }
+                    }}
+                    className="w-full"
                   >
-                    <Zap data-icon="inline-start" />
-                    GPU 优先
-                  </ToggleGroupItem>
-                  <ToggleGroupItem value="cpuOnly" className="flex-1 text-xs">
-                    <Cpu data-icon="inline-start" />
-                    仅 CPU
-                  </ToggleGroupItem>
-                </ToggleGroup>
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  {computeSummary}
-                </p>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {capabilities ? (
-                    capabilities.methods
-                      .filter((method) => method.available || !method.optional)
-                      .map((method) => (
-                        <RecoveryCapabilityBadge
-                          key={method.id}
-                          method={method}
-                        />
-                      ))
-                  ) : capabilityError ? null : (
-                    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <Spinner className="size-3" />
-                      正在探测计算设备与引擎…
-                    </span>
-                  )}
-                </div>
-                <RecoveryCapabilityNotice
-                  capabilities={capabilities}
-                  computeMode={computeMode}
-                  error={capabilityError}
-                  onOpenEngineSettings={onOpenEngineSettings}
-                />
-              </FieldSet>
+                    <ToggleGroupItem
+                      value="gpuPreferred"
+                      className="flex-1 text-xs"
+                    >
+                      <Zap data-icon="inline-start" />
+                      GPU 优先
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="cpuOnly" className="flex-1 text-xs">
+                      <Cpu data-icon="inline-start" />
+                      仅 CPU
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {computeSummary}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {capabilities ? (
+                      capabilities.methods
+                        .filter(
+                          (method) => method.available || !method.optional
+                        )
+                        .map((method) => (
+                          <RecoveryCapabilityBadge
+                            key={method.id}
+                            method={method}
+                          />
+                        ))
+                    ) : capabilityError ? null : (
+                      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Spinner className="size-3" />
+                        正在探测计算设备与引擎…
+                      </span>
+                    )}
+                  </div>
+                  <RecoveryCapabilityNotice
+                    capabilities={capabilities}
+                    computeMode={computeMode}
+                    error={capabilityError}
+                    onOpenEngineSettings={onOpenEngineSettings}
+                  />
+                </FieldSet>
+              </section>
+              {queueMemorySettings ? (
+                <section
+                  className="byte-options-group"
+                  aria-labelledby="extract-memory-heading"
+                >
+                  <h3 id="extract-memory-heading">任务记忆</h3>
+                  {queueMemorySettings}
+                </section>
+              ) : null}
             </div>
           </SheetContent>
         </Sheet>
 
         {analysis ? (
-          <section className="mt-3 flex shrink-0 flex-col gap-2 pr-1 pb-1">
-            <div className="workbench-panel overflow-hidden rounded-2xl border border-border/80 bg-card">
-              <TaskPreflight
-                outputPath={outputSummaryLabel}
-                outputMode={outputMode}
-                computeMode={computeMode}
-                recursive={recursive}
-              />
+          <section className="byte-recovery-flow mt-3 flex shrink-0 flex-col gap-2 pr-1 pb-1">
+            <PasswordContainer
+              key={`password:${task?.taskId ?? "new"}:${collapseRestart}`}
+              className="byte-password-panel byte-disclosure workbench-panel overflow-hidden rounded-2xl border border-border/80 bg-card"
+              data-waiting={task?.phase === "exhausted"}
+            >
+              {collapseRestart ? (
+                <summary>重新解压 / 修改密码与策略</summary>
+              ) : null}
+              <PreflightContainer className="byte-preflight">
+                {task ? <summary>输出与恢复策略</summary> : null}
+                <TaskPreflight
+                  outputPath={outputSummaryLabel}
+                  outputMode={outputMode}
+                  computeMode={computeMode}
+                  recursive={recursive}
+                />
+              </PreflightContainer>
               <div className="space-y-3 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <FieldLabel htmlFor="known-password" className="text-xs">
@@ -629,7 +703,7 @@ export function ExtractPageView({
                   优先尝试此密码；留空使用历史密码和字典。
                 </p>
               </div>
-            </div>
+            </PasswordContainer>
 
             {task ? (
               <RecoveryTaskResult
@@ -653,7 +727,7 @@ export function ExtractPageView({
         ) : null}
 
         {task && !analysis ? (
-          <section className="mt-3 flex shrink-0 flex-col gap-2 pr-1 pb-1">
+          <section className="byte-recovery-flow mt-3 flex shrink-0 flex-col gap-2 pr-1 pb-1">
             <Alert className="shrink-0">
               <PackageOpen />
               <AlertDescription className="flex flex-wrap items-center justify-between gap-2">

@@ -500,7 +500,7 @@ export function DictionaryPage() {
     <WorkbenchPage data-workbench="dictionary">
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
-          title="候选库"
+          title="字典"
           description={
             totalCount === null
               ? "正在读取本机候选密码…"

@@ -2,6 +2,7 @@
 
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import * as React from "react"
+import type { ByteStreamActivity } from "@/lib/byte-stream-motion"
 import { toast } from "sonner"
 
 import { CompressPageView } from "@/components/home/compress-page-view"
@@ -47,10 +48,12 @@ export function CompressPage({
   draft,
   onDraftChange,
   onOpenAiSettings,
+  onStreamActivityChange,
 }: {
   draft: CompressionDraft
   onDraftChange: React.Dispatch<React.SetStateAction<CompressionDraft>>
   onOpenAiSettings: () => void
+  onStreamActivityChange?: (activity: ByteStreamActivity) => void
 }) {
   const {
     sources,
@@ -92,6 +95,10 @@ export function CompressPage({
       pollIntervalMs: 650,
       onError: (reason) => setError(toErrorMessage(reason)),
     })
+  React.useEffect(() => {
+    onStreamActivityChange?.(running ? "running" : "idle")
+    return () => onStreamActivityChange?.("idle")
+  }, [running, onStreamActivityChange])
   const openedTasks = React.useRef(new Set<string>())
   const archiveNamesAwaitingCompletion = React.useRef(new Set<string>())
   const operationBusy = React.useRef(false)

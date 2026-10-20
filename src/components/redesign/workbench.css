@@ -62,44 +62,113 @@ html.byte.light {
   --destructive: #b63a2a;
 }
 
+/* Reserve a right-side field beside the extraction workspace. */
+.byte-app {
+  --byte-stage-width: 1600px;
+}
 .byte-stream {
+  --byte-ink: #246b62;
+  --byte-head: #3c8579;
   position: absolute;
-  inset: 0 0 0 auto;
+  inset: 0;
   z-index: -1;
-  width: min(480px, 40%);
   overflow: hidden;
   pointer-events: none;
   user-select: none;
-  opacity: 0.08;
+  color: var(--byte-ink);
+  font-family: var(--font-app-mono);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 24px;
+}
+.byte.light .byte-stream {
+  --byte-ink: #8ab3ac;
+  --byte-head: #75a299;
+}
+.byte-stream[data-paused="true"] .byte-stream-column,
+.byte-stream[data-paused="true"] .byte-stream-tape {
+  animation-play-state: paused;
+}
+.byte-stream-field {
+  position: absolute;
+  top: 80px;
+  bottom: 28px;
+  overflow: hidden;
+  mask-image: linear-gradient(
+    180deg,
+    transparent,
+    #000 5%,
+    #000 95%,
+    transparent
+  );
+}
+.byte-stream-right {
+  right: 4px;
+  width: 24px;
+}
+.byte-app[data-active-page="extract"] .byte-stream-right {
+  width: clamp(24px, calc((100% - var(--byte-stage-width)) / 2 - 32px), 480px);
   mask-image:
-    linear-gradient(90deg, transparent, #000 65%),
-    linear-gradient(180deg, transparent, #000 20%, #000 75%, transparent);
+    linear-gradient(90deg, transparent, #000 12%),
+    linear-gradient(180deg, transparent, #000 5%, #000 95%, transparent);
   mask-composite: intersect;
 }
-
-.byte-stream span {
+.byte-stream-left {
+  left: 8px;
+  width: 24px;
+  opacity: 1;
+}
+.byte-stream-column {
   position: absolute;
   top: 0;
-  color: var(--primary);
-  font-family: var(--font-app-mono);
-  font-size: 13px;
-  line-height: 22px;
   white-space: pre;
   animation: byte-fall linear infinite;
 }
-
-/* Dense forms need a quiet surface across the entire column and its gutter. */
-.byte-app[data-active-page="compress"] .byte-stream,
-.byte-app[data-active-page="settings"] .byte-stream {
-  display: none;
+.byte-stream-column > span {
+  display: block;
+  height: 24px;
+  color: var(--byte-ink);
 }
-
+.byte-stream [data-head] {
+  color: var(--byte-head);
+  font-weight: 700;
+}
+.byte-stream-ribbon {
+  position: absolute;
+  inset: auto 40px 2px;
+  height: 20px;
+  line-height: 20px;
+  overflow: hidden;
+  mask-image: linear-gradient(
+    90deg,
+    transparent,
+    #000 5%,
+    #000 85%,
+    transparent
+  );
+}
+.byte-stream-tape {
+  position: absolute;
+  left: -180px;
+  display: flex;
+  gap: 12px;
+  white-space: pre;
+  animation: byte-travel linear infinite;
+}
 @keyframes byte-fall {
   from {
     transform: translateY(-50%);
   }
   to {
     transform: translateY(0);
+  }
+}
+@keyframes byte-travel {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(100vw + 180px));
   }
 }
 
@@ -128,9 +197,16 @@ html.byte.light {
 }
 
 .byte [data-slot="workbench-page-content"] {
-  max-width: 1536px;
-  margin: 0;
+  max-width: var(--byte-stage-width);
+  margin-inline: auto;
   padding: 36px 56px 28px;
+}
+
+@media (min-width: 1200px) {
+  .byte .byte-compress-stage {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 600px);
+    max-height: 1000px;
+  }
 }
 
 .byte [data-slot="workbench-page-header"] {
@@ -138,7 +214,7 @@ html.byte.light {
 }
 .byte [data-slot="workbench-page-header"] h1,
 .byte .byte-lead {
-  font-size: clamp(32px, 3.6vw, 52px);
+  font-size: 24px;
   font-weight: 700;
   line-height: 1.15;
   letter-spacing: -0.03em;
@@ -248,13 +324,13 @@ html.byte.light {
 }
 
 .byte [data-workbench="extract"] [data-slot="workbench-page-content"] > * {
-  max-width: 860px;
+  max-width: var(--byte-stage-width);
 }
 .byte
   [data-workbench="extract"]
   [data-slot="workbench-page-content"]
   > [aria-label="批次队列"] {
-  max-width: none;
+  max-width: var(--byte-stage-width);
 }
 .byte [data-workbench="extract"] [aria-label="打开解压选项"] {
   margin-top: 16px;
@@ -531,9 +607,30 @@ html.byte.light {
     padding-inline: 4px;
     font-size: 12px;
   }
+  .byte-stream-field {
+    top: 112px;
+  }
+  .byte-stream-left {
+    left: 2px;
+    width: 14px;
+  }
+  .byte-stream-right,
+  .byte-app[data-active-page="extract"] .byte-stream-right {
+    width: 14px;
+    right: 1px;
+    mask-image: linear-gradient(
+      180deg,
+      transparent,
+      #000 5%,
+      #000 95%,
+      transparent
+    );
+  }
   .byte-stream {
-    width: 42%;
-    opacity: 0.04;
+    font-size: 10px;
+  }
+  .byte-stream-ribbon {
+    inset-inline: 20px;
   }
   .byte-dictionary-table th,
   .byte-dictionary-table td {
@@ -571,7 +668,487 @@ html.byte.light {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .byte-stream span {
+  .byte-stream-column,
+  .byte-stream-tape {
     animation: none;
+  }
+  .byte-stream-column {
+    top: 0;
+  }
+  .byte-stream-tape {
+    left: var(--byte-rest);
+  }
+}
+
+/* Extraction follows the reference's open stage, ruled rows and quiet byte field. */
+.byte-archive-origin {
+  margin-bottom: 10px;
+  color: var(--muted-foreground);
+  font: 13px/1.6 var(--font-app-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.byte .byte-archive-heading .byte-lead {
+  font-size: clamp(28px, 3vw, 44px);
+  line-height: 1.2;
+}
+.byte-archive-heading [data-phase="exhausted"] {
+  color: var(--warning);
+}
+.byte .byte-archive-help {
+  border: 0;
+  padding-top: 0;
+}
+.byte .byte-recovery-flow {
+  gap: 12px;
+}
+.byte .byte-password-panel {
+  border-block: 1px solid var(--border);
+}
+.byte .byte-password-panel > .space-y-3 {
+  padding: 20px 0;
+}
+.byte .byte-password-panel [data-slot="input-group"] {
+  min-height: 48px;
+  background: color-mix(in oklab, var(--primary) 4%, var(--background));
+}
+.byte .byte-password-panel[data-waiting="true"] [data-slot="input-group"] {
+  border-color: var(--warning);
+}
+.byte .byte-result-body {
+  padding: 8px 0;
+  gap: 12px;
+}
+.byte .byte-result-phase {
+  font-size: 15px;
+}
+.byte [data-slot="recovery-result"] [data-slot="progress-track"] {
+  height: 6px;
+  border-radius: 0;
+}
+.byte [data-slot="recovery-result"] [class*="rounded"] {
+  border-radius: 0;
+}
+.byte-result-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-block: 1px solid var(--border);
+}
+.byte-result-metrics > div {
+  padding: 10px 16px;
+  border-right: 1px solid var(--border);
+}
+.byte-result-metrics > div:first-child {
+  padding-left: 0;
+}
+.byte-result-metrics > div:last-child {
+  border-right: 0;
+}
+.byte-result-metrics dt {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.byte-result-metrics dd {
+  margin-top: 4px;
+  font: 22px/1.3 var(--font-app-mono);
+  overflow-wrap: anywhere;
+}
+.byte-stream[data-activity="waiting"] {
+  --byte-ink: #957747;
+}
+.byte.light .byte-stream[data-activity="waiting"] {
+  --byte-ink: #b4a180;
+}
+@media (min-width: 1200px) {
+  .byte
+    [data-workbench="extract"]
+    [data-slot="workbench-page-content"]
+    > :not([data-slot="workbench-page-header"]):not([aria-label="批次队列"]) {
+    max-width: calc(100% - 360px);
+  }
+  .byte-app[data-active-page="extract"] .byte-stream-right {
+    right: max(16px, calc((100% - 1600px) / 2 + 16px));
+    width: 320px;
+    mask-image:
+      linear-gradient(90deg, transparent, #000 45%),
+      linear-gradient(180deg, transparent, #000 25%, #000 75%, transparent);
+  }
+}
+@media (max-width: 767px) {
+  .byte-result-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .byte-result-metrics > div {
+    padding: 12px;
+  }
+  .byte-result-metrics dd {
+    font-size: 22px;
+  }
+  .byte-archive-origin {
+    font-size: 11px;
+    margin-bottom: 10px;
+  }
+}
+
+.byte
+  .byte-recovery-flow
+  > [data-slot="recovery-result"]:not([data-phase="exhausted"]) {
+  order: -1;
+}
+.byte .byte-preflight summary {
+  padding: 14px 0;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.byte .byte-preflight summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+.byte [aria-label="字典恢复进度"] {
+  border: 0;
+  border-block: 1px solid var(--border);
+  background: transparent;
+  padding: 18px 0;
+  font-family: var(--font-app-mono);
+}
+
+.byte
+  [data-workbench="extract"][data-task-active="true"]
+  [aria-label="打开解压选项"] {
+  order: 20;
+  margin-top: 16px;
+}
+.byte
+  [data-workbench="extract"][data-task-active="true"]
+  .byte-archive-help
+  > p {
+  display: none;
+}
+.byte [data-workbench="extract"][data-task-active="true"] .byte-extract-stage {
+  gap: 16px;
+}
+.byte [data-workbench="extract"][data-task-active="true"] .byte-layer {
+  padding-block: 12px;
+}
+
+/* Secondary information stays available without competing with the current action. */
+.byte-disclosure > summary {
+  cursor: pointer;
+  padding-block: 10px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.byte-disclosure > summary:hover {
+  color: var(--foreground);
+}
+.byte-disclosure > summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.byte [aria-label="任务记忆"] {
+  padding: 10px 12px;
+}
+.byte [data-workbench="extract"][data-task-active="true"] .byte-extract-stage {
+  gap: 6px;
+}
+.byte
+  [data-workbench="extract"][data-task-active="true"]
+  [aria-label="打开解压选项"] {
+  margin-top: 8px;
+}
+.byte
+  .byte-compress-stage
+  > [data-slot="card"]:last-child
+  [data-slot="card-footer"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  padding-block: 16px;
+}
+.byte
+  .byte-compress-stage
+  > [data-slot="card"]:last-child
+  [data-slot="card-footer"]
+  > button {
+  width: 100%;
+  min-height: 40px;
+}
+.byte .byte-compress-stage [data-slot="field"][class*="border"] {
+  border-inline: 0;
+  border-radius: 0;
+  background: transparent;
+  padding-inline: 0;
+}
+.byte .byte-dictionary-table th {
+  color: var(--muted-foreground);
+  font-weight: 500;
+  height: 38px;
+  background: var(--background);
+}
+.byte .byte-dictionary-table td {
+  padding-block: 10px;
+}
+.byte [data-slot="history-scroll-area"] article {
+  padding: 16px 4px;
+  gap: 10px;
+}
+.byte [data-slot="history-scroll-area"] article h2 {
+  font-size: 15px;
+}
+.byte [data-workbench="logs"] [aria-label="日志概览"] {
+  gap: 0;
+}
+.byte [data-workbench="logs"] [aria-label="日志概览"] > * {
+  border-right: 1px solid var(--border);
+  padding: 10px 12px;
+}
+.byte [data-workbench="logs"] [aria-label="日志概览"] > :last-child {
+  border-right: 0;
+}
+.byte [data-workbench="logs"] .byte-metric-icon {
+  display: none;
+}
+.byte-log-console {
+  border: 1px solid var(--border);
+  background: var(--background);
+  font-family: var(--font-app-mono);
+}
+.byte-log-console > ul > li {
+  border-bottom: 1px solid var(--border);
+}
+.byte [data-workbench="settings"] .byte-settings-grid > [data-slot="card"] {
+  min-width: 0;
+  padding: 20px 0;
+  align-self: start;
+}
+@media (min-width: 1200px) {
+  .byte-settings-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 32px;
+    align-items: start;
+  }
+  .byte-settings-grid > :not([data-slot="card"]) {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 767px) {
+  .byte [data-workbench="logs"] [aria-label="日志概览"] > * {
+    padding: 8px;
+  }
+  .byte [data-slot="history-scroll-area"] article {
+    padding-inline: 0;
+  }
+}
+
+.byte-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 16px;
+}
+.byte-result-actions:empty {
+  display: none;
+}
+.byte-result-actions [aria-label="导出任务报告"] {
+  border: 0;
+  padding-top: 0;
+  min-width: 0;
+  flex: 1;
+}
+/* Shared native and Base UI scrollbars, including portalled sheets and dialogs. */
+html.byte {
+  --byte-scroll-thumb: color-mix(
+    in oklab,
+    var(--muted-foreground) 42%,
+    var(--background)
+  );
+  --byte-scroll-hover: color-mix(
+    in oklab,
+    var(--primary) 48%,
+    var(--muted-foreground)
+  );
+  --byte-scroll-active: color-mix(
+    in oklab,
+    var(--primary) 72%,
+    var(--muted-foreground)
+  );
+}
+html.byte,
+.byte :not([data-slot="scroll-area-viewport"]) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--byte-scroll-thumb) transparent;
+}
+/* Chromium/WebView2 gets a 6px visible rail inside a 10px drag target. */
+@supports selector(::-webkit-scrollbar) {
+  html.byte,
+  .byte :not([data-slot="scroll-area-viewport"]) {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+  .byte::-webkit-scrollbar,
+  .byte :not([data-slot="scroll-area-viewport"])::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .byte::-webkit-scrollbar-track,
+  .byte ::-webkit-scrollbar-track,
+  .byte::-webkit-scrollbar-corner,
+  .byte ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  .byte::-webkit-scrollbar-thumb,
+  .byte ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 0;
+    background: var(--byte-scroll-thumb);
+    background-clip: padding-box;
+  }
+  .byte::-webkit-scrollbar-thumb:hover,
+  .byte ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--byte-scroll-hover);
+  }
+  .byte::-webkit-scrollbar-thumb:active,
+  .byte ::-webkit-scrollbar-thumb:active {
+    background-color: var(--byte-scroll-active);
+  }
+  .byte::-webkit-scrollbar-button,
+  .byte ::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+.byte [data-slot="scroll-area-scrollbar"] {
+  border: 0;
+  padding: 2px;
+  background: transparent;
+}
+.byte [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] {
+  width: 10px;
+}
+.byte [data-slot="scroll-area-scrollbar"][data-orientation="horizontal"] {
+  height: 10px;
+}
+.byte [data-slot="scroll-area-thumb"] {
+  border-radius: 0;
+  background: var(--byte-scroll-thumb);
+}
+.byte
+  [data-slot="scroll-area-scrollbar"]:hover
+  [data-slot="scroll-area-thumb"] {
+  background: var(--byte-scroll-hover);
+}
+.byte
+  [data-slot="scroll-area-scrollbar"]:active
+  [data-slot="scroll-area-thumb"] {
+  background: var(--byte-scroll-active);
+}
+@media (forced-colors: active) {
+  html.byte {
+    --byte-scroll-thumb: ButtonText;
+    --byte-scroll-hover: Highlight;
+    --byte-scroll-active: Highlight;
+  }
+  html.byte,
+  .byte :not([data-slot="scroll-area-viewport"]) {
+    scrollbar-color: auto;
+  }
+}
+/* Extraction options use one scroll surface under a fixed, compact header. */
+.byte .byte-extract-options {
+  width: min(100vw, 480px);
+  max-width: 480px;
+  background: var(--background);
+  border-radius: 0;
+}
+.byte-extract-options [data-slot="sheet-header"] {
+  padding: 24px 56px 20px 24px;
+}
+.byte-extract-options [data-slot="sheet-title"] {
+  font-size: 20px;
+  font-weight: 600;
+}
+.byte-extract-options [data-slot="sheet-description"] {
+  font-size: 12px;
+  line-height: 1.7;
+}
+.byte-options-scroll {
+  padding: 0 24px;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  scroll-padding-block: 20px;
+}
+.byte-options-scroll:focus-visible {
+  outline: 1px solid var(--ring);
+  outline-offset: -2px;
+}
+.byte-options-group {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-block: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.byte-options-group:last-child {
+  border-bottom: 0;
+  padding-bottom: 28px;
+}
+.byte-options-group > h3,
+.byte-options-group [data-slot="field-legend"] {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--foreground);
+  margin: 0;
+}
+.byte-extract-options .byte-options-output,
+.byte-extract-options .byte-options-group > [data-slot="field"],
+.byte-extract-options [aria-label="任务记忆"] {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.byte-extract-options [data-slot="field-label"] {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.byte-extract-options [data-slot="field-description"] {
+  font-size: 12px;
+  line-height: 1.7;
+}
+.byte-extract-options [data-slot="switch"] {
+  flex-shrink: 0;
+}
+.byte-extract-options [data-slot="toggle-group-item"],
+.byte-extract-options [data-slot="button"],
+.byte-extract-options .byte-options-output > div,
+.byte-extract-options [data-slot="badge"] {
+  border-radius: 0;
+}
+.byte-extract-options [data-slot="toggle-group-item"] {
+  min-height: 36px;
+}
+.byte-extract-options [aria-label="任务记忆"] > label {
+  font-size: 13px;
+  min-height: 24px;
+}
+.byte-extract-options .byte-memory-help {
+  margin-top: 8px;
+}
+@media (max-width: 480px) {
+  .byte-extract-options [data-slot="sheet-header"] {
+    padding-left: 20px;
+  }
+  .byte-options-scroll {
+    padding-inline: 20px;
+  }
+  .byte-options-group {
+    padding-block: 20px;
+    gap: 12px;
   }
 }

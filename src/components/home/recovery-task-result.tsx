@@ -99,6 +99,8 @@ export function RecoveryTaskResult({
   return (
     <div
       ref={rootRef}
+      data-slot="recovery-result"
+      data-phase={task.phase}
       tabIndex={-1}
       role={task.phase === "failed" ? "alert" : "status"}
       aria-live="polite"
@@ -122,7 +124,27 @@ export function RecoveryTaskResult({
           className="[&_[data-slot=progress-indicator]]:progress-live [&_[data-slot=progress-track]]:h-0.5 [&_[data-slot=progress-track]]:rounded-none"
         />
       ) : null}
-      <div className="flex flex-col gap-3 p-4">
+      <div className="byte-result-body flex flex-col gap-3 p-4">
+        {task.completed && task.phase !== "exhausted" ? (
+          <dl className="byte-result-metrics" aria-label="本次任务统计">
+            <div>
+              <dt>已检查文件</dt>
+              <dd>{formatCount(task.scannedFileCount)}</dd>
+            </div>
+            <div>
+              <dt>解开嵌套归档</dt>
+              <dd>{formatCount(task.extractedNestedArchiveCount)}</dd>
+            </div>
+            <div>
+              <dt>跳过嵌套归档</dt>
+              <dd>{formatCount(task.skippedNestedArchiveCount)}</dd>
+            </div>
+            <div>
+              <dt>用时</dt>
+              <dd>{elapsedLabel}</dd>
+            </div>
+          </dl>
+        ) : null}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             {task.running ? (
@@ -139,7 +161,9 @@ export function RecoveryTaskResult({
                 )}
               />
             )}
-            <p className="text-sm font-semibold">{activePhaseLabel}</p>
+            <p className="byte-result-phase text-sm font-semibold">
+              {activePhaseLabel}
+            </p>
             <Badge variant="outline" className="font-normal">
               识别类型：
               {task.running && task.phase !== "recursive"
@@ -164,7 +188,7 @@ export function RecoveryTaskResult({
             </p>
           ) : null}
           {hasCandidateProgress ||
-          (task.elapsedMs > 0 && !hasRecursiveProgress) ? (
+          (!task.completed && task.elapsedMs > 0 && !hasRecursiveProgress) ? (
             <p className="mt-1 text-xs text-muted-foreground tabular-nums">
               {hasCandidateProgress
                 ? `已尝试 ${formatCount(task.attemptedCount)} / ${formatCount(task.candidateCount)} 条候选 · `
@@ -174,19 +198,21 @@ export function RecoveryTaskResult({
           ) : null}
           {hasRecursiveProgress ? (
             <div className="mt-1 flex flex-col gap-0.5 text-xs text-muted-foreground">
-              <p className="tabular-nums">
-                已检查 {formatCount(task.scannedFileCount)} 个文件 · 已解开{" "}
-                {formatCount(task.extractedNestedArchiveCount)} 个嵌套压缩包
-                {task.skippedNestedArchiveCount > 0
-                  ? ` · 跳过 ${formatCount(task.skippedNestedArchiveCount)} 个`
-                  : ""}
-                {!hasCandidateProgress && task.elapsedMs > 0
-                  ? ` · 用时 ${formatCompactElapsed(task.elapsedMs)}`
-                  : ""}
-                {task.running && task.recursiveDepth > 0
-                  ? ` · 当前第 ${task.recursiveDepth} 层`
-                  : ""}
-              </p>
+              {!task.completed ? (
+                <p className="tabular-nums">
+                  已检查 {formatCount(task.scannedFileCount)} 个文件 · 已解开{" "}
+                  {formatCount(task.extractedNestedArchiveCount)} 个嵌套压缩包
+                  {task.skippedNestedArchiveCount > 0
+                    ? ` · 跳过 ${formatCount(task.skippedNestedArchiveCount)} 个`
+                    : ""}
+                  {!hasCandidateProgress && task.elapsedMs > 0
+                    ? ` · 用时 ${formatCompactElapsed(task.elapsedMs)}`
+                    : ""}
+                  {task.running && task.recursiveDepth > 0
+                    ? ` · 当前第 ${task.recursiveDepth} 层`
+                    : ""}
+                </p>
+              ) : null}
               {task.running &&
               task.recursiveDepth > 0 &&
               task.currentArchivePath ? (
@@ -292,39 +318,41 @@ export function RecoveryTaskResult({
             </div>
           ) : null}
         </div>
-        {task.success || task.rootExtractionCompleted ? (
-          <div className="flex flex-wrap items-center gap-2">
-            {!task.running &&
-            task.contentDirectories?.length === 1 &&
-            task.contentDirectories[0] !== task.outputDirectory ? (
+        <div className="byte-result-actions">
+          {task.success || task.rootExtractionCompleted ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {!task.running &&
+              task.contentDirectories?.length === 1 &&
+              task.contentDirectories[0] !== task.outputDirectory ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  title={pathForDisplay(task.contentDirectories[0])}
+                  onClick={() => onOpenDirectory(task.contentDirectories![0])}
+                >
+                  打开内层内容目录
+                </Button>
+              ) : null}
               <Button
+                variant={incompleteScan ? "outline" : "default"}
                 size="sm"
-                variant="outline"
-                title={pathForDisplay(task.contentDirectories[0])}
-                onClick={() => onOpenDirectory(task.contentDirectories![0])}
+                className="shrink-0"
+                onClick={onOpenOutput}
+                title={pathForDisplay(task.outputDirectory)}
               >
-                打开内层内容目录
+                <PackageOpen data-icon="inline-start" />
+                打开解压文件夹
               </Button>
-            ) : null}
-            <Button
-              variant={incompleteScan ? "outline" : "default"}
-              size="sm"
-              className="shrink-0"
-              onClick={onOpenOutput}
-              title={pathForDisplay(task.outputDirectory)}
-            >
-              <PackageOpen data-icon="inline-start" />
-              打开解压文件夹
-            </Button>
-          </div>
-        ) : null}
-        {task.completed ? (
-          <RecoveryReportExport
-            key={`report:${task.taskId}`}
-            task={task}
-            onOpenDirectory={onOpenDirectory}
-          />
-        ) : null}
+            </div>
+          ) : null}
+          {task.completed ? (
+            <RecoveryReportExport
+              key={`report:${task.taskId}`}
+              task={task}
+              onOpenDirectory={onOpenDirectory}
+            />
+          ) : null}
+        </div>
       </div>
     </div>
   )

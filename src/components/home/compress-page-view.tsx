@@ -332,7 +332,7 @@ export function CompressPageView({
         data-testid="compress-page"
         className="pb-5"
       >
-        <WorkbenchPageHeader title="创建归档" titleHidden />
+        <WorkbenchPageHeader title="压缩" />
         <div className="byte-compress-stage">
           <Card
             size="sm"
