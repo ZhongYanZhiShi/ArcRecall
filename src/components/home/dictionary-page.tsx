@@ -94,6 +94,7 @@ export function DictionaryPage() {
   const [pageIndex, setPageIndex] = React.useState(0)
   const [pageSize, setPageSize] = React.useState(DICTIONARY_PAGE_SIZE)
   const [matchedCount, setMatchedCount] = React.useState(0)
+  const [totalCount, setTotalCount] = React.useState<number | null>(null)
   const [searchInput, setSearchInput] = React.useState("")
   const [appliedSearch, setAppliedSearch] = React.useState("")
   const [selectedIds, setSelectedIds] = React.useState<Set<number>>(
@@ -153,6 +154,7 @@ export function DictionaryPage() {
         }
 
         setEntries(result.entries)
+        setTotalCount(result.totalCount)
         setAppliedSearch(searchText)
         setLoadState("ready")
         setMatchedCount(result.matchedCount)
@@ -495,11 +497,15 @@ export function DictionaryPage() {
   }
 
   return (
-    <WorkbenchPage>
+    <WorkbenchPage data-workbench="dictionary">
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
-          title="字典"
-          description="解压时自动尝试这些候选密码。"
+          title="候选库"
+          description={
+            totalCount === null
+              ? "正在读取本机候选密码…"
+              : `${new Intl.NumberFormat("zh-CN").format(totalCount)} 条 · 本机 · 解压时自动尝试这些候选密码。`
+          }
           actions={
             <>
               <Button size="sm" disabled={isBusy} onClick={openAddPanel}>
@@ -661,7 +667,7 @@ export function DictionaryPage() {
               ref={scrollAreaRef}
               className="table-scroll-fade h-full max-h-full [&_[data-slot=table-container]]:overflow-visible"
             >
-              <Table>
+              <Table className="byte-dictionary-table">
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="h-9 w-10 px-3">
@@ -808,10 +814,18 @@ export function DictionaryPage() {
                             </button>
                           </TableCell>
                           <TableCell className="px-3 py-2 text-right text-xs text-muted-foreground tabular-nums">
-                            {entry.byteCount}
+                            <span title={`字节数：${entry.byteCount}`}>
+                              {entry.byteCount} B
+                            </span>
                           </TableCell>
                           <TableCell className="px-3 py-2 text-right text-xs text-muted-foreground tabular-nums">
-                            {entry.successCount}
+                            <span
+                              title={`成功次数：${entry.successCount}`}
+                              className="inline-flex items-center gap-0.5"
+                            >
+                              <Check className="size-3" aria-hidden />
+                              {entry.successCount}
+                            </span>
                           </TableCell>
                         </TableRow>
                       )

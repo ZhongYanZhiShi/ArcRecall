@@ -31,8 +31,8 @@ function WorkbenchPageContent({
     <div
       data-slot="workbench-page-content"
       className={cn(
-        "mx-auto flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden px-5 pt-6 pb-2",
-        width === "default" ? "workbench-page" : "max-w-6xl",
+        "mx-auto flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden px-5 pt-8 pb-5 md:px-10 md:pt-12",
+        width === "default" ? "max-w-5xl" : "max-w-6xl",
         className
       )}
       {...props}
@@ -84,7 +84,7 @@ function WorkbenchPageHeader({
         <h1
           className={cn(
             "font-semibold tracking-tight",
-            large ? "text-xl" : "text-lg"
+            large ? "text-3xl md:text-4xl" : "text-2xl md:text-3xl"
           )}
         >
           {title}

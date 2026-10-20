@@ -175,11 +175,11 @@ export const SettingsPage = React.forwardRef<
   }))
 
   return (
-    <WorkbenchPage>
+    <WorkbenchPage data-workbench="settings">
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
           title="设置"
-          titleHidden
+          description="解密引擎、AI 命名和本机数据，都由你决定。"
           actions={
             returnAction ? (
               <Button

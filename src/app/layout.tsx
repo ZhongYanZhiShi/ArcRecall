@@ -6,6 +6,8 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { UpdateProvider } from "@/components/update-provider"
 
 import "./globals.css"
+import "@/components/redesign/redesign.css"
+import "@/components/redesign/workbench.css"
 
 export const metadata: Metadata = {
   title: "ArcRecall",
@@ -19,9 +21,9 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="zh-CN" suppressHydrationWarning className="antialiased">
+    <html lang="zh-CN" suppressHydrationWarning className="byte antialiased">
       <body>
-        <ThemeProvider>
+        <ThemeProvider defaultTheme="dark">
           <TooltipProvider>
             <UpdateProvider>{children}</UpdateProvider>
             <Toaster />

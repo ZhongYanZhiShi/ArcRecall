@@ -21,6 +21,7 @@ export function Token<T extends string>({
   options,
   onChange,
   className,
+  disabled = false,
 }: {
   /** 读屏名称，例如“输出位置” */
   label: string
@@ -28,9 +29,11 @@ export function Token<T extends string>({
   options: readonly { value: T; label: string }[]
   onChange: (value: T) => void
   className?: string
+  disabled?: boolean
 }) {
   return (
     <Select
+      disabled={disabled}
       items={options as { value: T; label: string }[]}
       value={value}
       onValueChange={(next) => {
@@ -70,12 +73,14 @@ export function ToggleWord({
   onChange,
   onText,
   offText,
+  disabled = false,
 }: {
   label: string
   on: boolean
   onChange: (on: boolean) => void
   onText: string
   offText: string
+  disabled?: boolean
 }) {
   return (
     <button
@@ -83,9 +88,10 @@ export function ToggleWord({
       role="switch"
       aria-checked={on}
       aria-label={label}
+      disabled={disabled}
       onClick={() => onChange(!on)}
       className={cn(
-        "inline border-b-2 border-dashed px-0.5 font-semibold outline-none",
+        "inline border-b-2 border-dashed px-0.5 font-semibold outline-none disabled:cursor-not-allowed disabled:opacity-50",
         "hover:bg-primary/6 focus-visible:bg-primary/8",
         on
           ? "border-primary/45 text-foreground hover:border-primary"

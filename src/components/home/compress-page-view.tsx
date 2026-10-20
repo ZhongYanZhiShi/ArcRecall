@@ -278,16 +278,62 @@ export function CompressPageView({
   const extension = format === "sevenZip" ? ".7z" : ".zip"
   const activeLevel = LEVELS.find((item) => item.value === level)
 
+  const renderSource = (source: string, index: number) => (
+    <div
+      key={compressionSourceIdentity(source)}
+      className="flex min-w-0 items-center gap-2 rounded-xl border border-border/80 bg-background px-2.5 py-2"
+    >
+      <FileArchive
+        aria-hidden
+        className="size-4 shrink-0 text-muted-foreground"
+      />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs font-medium">
+          {compressionSourceFileName(source)}
+        </p>
+        <p
+          className="mt-0.5 truncate text-xs text-muted-foreground"
+          title={source}
+        >
+          {source}
+        </p>
+      </div>
+      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+        {index + 1}
+      </span>
+      <SourceAction
+        label="上移"
+        disabled={draftLocked || index === 0}
+        onClick={() => handleMoveSource(index, -1)}
+      >
+        <ArrowUp />
+      </SourceAction>
+      <SourceAction
+        label="下移"
+        disabled={draftLocked || index === sources.length - 1}
+        onClick={() => handleMoveSource(index, 1)}
+      >
+        <ArrowDown />
+      </SourceAction>
+      <SourceAction
+        label="移除"
+        disabled={draftLocked}
+        onClick={() => onRemoveSource(index)}
+      >
+        <Trash2 />
+      </SourceAction>
+    </div>
+  )
+
   return (
-    <WorkbenchPage>
+    <WorkbenchPage data-workbench="compress">
       <WorkbenchPageContent
         width="wide"
         data-testid="compress-page"
         className="pb-5"
       >
         <WorkbenchPageHeader title="创建归档" titleHidden />
-
-        <div className="grid min-h-0 flex-1 grid-rows-[minmax(11rem,0.85fr)_minmax(0,1.15fr)] gap-3 min-[960px]:grid-cols-[minmax(18rem,0.85fr)_minmax(0,1.4fr)] min-[960px]:grid-rows-1">
+        <div className="byte-compress-stage">
           <Card
             size="sm"
             className={cn(
@@ -300,9 +346,7 @@ export function CompressPageView({
               <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <CardTitle className="text-sm font-semibold">
-                      压缩来源
-                    </CardTitle>
+                    <CardTitle className="byte-lead">装箱单</CardTitle>
                     {sources.length > 0 ? (
                       <Badge variant="secondary">
                         {COUNT_FORMATTER.format(sources.length)} 个
@@ -348,51 +392,10 @@ export function CompressPageView({
                   className="h-full"
                   aria-label="已选来源，可调整顺序"
                 >
-                  <ol className="flex flex-col gap-1.5 p-3 pr-4">
+                  <ol className="byte-packing-list flex flex-col">
                     {sources.map((source, index) => (
-                      <li
-                        key={compressionSourceIdentity(source)}
-                        className="flex min-w-0 items-center gap-2 rounded-xl border border-border/80 bg-background px-2.5 py-2"
-                      >
-                        <FileArchive
-                          aria-hidden
-                          className="size-4 shrink-0 text-muted-foreground"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-xs font-medium">
-                            {compressionSourceFileName(source)}
-                          </p>
-                          <p
-                            className="mt-0.5 truncate text-xs text-muted-foreground"
-                            title={source}
-                          >
-                            {source}
-                          </p>
-                        </div>
-                        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                          {index + 1}
-                        </span>
-                        <SourceAction
-                          label="上移"
-                          disabled={draftLocked || index === 0}
-                          onClick={() => handleMoveSource(index, -1)}
-                        >
-                          <ArrowUp />
-                        </SourceAction>
-                        <SourceAction
-                          label="下移"
-                          disabled={draftLocked || index === sources.length - 1}
-                          onClick={() => handleMoveSource(index, 1)}
-                        >
-                          <ArrowDown />
-                        </SourceAction>
-                        <SourceAction
-                          label="移除"
-                          disabled={draftLocked}
-                          onClick={() => onRemoveSource(index)}
-                        >
-                          <Trash2 />
-                        </SourceAction>
+                      <li key={compressionSourceIdentity(source)}>
+                        {renderSource(source, index)}
                       </li>
                     ))}
                   </ol>
@@ -415,7 +418,7 @@ export function CompressPageView({
             </CardContent>
           </Card>
 
-          <Card size="sm" className="min-h-0 gap-0 py-0">
+          <Card size="sm" className="@container min-h-0 gap-0 py-0">
             <CardHeader className="shrink-0 px-4 py-3">
               <CardTitle className="text-sm font-semibold">归档设置</CardTitle>
               <CardAction>
@@ -488,7 +491,7 @@ export function CompressPageView({
 
                   <Separator />
 
-                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_176px]">
+                  <div className="grid gap-3 @min-[30rem]:grid-cols-[minmax(0,1fr)_176px]">
                     <Field className="gap-1.5">
                       <FieldLabel htmlFor="archive-name">
                         归档基础名称
@@ -885,7 +888,7 @@ export function CompressPageView({
 
                   <Separator />
 
-                  <div className="grid gap-3 md:grid-cols-[176px_minmax(0,1fr)]">
+                  <div className="grid gap-3 @min-[30rem]:grid-cols-[176px_minmax(0,1fr)]">
                     <Field
                       data-disabled={draftLocked || undefined}
                       className="gap-1.5"
@@ -946,7 +949,7 @@ export function CompressPageView({
                     </Field>
 
                     <Field className="gap-1.5">
-                      <div className="flex items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
                         <FieldLabel htmlFor="compression-password">
                           密码（可选）
                         </FieldLabel>
@@ -955,7 +958,7 @@ export function CompressPageView({
                         </span>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <InputGroup className="min-w-0 flex-1">
+                        <InputGroup className="min-w-[min(100%,14rem)] flex-1">
                           <InputGroupInput
                             id="compression-password"
                             type={showPassword ? "text" : "password"}
@@ -1043,7 +1046,7 @@ export function CompressPageView({
                     </Field>
                     {password ? (
                       <Field
-                        className="gap-1.5 md:col-start-2"
+                        className="gap-1.5 @min-[30rem]:col-start-2"
                         data-invalid={Boolean(passwordError)}
                       >
                         <FieldLabel htmlFor="compression-password-confirmation">

@@ -1464,6 +1464,65 @@ test("日志轮询同一失败只通知一次，手动重试及恢复后的新�
   assert.equal(harness.notifications.length, 3)
 })
 
+test("归档层级只展示实际路径，切换任务不沿用其他归档的格式与大小", (t) => {
+  const utilities = sourceHarness({}).load(
+    "src/components/home/recovery-view-utils.ts"
+  )
+  const harness = sourceHarness({
+    "@/components/home/recovery-view-utils": utilities,
+  })
+  t.after(() => harness.hide())
+  const { ArchiveStage } = harness.load(
+    "src/components/redesign/archive-stage.tsx"
+  )
+  const archivePath = "C:\\测试分组\\外层归档.7z"
+  const nestedPath = "C:\\测试分组\\输出\\嵌套归档.zip"
+  const waitingPath = "C:\\测试分组\\输出\\待处理归档.zip"
+  const task = {
+    archivePath,
+    archiveFormatLabel: "7z",
+    rootExtractionCompleted: true,
+    currentArchivePath: nestedPath,
+    currentArchiveFormatLabel: "ZIP",
+    running: true,
+    completedArchivePaths: [archivePath],
+    pendingArchivePaths: [waitingPath],
+    skippedArchivePaths: [],
+    dictionaryProgress: { percent: 25 },
+    events: [{ archivePath: nestedPath, recursiveDepth: 2 }],
+  }
+  const tree = harness.render(ArchiveStage, {
+    task,
+    analysis: {
+      archivePath: "C:\\测试分组\\另一个归档.rar",
+      formatLabel: "RAR",
+      fileSize: 9999999,
+    },
+  })
+  const list = find(
+    tree,
+    (node) => node.props?.["aria-label"] === "已识别归档层级"
+  )
+  const rows = list.props.children
+  assert.deepEqual(
+    rows.map((row) => row.props["data-archive-path"]),
+    [archivePath, nestedPath, waitingPath]
+  )
+  assert.equal(rows[0].props["data-state"], "done")
+  assert.match(JSON.stringify(rows[0]), /7z/)
+  assert.doesNotMatch(JSON.stringify(rows[0]), /RAR|9999999/)
+  assert.equal(rows[1].props["data-state"], "running")
+  assert.equal(rows[1].props["data-depth"], 2)
+  assert.match(JSON.stringify(rows[1]), /25%/)
+  assert.equal(rows[2].props["data-state"], "waiting")
+  assert.equal(rows[2].props["data-depth"], undefined)
+  const empty = harness.render(ArchiveStage, { task: null, analysis: null })
+  assert.equal(
+    find(empty, (node) => node.type === "li").props["data-state"],
+    "unknown"
+  )
+})
+
 test("打开仓库链接失败仅使用通知，不再创建页内提示", async (t) => {
   const harness = sourceHarness({
     "@tauri-apps/api/core": { isTauri: () => true },
@@ -1480,7 +1539,10 @@ test("打开仓库链接失败仅使用通知，不再创建页内提示", async
     activeNav: "extract",
     onNavChange() {},
   })
-  await find(tree, (node) => node.type === "a").props.onClick({
+  await find(
+    tree,
+    (node) => node.props?.onRepositoryClick
+  ).props.onRepositoryClick({
     preventDefault() {},
     currentTarget: { href: "https://github.com/ZhongYanZhiShi/ArcRecall" },
   })

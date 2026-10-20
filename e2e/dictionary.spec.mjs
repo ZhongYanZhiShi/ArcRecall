@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test"
 
-for (const width of [1280, 390]) {
+for (const width of [1280, 390, 320]) {
   test(`字典：添加、搜索、复制与行选择互不干扰（${width}px）`, async ({
     page,
     context,
@@ -9,9 +9,7 @@ for (const width of [1280, 390]) {
     await context.grantPermissions(["clipboard-read", "clipboard-write"])
     await page.goto("/")
     await page.getByRole("button", { name: "字典", exact: true }).click()
-    await expect(
-      page.getByText("解压时自动尝试这些候选密码。", { exact: true })
-    ).toBeVisible()
+    await expect(page.getByText(/解压时自动尝试这些候选密码。/)).toBeVisible()
     await expect(page.getByText("字典还是空的")).toBeVisible()
     await page.getByRole("button", { name: "添加", exact: true }).click()
     const sheet = page.getByRole("dialog")
@@ -171,14 +169,14 @@ for (const width of [1280, 390]) {
     await jump.fill("")
     await expect(jump).toHaveValue("")
     await jump.fill("2")
-    await page.getByRole("heading", { name: "字典", exact: true }).click()
+    await page.getByRole("heading", { level: 1 }).click()
     await expect(jump).toHaveValue("2")
     await expect(page.getByLabel("共 5 页", { exact: true })).toHaveText("/ 5")
     await expect(
       page.getByText("第 2 / 5 页 · 共 42 条", { exact: true })
     ).toBeVisible()
     await jump.fill("")
-    await page.getByRole("heading", { name: "字典", exact: true }).click()
+    await page.getByRole("heading", { level: 1 }).click()
     await expect(jump).toHaveValue("2")
     await page.screenshot({
       path: test.info().outputPath("dictionary-pagination.png"),

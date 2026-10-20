@@ -410,11 +410,10 @@ export function LogsPage() {
   }
 
   return (
-    <WorkbenchPage>
+    <WorkbenchPage data-workbench="logs">
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
-          title="日志"
-          titleHidden
+          title="运行日志"
           actions={
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -765,7 +764,7 @@ function SummaryMetric({
     <>
       <span
         className={cn(
-          "flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted/80 text-muted-foreground",
+          "byte-metric-icon flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted/80 text-muted-foreground",
           tone === "attention" && "bg-warning/10 text-warning-foreground",
           tone === "danger" && "bg-destructive/10 text-destructive"
         )}
@@ -773,15 +772,13 @@ function SummaryMetric({
         {icon}
       </span>
       <div className="min-w-0">
-        <div className="flex items-baseline gap-2">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <p className="shrink-0 text-sm font-semibold tracking-tight tabular-nums">
             {value}
           </p>
-          <p className="truncate text-xs font-medium tracking-wide text-muted-foreground">
-            {label}
-          </p>
+          <p className="text-xs font-medium text-muted-foreground">{label}</p>
         </div>
-        <p className="mt-0.5 flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground">
+        <p className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs leading-relaxed text-muted-foreground">
           {hint}
         </p>
       </div>

@@ -4,7 +4,7 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-import type { Layer } from "./mock-data"
+import type { Layer } from "./strata-model"
 
 const GAP = 84 // 相邻两层在 Z 轴上的距离
 const LIFT = 64 // 已打开的层额外抬起的高度
@@ -18,9 +18,13 @@ const LIFT = 64 // 已打开的层额外抬起的高度
 export function Strata({
   layers,
   renderLabel,
+  label = "归档层级，由外到内",
+  illustrationClassName,
 }: {
   layers: Layer[]
   renderLabel: (layer: Layer) => React.ReactNode
+  label?: string
+  illustrationClassName?: string
 }) {
   const sceneRef = React.useRef<HTMLDivElement>(null)
   const slabRefs = React.useRef<(HTMLDivElement | null)[]>([])
@@ -78,7 +82,10 @@ export function Strata({
     >
       <div
         aria-hidden="true"
-        className="relative w-full max-w-[20rem] shrink-0 self-center md:self-start"
+        className={cn(
+          "relative w-full max-w-[20rem] shrink-0 self-center md:self-start",
+          illustrationClassName
+        )}
         style={{ height: stackHeight }}
       >
         <div
@@ -148,7 +155,7 @@ export function Strata({
       ) : null}
 
       <ol
-        aria-label="归档层级，由外到内"
+        aria-label={label}
         className="relative flex min-w-0 flex-1 flex-col gap-6 md:block md:pl-16"
       >
         {layers.map((layer, i) => (

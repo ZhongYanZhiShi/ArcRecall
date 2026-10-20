@@ -14,6 +14,8 @@ import {
 } from "lucide-react"
 import * as React from "react"
 
+import { ArchiveStage } from "@/components/redesign/archive-stage"
+
 import { OutputLocationField } from "@/components/home/output-location-field"
 import {
   RecoveryCapabilityBadge,
@@ -201,140 +203,92 @@ export function ExtractPageView({
     : null
 
   return (
-    <WorkbenchPage>
+    <WorkbenchPage data-workbench="extract">
       <WorkbenchPageContent className="overflow-y-auto pb-4">
         <WorkbenchPageHeader title="恢复并解压" titleHidden />
 
-        <Card
-          size="sm"
-          onDragEnter={(event) => {
-            event.preventDefault()
-            setDragOver(true)
-          }}
-          onDragOver={(event) => {
-            event.preventDefault()
-            setDragOver(true)
-          }}
-          onDragLeave={(event) => {
-            event.preventDefault()
-            if (event.currentTarget === event.target) {
-              setDragOver(false)
-            }
-          }}
-          onDrop={(event) => {
-            event.preventDefault()
-            setDragOver(false)
-          }}
-          className={cn(
-            "relative min-h-0 border-dashed shadow-none transition-[background-color,border-color] duration-200",
-            analysis || analyzingPath || task
-              ? "flex shrink-0 flex-row flex-wrap items-center gap-3 px-4 py-3"
-              : "flex min-h-52 flex-1 flex-col justify-center gap-0 py-0",
-            dragOver
-              ? "border-primary/70 bg-primary/10"
-              : "border-border bg-card dark:border-foreground/20"
-          )}
+        <div
+          className="byte-extract-stage"
+          data-has-archive={Boolean(analysis || analyzingPath || task)}
         >
-          {analysis || analyzingPath || task ? (
-            <>
-              <div
-                aria-hidden
-                className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-muted/40"
-              >
-                {analyzingPath ? (
-                  <Spinner className="size-5" />
-                ) : (
-                  <PackageOpen className="size-5" strokeWidth={1.75} />
-                )}
-              </div>
-              <div
-                aria-live="polite"
-                aria-busy={Boolean(analyzingPath)}
-                className="min-w-0 flex-1"
-              >
-                <CardTitle className="truncate text-sm font-semibold tracking-tight">
-                  {analyzingName ??
-                    analysis?.fileName ??
-                    (task ? archiveNameFromPath(task.archivePath) : "")}
-                </CardTitle>
-                <CardDescription className="mt-0.5 truncate text-xs leading-relaxed">
-                  {analyzingName
-                    ? "正在识别格式…"
-                    : analysis
-                      ? `${analysis.formatLabel} · ${formatFileSize(analysis.fileSize)}`
-                      : null}
-                </CardDescription>
-              </div>
-              <div className="flex basis-full flex-wrap items-center gap-2 sm:basis-auto">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handlePickArchive}
-                  disabled={busy || running}
-                >
-                  {analyzingPath ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : (
-                    <Upload data-icon="inline-start" />
-                  )}
-                  {analyzingPath ? "正在识别" : "更换压缩包"}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handlePickBatch}
-                  disabled={busy || running}
-                >
-                  <ListPlus data-icon="inline-start" />
-                  批量添加
-                </Button>
-              </div>
-              <div className="flex basis-full flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2">
-                <p className="text-xs text-muted-foreground">
-                  支持多文件拖入或多行路径粘贴
-                  <Kbd className="ml-1">Ctrl + V</Kbd>
-                </p>
-                {analysis ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={busy || running}
-                    onClick={handleRepairCopy}
-                  >
-                    生成正确后缀副本
-                  </Button>
-                ) : null}
-              </div>
-            </>
-          ) : (
-            <>
-              <CardHeader
-                aria-live="polite"
-                className="justify-items-center px-5 pt-8 text-center"
-              >
+          <Card
+            size="sm"
+            onDragEnter={(event) => {
+              event.preventDefault()
+              setDragOver(true)
+            }}
+            onDragOver={(event) => {
+              event.preventDefault()
+              setDragOver(true)
+            }}
+            onDragLeave={(event) => {
+              event.preventDefault()
+              if (event.currentTarget === event.target) {
+                setDragOver(false)
+              }
+            }}
+            onDrop={(event) => {
+              event.preventDefault()
+              setDragOver(false)
+            }}
+            className={cn(
+              "relative min-h-0 border-dashed shadow-none transition-[background-color,border-color] duration-200",
+              analysis || analyzingPath || task
+                ? "flex shrink-0 flex-row flex-wrap items-center gap-3 px-4 py-3"
+                : "flex min-h-52 flex-1 flex-col justify-center gap-0 py-0",
+              dragOver
+                ? "border-primary/70 bg-primary/10"
+                : "border-border bg-card dark:border-foreground/20"
+            )}
+          >
+            {analysis || analyzingPath || task ? (
+              <>
                 <div
                   aria-hidden
-                  className="flex size-12 items-center justify-center rounded-xl border border-border bg-muted/40"
+                  className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-muted/40"
                 >
-                  <PackageOpen className="size-6" strokeWidth={1.75} />
+                  {analyzingPath ? (
+                    <Spinner className="size-5" />
+                  ) : (
+                    <PackageOpen className="size-5" strokeWidth={1.75} />
+                  )}
                 </div>
-                <CardTitle className="mt-1 max-w-full truncate text-base font-semibold tracking-tight">
-                  {dragOver ? "松开以分析归档" : "将压缩包拖到这里"}
-                </CardTitle>
-                <CardDescription className="max-w-lg text-xs leading-relaxed text-pretty">
-                  支持 7z / ZIP / RAR，可识别错误后缀、无后缀及内嵌归档
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col items-center gap-3 px-5 pb-8">
-                <div className="flex flex-wrap items-center justify-center gap-2">
+                <div
+                  aria-live="polite"
+                  aria-busy={Boolean(analyzingPath)}
+                  className="byte-archive-heading min-w-0 flex-1"
+                >
+                  <CardTitle className="byte-lead">
+                    {task?.running && task.currentArchivePath
+                      ? `第 ${task.recursiveDepth + 1} 层 · ${archiveNameFromPath(task.currentArchivePath)}`
+                      : (analyzingName ??
+                        analysis?.fileName ??
+                        (task ? archiveNameFromPath(task.archivePath) : ""))}
+                  </CardTitle>
+                  <CardDescription className="mt-0.5 truncate text-xs leading-relaxed">
+                    {analyzingName
+                      ? "正在识别格式…"
+                      : analysis
+                        ? `${analysis.formatLabel} · ${formatFileSize(analysis.fileSize)}`
+                        : null}
+                  </CardDescription>
+                </div>
+                <div className="byte-archive-actions flex basis-full flex-wrap items-center gap-2 sm:basis-auto">
                   <Button
+                    size="sm"
+                    variant="outline"
                     onClick={handlePickArchive}
                     disabled={busy || running}
                   >
-                    <Upload data-icon="inline-start" />
-                    选择压缩包
+                    {analyzingPath ? (
+                      <Spinner data-icon="inline-start" />
+                    ) : (
+                      <Upload data-icon="inline-start" />
+                    )}
+                    {analyzingPath ? "正在识别" : "更换压缩包"}
                   </Button>
                   <Button
+                    size="sm"
                     variant="outline"
                     onClick={handlePickBatch}
                     disabled={busy || running}
@@ -343,14 +297,70 @@ export function ExtractPageView({
                     批量添加
                   </Button>
                 </div>
-                <p className="text-center text-xs leading-relaxed text-muted-foreground">
-                  支持多文件拖入或多行路径粘贴
-                  <Kbd className="ml-1">Ctrl + V</Kbd>
-                </p>
-              </CardContent>
-            </>
-          )}
-        </Card>
+                <div className="byte-archive-help flex basis-full flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2">
+                  <p className="text-xs text-muted-foreground">
+                    支持多文件拖入或多行路径粘贴
+                    <Kbd className="ml-1">Ctrl + V</Kbd>
+                  </p>
+                  {analysis ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={busy || running}
+                      onClick={handleRepairCopy}
+                    >
+                      生成正确后缀副本
+                    </Button>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <>
+                <CardHeader
+                  aria-live="polite"
+                  className="justify-items-start px-0 pt-0 text-left"
+                >
+                  <div
+                    aria-hidden
+                    className="flex size-12 items-center justify-center rounded-xl border border-border bg-muted/40"
+                  >
+                    <PackageOpen className="size-6" strokeWidth={1.75} />
+                  </div>
+                  <h2 className="byte-lead">
+                    {dragOver ? "松开，看看里面有什么。" : "打开压缩包。"}
+                  </h2>
+                  <CardDescription className="max-w-lg text-xs leading-relaxed text-pretty">
+                    支持 7z / ZIP / RAR，可识别错误后缀、无后缀及内嵌归档
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col items-start gap-3 px-0 pt-6 pb-8">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      onClick={handlePickArchive}
+                      disabled={busy || running}
+                    >
+                      <Upload data-icon="inline-start" />
+                      选择压缩包
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={handlePickBatch}
+                      disabled={busy || running}
+                    >
+                      <ListPlus data-icon="inline-start" />
+                      批量添加
+                    </Button>
+                  </div>
+                  <p className="text-center text-xs leading-relaxed text-muted-foreground">
+                    支持多文件拖入或多行路径粘贴
+                    <Kbd className="ml-1">Ctrl + V</Kbd>
+                  </p>
+                </CardContent>
+              </>
+            )}
+          </Card>
+          <ArchiveStage analysis={analysis} task={task} />
+        </div>
 
         {repairedCopyPath ? (
           <p

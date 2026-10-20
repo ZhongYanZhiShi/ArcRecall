@@ -346,10 +346,11 @@ export function HistoryPage() {
   }, [load, runBusy])
 
   return (
-    <WorkbenchPage>
+    <WorkbenchPage data-workbench="history">
       <WorkbenchPageContent width="wide" className="gap-3">
         <WorkbenchPageHeader
-          title="历史"
+          title="指纹档案"
+          description="回看归档层级、恢复密码与输出位置。"
           actions={
             <>
               <Button
