@@ -94,6 +94,9 @@ test("停止请求失败后可以重试，等待项继续保持停止且不会�
   assert.equal(cancellationCalls, 2)
   secondCancel.resolve(true)
   await retry
+  await queue.stop()
+  assert.equal(cancellationCalls, 2)
+  assert.equal(queue.getSnapshot().cancelling, true)
   fixture.completeTask()
   await fixture.poll()
   await completion
@@ -152,7 +155,7 @@ test("停止期间重新连通后清除断连提示，只保留仍适用的取�
     await fixture.poll()
     const connected = fixture.queue.getSnapshot()
     assert.equal(connected.stopping, true)
-    assert.equal(connected.cancelling, false)
+    assert.equal(connected.cancelling, !cancellationFails)
     if (cancellationFails) {
       assert.match(connected.error ?? "", /取消提交失败/)
     } else {

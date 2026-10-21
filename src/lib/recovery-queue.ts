@@ -124,11 +124,7 @@ export function createRecoveryQueue(api: QueueApi) {
     } catch (error) {
       if (activeTaskId === cancellingTaskId) {
         stopError = `停止请求失败，可再次请求停止：${message(error)}`
-        publish({ error: stopError })
-      }
-    } finally {
-      if (activeTaskId === cancellingTaskId) {
-        publish({ cancelling: false })
+        publish({ error: stopError, cancelling: false })
       }
     }
   }

@@ -64,10 +64,11 @@ export function RecoveryQueuePanel({
               disabled={
                 queue.cancelling || (queue.stopping && !currentTask?.running)
               }
+              aria-busy={queue.cancelling}
               onClick={() => void recoveryQueue.stop()}
             >
               {queue.cancelling
-                ? "正在请求停止"
+                ? "正在停止"
                 : queue.stopping && currentTask?.running
                   ? "再次请求停止"
                   : queue.stopping
