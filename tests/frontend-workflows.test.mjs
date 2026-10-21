@@ -1739,7 +1739,8 @@ test("历史加载失败使用通知并可刷新恢复，查看密码失败不�
   find(
     tree,
     (node) =>
-      node.type === "AlertDialogAction" && node.props.children === "删除"
+      node.type === "AlertDialogAction" &&
+      [node.props.children].flat().includes("删除")
   ).props.onClick()
   await settle()
   tree = harness.render(HistoryPage)
@@ -1748,7 +1749,8 @@ test("历史加载失败使用通知并可刷新恢复，查看密码失败不�
   find(
     tree,
     (node) =>
-      node.type === "AlertDialogAction" && node.props.children === "清空历史"
+      node.type === "AlertDialogAction" &&
+      [node.props.children].flat().includes("清空历史")
   ).props.onClick()
   await settle()
   assert.equal(harness.notifications.at(-1).type, "warning")
@@ -1878,6 +1880,7 @@ test("放弃 AI 草稿立即清除密钥和提示词更改，重新读取失败�
 
   harness.hide()
   failReload = true
+  render().retryLoad()
   render()
   await settle()
   controller = render()
@@ -1921,7 +1924,10 @@ test("工作台与设置分类的放弃操作在导航前调用草稿清除接�
   tree = pageHarness.render(Page)
   const settings = find(tree, (node) => node.type === "SettingsPage")
   let discarded = 0
-  settings.props.ref.current = { discardAiChanges: () => discarded++ }
+  settings.props.ref.current = {
+    canLeave: () => true,
+    discardAiChanges: () => discarded++,
+  }
   settings.props.onAiDirtyChange(true)
   tree = pageHarness.render(Page)
   shell().props.onNavChange("logs")
@@ -1938,7 +1944,10 @@ test("工作台与设置分类的放弃操作在导航前调用草稿清除接�
   const settingsProps = { initialCategory: "ai", onDatabaseRestored() {} }
   tree = settingsHarness.render(SettingsPage, settingsProps)
   const panel = find(tree, (node) => node.type === "AiSettingsPanel")
-  panel.props.ref.current = { discardUnsavedChanges: () => discarded++ }
+  panel.props.ref.current = {
+    isSubmitting: () => false,
+    discardUnsavedChanges: () => discarded++,
+  }
   panel.props.onDirtyChange(true)
   tree = settingsHarness.render(SettingsPage, settingsProps)
   find(tree, (node) => node.type === "Tabs").props.onValueChange("engine")
@@ -2254,7 +2263,7 @@ test("AI 初次加载期间阻止编辑操作，完成或失败后解除加载�
   }
 })
 
-test("AI 页面恢复后的迟到配置不覆盖正在编辑的草稿和提示词", async (t) => {
+test("AI 配置重新加载的迟到结果不覆盖正在编辑的草稿和提示词", async (t) => {
   const oldWindow = globalThis.window
   globalThis.window = { addEventListener() {}, removeEventListener() {} }
   const refresh = deferred()
@@ -2285,6 +2294,7 @@ test("AI 页面恢复后的迟到配置不覆盖正在编辑的草稿和提示�
   await settle()
   assert.equal(render().busy, false)
   harness.hide()
+  render().retryLoad()
   let current = render()
   current.setDraft((draft) => ({ ...draft, name: "unsaved" }))
   current.setPrompt("unsaved prompt")
