@@ -9,7 +9,9 @@
 
 html.byte {
   --font-app-sans: "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
-  --font-app-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  --font-app-mono:
+    "JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI",
+    "PingFang SC", monospace;
   --background: #081117;
   --foreground: #d9eef0;
   --card: #0b161d;

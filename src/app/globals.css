@@ -79,7 +79,8 @@
     "Bahnschrift", "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC",
     sans-serif;
   --font-app-mono:
-    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono",
+    "Microsoft YaHei UI", "PingFang SC", monospace;
   --card: oklch(0.998 0.002 255);
   --card-foreground: oklch(0.18 0.012 255);
   --popover: oklch(0.998 0.002 255);
