@@ -506,14 +506,23 @@ export function CompressPage({
     ]
   )
 
+  const cancelRequest = React.useRef<string | null>(null)
+  const [cancellingTaskId, setCancellingTaskId] = React.useState<string | null>(
+    null
+  )
   const handleCancel = React.useCallback(async () => {
-    if (!task?.running) {
+    if (!task?.running || cancelRequest.current === task.taskId) {
       return
     }
+    const taskId = task.taskId
+    cancelRequest.current = taskId
+    setCancellingTaskId(taskId)
     setError(null)
     try {
-      await cancelCompression(task.taskId)
+      await cancelCompression(taskId)
     } catch (reason) {
+      if (cancelRequest.current === taskId) cancelRequest.current = null
+      setCancellingTaskId((current) => (current === taskId ? null : current))
       notifyCompressionError(reason)
     }
   }, [task])
@@ -573,6 +582,7 @@ export function CompressPage({
       onRemoveSource={handleRemoveSource}
       handleStart={handleStart}
       handleCancel={handleCancel}
+      cancelling={Boolean(task?.running && cancellingTaskId === task.taskId)}
       handleSavePermanentPassword={handleSavePermanentPassword}
       handleDeletePermanentPassword={handleDeletePermanentPassword}
       onOpenTaskOutput={handleOpenTaskOutput}

@@ -25,8 +25,8 @@ function LoadingFrame({
         width === "default" ? "workbench-page" : "max-w-6xl"
       )}
     >
-      <span className="sr-only">{label}</span>
-      <div aria-hidden className="flex h-full min-h-0 flex-col">
+      <p className="mb-3 shrink-0 text-sm text-muted-foreground">{label}</p>
+      <div aria-hidden className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {children}
       </div>
     </div>

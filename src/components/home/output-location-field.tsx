@@ -1,5 +1,6 @@
 "use client"
 
+import { FullText } from "@/components/home/full-text"
 import { FolderOpen, RotateCcw, X } from "lucide-react"
 import type { ReactNode } from "react"
 
@@ -116,15 +117,13 @@ export function OutputLocationField({
           className="size-3.5 shrink-0 text-muted-foreground"
           strokeWidth={1.8}
         />
-        <p
+        <FullText
+          text={hasPath ? (title ?? path ?? emptyLabel) : emptyLabel}
           className={cn(
-            "min-w-0 flex-1 truncate text-xs",
+            "flex-1 text-xs",
             hasPath ? "text-foreground/90" : "text-muted-foreground"
           )}
-          title={title}
-        >
-          {hasPath ? path : emptyLabel}
-        </p>
+        />
         {isCustom ? (
           <Button
             type="button"

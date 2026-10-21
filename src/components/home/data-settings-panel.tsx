@@ -5,6 +5,7 @@ import * as React from "react"
 
 import { SettingsInfoRow } from "@/components/home/settings-info-row"
 import { DatabaseRestorePanel } from "@/components/home/database-restore-panel"
+import { WorkbenchDetails } from "@/components/home/workbench-details"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
@@ -80,39 +81,43 @@ export function DataSettingsPanel({ onRestored }: { onRestored: () => void }) {
             }}
           />
           <Separator />
-          <p className="text-sm font-medium">文件位置</p>
-          <SettingsInfoRow
-            icon={<HardDrive className="size-3.5" />}
-            label="数据根目录"
-            value={dbInfo?.rootPath ?? "—"}
-          />
-          <SettingsInfoRow
-            icon={<HardDrive className="size-3.5" />}
-            label="数据库"
-            value={dbInfo?.path ?? "—"}
-            badge={
-              dbInfo
-                ? dbInfo.exists
-                  ? `已存在 · ${dbInfo.candidateCount} 条候选`
-                  : "将在首次写入时创建"
-                : undefined
-            }
-          />
-          <SettingsInfoRow
-            icon={<HardDrive className="size-3.5" />}
-            label="设置文件"
-            value={dbInfo?.settingsPath ?? "—"}
-          />
-          <SettingsInfoRow
-            icon={<HardDrive className="size-3.5" />}
-            label="日志目录"
-            value={dbInfo?.logsPath ?? "—"}
-          />
-          <SettingsInfoRow
-            icon={<HardDrive className="size-3.5" />}
-            label="外部工具目录"
-            value={dbInfo?.toolsPath ?? "—"}
-          />
+          <WorkbenchDetails
+            title="文件位置"
+            description="查看数据库、配置、日志和外部工具的本机存储路径。"
+          >
+            <SettingsInfoRow
+              icon={<HardDrive className="size-3.5" />}
+              label="数据根目录"
+              value={dbInfo?.rootPath ?? "—"}
+            />
+            <SettingsInfoRow
+              icon={<HardDrive className="size-3.5" />}
+              label="数据库"
+              value={dbInfo?.path ?? "—"}
+              badge={
+                dbInfo
+                  ? dbInfo.exists
+                    ? `已存在 · ${dbInfo.candidateCount} 条候选`
+                    : "将在首次写入时创建"
+                  : undefined
+              }
+            />
+            <SettingsInfoRow
+              icon={<HardDrive className="size-3.5" />}
+              label="设置文件"
+              value={dbInfo?.settingsPath ?? "—"}
+            />
+            <SettingsInfoRow
+              icon={<HardDrive className="size-3.5" />}
+              label="日志目录"
+              value={dbInfo?.logsPath ?? "—"}
+            />
+            <SettingsInfoRow
+              icon={<HardDrive className="size-3.5" />}
+              label="外部工具目录"
+              value={dbInfo?.toolsPath ?? "—"}
+            />
+          </WorkbenchDetails>
         </CardContent>
       </Card>
     </div>

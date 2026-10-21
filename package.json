@@ -31,7 +31,8 @@
     "format:check": "oxfmt --check",
     "typecheck": "tsc --noEmit",
     "test:ui": "playwright test",
-    "test:desktop": "node scripts/desktop-smoke.mjs"
+    "test:desktop": "node scripts/desktop-smoke.mjs",
+    "test:desktop:lifecycle": "node scripts/desktop-smoke.mjs --lifecycle-only --with-retries"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

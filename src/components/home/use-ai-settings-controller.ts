@@ -47,6 +47,16 @@ export function useAiSettingsController({
   const [models, setModels] = React.useState<AiModelInfo[]>([])
   const [prompt, setPromptState] = React.useState("")
   const [loading, setLoading] = React.useState(true)
+  const loaded = React.useRef(false)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
+  const [loadVersion, setLoadVersion] = React.useState(0)
+  const retryLoad = () => {
+    loaded.current = false
+    setLoading(true)
+    setLoadError(null)
+    setProfileFeedback(null)
+    setLoadVersion((version) => version + 1)
+  }
   const draftRevision = React.useRef(0)
   const setDraft = React.useCallback(
     (update: React.SetStateAction<ProfileDraft>) => {
@@ -65,6 +75,10 @@ export function useAiSettingsController({
   const [busyScope, setBusyScope] = React.useState<"profile" | "prompt" | null>(
     null
   )
+  const operation = React.useRef(false)
+  const [profileAction, setProfileAction] = React.useState<
+    "save" | "activate" | "models" | "test" | "delete" | null
+  >(null)
   const [profileFeedback, setProfileFeedback] =
     React.useState<OperationFeedback | null>(null)
   const [promptFeedback, setPromptFeedback] =
@@ -98,11 +112,14 @@ export function useAiSettingsController({
   )
 
   React.useEffect(() => {
+    if (loaded.current) return
     let disposed = false
     const revision = draftRevision.current
     void listAiProfiles()
       .then((next) => {
         if (!disposed) {
+          loaded.current = true
+          setLoadError(null)
           // Activity resumes this effect. A refresh must not replace edits made
           // after its request started, even after the initial loading screen.
           if (draftRevision.current === revision) applySettings(next)
@@ -110,6 +127,7 @@ export function useAiSettingsController({
       })
       .catch((reason) => {
         if (!disposed) {
+          setLoadError(`读取 AI 配置失败：${toErrorMessage(reason)}`)
           setProfileFeedback({
             error: true,
             message: `读取 AI 配置失败：${toErrorMessage(reason)}`,
@@ -122,7 +140,7 @@ export function useAiSettingsController({
     return () => {
       disposed = true
     }
-  }, [applySettings])
+  }, [applySettings, loadVersion])
 
   const applyDraftAction = (action: PendingDraftAction) => {
     setDraft(
@@ -179,9 +197,11 @@ export function useAiSettingsController({
   const handleSaveProfile = async (
     makeActive = false
   ): Promise<AiSettings | null> => {
-    if (busy || !validateDraft()) {
+    if (busy || operation.current || !validateDraft()) {
       return null
     }
+    operation.current = true
+    setProfileAction(makeActive ? "activate" : "save")
     setBusyScope("profile")
     setProfileFeedback({ error: false, message: "正在保存 AI 配置…" })
     try {
@@ -201,14 +221,18 @@ export function useAiSettingsController({
       })
       return null
     } finally {
+      operation.current = false
+      setProfileAction(null)
       setBusyScope(null)
     }
   }
 
   const handleLoadModels = async () => {
-    if (busy || !validateDraft()) {
+    if (busy || operation.current || !validateDraft()) {
       return
     }
+    operation.current = true
+    setProfileAction("models")
     setBusyScope("profile")
     setProfileFeedback({
       error: false,
@@ -231,14 +255,18 @@ export function useAiSettingsController({
         duration: 6_000,
       })
     } finally {
+      operation.current = false
+      setProfileAction(null)
       setBusyScope(null)
     }
   }
 
   const handleTest = async () => {
-    if (busy || !validateDraft()) {
+    if (busy || operation.current || !validateDraft()) {
       return
     }
+    operation.current = true
+    setProfileAction("test")
     setBusyScope("profile")
     setProfileFeedback({
       error: false,
@@ -259,6 +287,8 @@ export function useAiSettingsController({
         duration: 6_000,
       })
     } finally {
+      operation.current = false
+      setProfileAction(null)
       setBusyScope(null)
     }
   }
@@ -266,13 +296,14 @@ export function useAiSettingsController({
   const handleSaveRenameSettings = async (
     activeProfileId = settings?.activeProfileId ?? ""
   ): Promise<boolean> => {
-    if (!settings || busy) {
+    if (!settings || busy || operation.current) {
       return false
     }
     if (!prompt.trim()) {
       setPromptFeedback({ error: true, message: "提示词不能为空。" })
       return false
     }
+    operation.current = true
     setBusyScope("prompt")
     setPromptFeedback({
       error: false,
@@ -296,14 +327,17 @@ export function useAiSettingsController({
       })
       return false
     } finally {
+      operation.current = false
       setBusyScope(null)
     }
   }
 
   const handleDelete = async () => {
-    if (!draft.id || busy) {
+    if (!draft.id || busy || operation.current) {
       return
     }
+    operation.current = true
+    setProfileAction("delete")
     setBusyScope("profile")
     setProfileFeedback(null)
     try {
@@ -320,6 +354,8 @@ export function useAiSettingsController({
         duration: 6_000,
       })
     } finally {
+      operation.current = false
+      setProfileAction(null)
       setBusyScope(null)
     }
   }
@@ -375,6 +411,7 @@ export function useAiSettingsController({
   }
 
   const discardUnsavedChanges = () => {
+    if (operation.current) return
     if (settings) {
       applySettings(settings, draft.id)
     } else {
@@ -407,6 +444,10 @@ export function useAiSettingsController({
   }, [hasUnsavedChanges])
 
   return {
+    loading,
+    loadError,
+    retryLoad,
+    isSubmitting: () => operation.current,
     settings,
     draft,
     setDraft,
@@ -415,6 +456,7 @@ export function useAiSettingsController({
     setPrompt,
     busy,
     profileBusy,
+    profileAction,
     promptBusy,
     profileFeedback,
     setProfileFeedback,

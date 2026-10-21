@@ -34,7 +34,14 @@ const evidence = resolve(
   process.env.ARC_RECALL_TEST_EVIDENCE ?? "test-results/native"
 )
 await mkdir(evidence, { recursive: true })
-const data = join(root, "data")
+const data = process.argv.includes("--long-content")
+  ? join(
+      root,
+      "[测试分组] 中文与空格数据目录",
+      "长期归档管理与多条记录布局验证",
+      "应用数据"
+    )
+  : join(root, "data")
 const tools = join(data, "tools", "7zip", "26.02")
 await mkdir(tools, { recursive: true })
 await copyFile(sevenZip, join(tools, "7z.exe"))
@@ -109,6 +116,31 @@ async function launch() {
     context.pages()[0] ??
     (await context.waitForEvent("page"))
   page.on("pageerror", (error) => errors.push(error.message))
+  await page.getByRole("button", { name: "打开解压选项" }).waitFor()
+  if (process.argv.includes("--secondary-monitor")) {
+    const monitors = await invoke("plugin:window|available_monitors")
+    const primary = await invoke("plugin:window|primary_monitor")
+    const secondary = monitors.find(
+      (monitor) =>
+        monitor.position.x !== primary?.position.x ||
+        monitor.position.y !== primary?.position.y
+    )
+    assert.ok(secondary, "Secondary monitor required for this test run")
+    await invoke("plugin:window|set_position", {
+      label: "main",
+      value: {
+        Physical: {
+          x: secondary.position.x + 24,
+          y: secondary.position.y + 24,
+        },
+      },
+    })
+    console.log("Test monitor: " + JSON.stringify(secondary))
+    await writeFile(
+      join(evidence, "monitor.json"),
+      JSON.stringify(secondary, null, 2)
+    )
+  }
   await page.getByRole("button", { name: "打开解压选项" }).click()
   await expect(page.getByLabel("记住任务队列")).toBeEnabled({ timeout: 30_000 })
   await page.keyboard.press("Escape")
@@ -510,6 +542,105 @@ async function verifyAiFileReference() {
 }
 
 // A focused acceptance path uses the same isolated WebView and real IPC setup.
+if (process.argv.includes("--focus-only")) {
+  try {
+    await launch()
+    const { verifyKeyboardFocus } = await import("./desktop-focus.mjs")
+    await verifyKeyboardFocus({ page, invoke, evidence })
+  } finally {
+    await close(false)
+    console.log(`Isolated test data: ${root}`)
+  }
+  process.exit(0)
+}
+
+if (process.argv.includes("--scrollbars-only")) {
+  try {
+    await launch()
+    const { verifyScrollbars } = await import("./desktop-scrollbars.mjs")
+    await verifyScrollbars({ page, invoke, root, evidence })
+  } finally {
+    await close(false)
+    console.log(`Isolated test data: ${root}`)
+  }
+  process.exit(0)
+}
+
+if (process.argv.includes("--completion-layout-only")) {
+  try {
+    await launch()
+    const { verifyCompletionLayout } =
+      await import("./desktop-completion-layout.mjs")
+    let stress
+    if (process.argv.includes("--long-content")) {
+      const { seedLongContent } = await import("./desktop-long-content.mjs")
+      stress = await seedLongContent({
+        page,
+        invoke,
+        root,
+        evidence,
+        sevenZip,
+        historyCount: process.argv.includes("--full-text") ? 1 : 16,
+      })
+    }
+    await verifyCompletionLayout({
+      page,
+      invoke,
+      root,
+      evidence,
+      sevenZip,
+      stress,
+    })
+    if (process.argv.includes("--full-text")) {
+      const { verifyFullText } = await import("./desktop-full-text.mjs")
+      await verifyFullText({ page, invoke, root, evidence, stress })
+    }
+    if (process.argv.includes("--all-pages")) {
+      const { verifyAllPageLayouts } = await import("./desktop-all-layouts.mjs")
+      await verifyAllPageLayouts({ page, invoke, evidence, stress })
+    }
+  } finally {
+    await close(false)
+    console.log(`Isolated test data: ${root}`)
+  }
+  process.exit(0)
+}
+
+if (process.argv.includes("--lifecycle-only")) {
+  try {
+    await launch()
+    const { verifyNativeLifecycle } = await import("./desktop-lifecycle.mjs")
+    await verifyNativeLifecycle({
+      page,
+      invoke,
+      pastePaths,
+      root,
+      data,
+      evidence,
+      sevenZip,
+      close,
+      errors,
+    })
+  } catch (error) {
+    if (page) {
+      console.error(
+        await page
+          .locator("body")
+          .innerText()
+          .catch(() => "Page unavailable")
+      )
+      await page
+        .screenshot({ path: join(evidence, "lifecycle-failure.png") })
+        .catch(() => {})
+    }
+    throw error
+  } finally {
+    await close(false)
+    console.log(`Isolated test data: ${root}`)
+  }
+  process.exit(0)
+}
+
 if (process.argv.includes("--history-only")) {
   const sources = join(root, "[测试分组] 中文目录")
   const inner = join(sources, "嵌套归档.zip")

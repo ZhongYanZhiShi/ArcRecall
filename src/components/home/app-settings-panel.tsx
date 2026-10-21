@@ -4,10 +4,12 @@ import { CircleAlert, RefreshCw } from "lucide-react"
 import * as React from "react"
 import { toast } from "sonner"
 import { AppUpdatePanel } from "@/components/home/app-update-panel"
+import { WorkbenchDetails } from "@/components/home/workbench-details"
 
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Spinner } from "@/components/ui/spinner"
 import {
   Card,
   CardContent,
@@ -60,9 +62,12 @@ export function AppSettingsPanel() {
     String(DEFAULT_LOG_MAX_DISK_MIB)
   )
   const [busy, setBusy] = React.useState(false)
+  const operation = React.useRef(false)
+  const [savingCapacity, setSavingCapacity] = React.useState(false)
   const [loadBusy, setLoadBusy] = React.useState(false)
   const [loadError, setLoadError] = React.useState<string | null>(null)
   const request = React.useRef(0)
+  const loaded = React.useRef(false)
 
   const load = React.useCallback(async () => {
     const requestId = ++request.current
@@ -71,6 +76,7 @@ export function AppSettingsPanel() {
     try {
       const settings = await getSettings()
       if (requestId !== request.current) return
+      loaded.current = true
       setAppSettings(settings)
       setLogMaxDiskInput(
         String(settings.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB)
@@ -85,6 +91,7 @@ export function AppSettingsPanel() {
   }, [])
 
   React.useEffect(() => {
+    if (loaded.current || operation.current) return
     const timeout = setTimeout(() => void load(), 0)
     return () => {
       clearTimeout(timeout)
@@ -93,7 +100,12 @@ export function AppSettingsPanel() {
   }, [load])
 
   const handleLogLevelChange = (level: AppLogLevel) => {
-    if (busy || appSettings === null || appSettings.logging?.level === level) {
+    if (
+      operation.current ||
+      busy ||
+      appSettings === null ||
+      appSettings.logging?.level === level
+    ) {
       return
     }
     const previous = appSettings
@@ -105,6 +117,7 @@ export function AppSettingsPanel() {
       },
     }
     setAppSettings(next)
+    operation.current = true
     setBusy(true)
     void updateSettings({ kind: "logLevel", value: level })
       .then((saved) => {
@@ -120,11 +133,14 @@ export function AppSettingsPanel() {
           duration: 6_000,
         })
       })
-      .finally(() => setBusy(false))
+      .finally(() => {
+        operation.current = false
+        setBusy(false)
+      })
   }
 
   const handleSaveLogCapacity = () => {
-    if (busy || appSettings === null) {
+    if (operation.current || busy || appSettings === null) {
       return
     }
     const maxDiskMib = Number(logMaxDiskInput)
@@ -143,6 +159,8 @@ export function AppSettingsPanel() {
       return
     }
 
+    operation.current = true
+    setSavingCapacity(true)
     setBusy(true)
     void updateSettings({ kind: "logMaxDiskMib", value: maxDiskMib })
       .then((saved) => {
@@ -160,7 +178,11 @@ export function AppSettingsPanel() {
           duration: 6_000,
         })
       })
-      .finally(() => setBusy(false))
+      .finally(() => {
+        operation.current = false
+        setBusy(false)
+        setSavingCapacity(false)
+      })
   }
 
   const parsedLogMaxDisk = Number(logMaxDiskInput)
@@ -175,8 +197,13 @@ export function AppSettingsPanel() {
       logMaxDiskInput
 
   return (
-    <div className="byte-settings-grid flex flex-col gap-2">
-      <AppUpdatePanel />
+    <div className="byte-app-settings byte-settings-grid flex flex-col gap-2">
+      <WorkbenchDetails
+        title="应用更新"
+        description="检查新版本，设置自动更新。"
+      >
+        <AppUpdatePanel />
+      </WorkbenchDetails>
       {loadError ? (
         <Alert variant="warning">
           <CircleAlert />
@@ -209,6 +236,15 @@ export function AppSettingsPanel() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          {busy && !savingCapacity ? (
+            <p
+              role="status"
+              className="flex items-center gap-2 text-sm text-muted-foreground"
+            >
+              <Spinner aria-hidden="true" />
+              正在保存日志级别…
+            </p>
+          ) : null}
           <FieldSet disabled={busy || appSettings === null}>
             <FieldLegend className="sr-only">日志级别</FieldLegend>
             <ToggleGroup
@@ -287,8 +323,12 @@ export function AppSettingsPanel() {
                   !logCapacityDirty
                 }
                 onClick={handleSaveLogCapacity}
+                aria-busy={savingCapacity}
               >
-                保存
+                {savingCapacity ? (
+                  <Spinner aria-hidden="true" data-icon="inline-start" />
+                ) : null}
+                {savingCapacity ? "保存中…" : "保存"}
               </Button>
             </div>
             <ToggleGroup

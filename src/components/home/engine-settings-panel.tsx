@@ -1,5 +1,7 @@
 "use client"
 
+import { WorkbenchDetails } from "./workbench-details"
+
 import { CircleAlert, RefreshCw } from "lucide-react"
 import * as React from "react"
 import { toast } from "sonner"
@@ -13,6 +15,8 @@ import {
 } from "@/components/home/engine-settings-cards"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Spinner } from "@/components/ui/spinner"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import {
   getRecoveryCapabilities,
   refreshRecoveryCapabilities,
@@ -81,8 +85,9 @@ export function EngineSettingsPanel() {
     () => cachedEngineStatus?.johnPerl.perlPath ?? ""
   )
   const [engineBusy, setEngineBusy] = React.useState(false)
+  const engineOperation = React.useRef(false)
+  const recoveryOperation = React.useRef(false)
   const [engineMessage, setEngineMessage] = React.useState<string | null>(null)
-  const [engineError, setEngineError] = React.useState(false)
   const [recoveryBusy, setRecoveryBusy] = React.useState(false)
   const [recoveryMessage, setRecoveryMessage] = React.useState<string | null>(
     null
@@ -91,6 +96,7 @@ export function EngineSettingsPanel() {
   const [loadBusy, setLoadBusy] = React.useState(false)
   const [loadError, setLoadError] = React.useState<string | null>(null)
   const request = React.useRef(0)
+  const loaded = React.useRef(false)
 
   const applyJohnStatus = React.useCallback((status: JohnPerlStatus) => {
     if (cachedEngineStatus) {
@@ -144,6 +150,7 @@ export function EngineSettingsPanel() {
     if (requestId !== request.current) {
       return
     }
+    loaded.current = true
 
     const [bundle, hashcatStatus, john, recovery, settings] = results
     if (bundle.status === "fulfilled") setFullBundle(bundle.value)
@@ -185,6 +192,8 @@ export function EngineSettingsPanel() {
   }, [applyEngineStatus, applyJohnStatus])
 
   React.useEffect(() => {
+    if (loaded.current || engineOperation.current || recoveryOperation.current)
+      return
     const timeout = setTimeout(() => void load(), 0)
     return () => {
       clearTimeout(timeout)
@@ -196,13 +205,12 @@ export function EngineSettingsPanel() {
     pendingMessage: string,
     operation: () => Promise<EngineActionResult>
   ) => {
-    if (engineBusy) return
+    if (engineBusy || engineOperation.current) return
+    engineOperation.current = true
     setEngineBusy(true)
-    setEngineError(false)
     setEngineMessage(pendingMessage)
     void operation()
       .then((result) => {
-        setEngineError(Boolean(result.error))
         setEngineMessage(null)
         if (result.error) {
           toast.error(result.message, { id: "engine-action", duration: 6_000 })
@@ -214,14 +222,16 @@ export function EngineSettingsPanel() {
         }
       })
       .catch((error) => {
-        setEngineError(true)
         setEngineMessage(null)
         toast.error(`操作失败：${errorMessage(error)}`, {
           id: "engine-action",
           duration: 6_000,
         })
       })
-      .finally(() => setEngineBusy(false))
+      .finally(() => {
+        engineOperation.current = false
+        setEngineBusy(false)
+      })
   }
 
   const handleSaveToolsDirectory = () =>
@@ -236,6 +246,7 @@ export function EngineSettingsPanel() {
     })
 
   const handleResetToolsDirectory = () => {
+    if (engineOperation.current) return
     setToolsDirectoryInput("")
     runEngineAction("正在恢复默认工具目录…", async () => {
       await setToolsDirectory("")
@@ -284,10 +295,8 @@ export function EngineSettingsPanel() {
 
   const handleOpenPath = (path: string) => {
     if (engineBusy || !path.trim()) return
-    setEngineError(false)
     setEngineMessage(null)
     void openPath(path.trim()).catch((error) => {
-      setEngineError(true)
       toast.error(`无法跳转到该路径：${errorMessage(error)}`, {
         id: "engine-action",
         duration: 6_000,
@@ -298,6 +307,7 @@ export function EngineSettingsPanel() {
   const handleRecoveryModeChange = (mode: RecoveryComputeMode) => {
     if (
       recoveryBusy ||
+      recoveryOperation.current ||
       appSettings === null ||
       (appSettings.recovery?.computeMode ?? "gpuPreferred") === mode
     ) {
@@ -309,6 +319,7 @@ export function EngineSettingsPanel() {
       recovery: { ...appSettings.recovery, computeMode: mode },
     }
     setAppSettings(next)
+    recoveryOperation.current = true
     setRecoveryBusy(true)
     setRecoveryError(false)
     setRecoveryMessage("正在保存默认解密方式…")
@@ -332,7 +343,10 @@ export function EngineSettingsPanel() {
           duration: 6_000,
         })
       })
-      .finally(() => setRecoveryBusy(false))
+      .finally(() => {
+        recoveryOperation.current = false
+        setRecoveryBusy(false)
+      })
   }
 
   const handleRefresh = () =>
@@ -345,11 +359,13 @@ export function EngineSettingsPanel() {
     kind: "removeEmptyDirectories" | "flattenOutputDirectories",
     value: boolean
   ) => {
-    if (recoveryBusy || appSettings === null) return
+    if (recoveryBusy || recoveryOperation.current || appSettings === null)
+      return
     const label =
       kind === "removeEmptyDirectories"
         ? "智能清理空文件夹"
         : "去除多层无效嵌套"
+    recoveryOperation.current = true
     setRecoveryBusy(true)
     setRecoveryError(false)
     setRecoveryMessage("正在保存目录整理设置…")
@@ -368,6 +384,7 @@ export function EngineSettingsPanel() {
         duration: 6_000,
       })
     } finally {
+      recoveryOperation.current = false
       setRecoveryBusy(false)
     }
   }
@@ -379,7 +396,8 @@ export function EngineSettingsPanel() {
         DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY
     )
   const handleSaveScanLimit = async () => {
-    if (recoveryBusy || appSettings === null) return
+    if (recoveryBusy || recoveryOperation.current || appSettings === null)
+      return
     const limit = Number(scanLimitValue)
     if (
       !scanLimitValue.trim() ||
@@ -393,6 +411,7 @@ export function EngineSettingsPanel() {
       )
       return
     }
+    recoveryOperation.current = true
     setRecoveryBusy(true)
     setRecoveryError(false)
     setRecoveryMessage("正在保存扫描上限…")
@@ -418,12 +437,13 @@ export function EngineSettingsPanel() {
         duration: 6_000,
       })
     } finally {
+      recoveryOperation.current = false
       setRecoveryBusy(false)
     }
   }
 
   return (
-    <div className="byte-settings-grid flex flex-col gap-2">
+    <div className="byte-engine-panel flex flex-col gap-6">
       {loadError ? (
         <Alert variant="warning">
           <CircleAlert />
@@ -461,39 +481,79 @@ export function EngineSettingsPanel() {
           void handleDirectorySettingChange("flattenOutputDirectories", value)
         }
       />
-      <FullBundleCard
-        status={fullBundle}
-        busy={engineBusy}
-        message={engineMessage}
-        messageError={engineError}
-        onInstall={handleInstallBundle}
-        onOpen={handleOpenPath}
-      />
-      <ToolsDirectoryCard
-        status={hashcat}
-        value={toolsDirectory}
-        busy={engineBusy}
-        onChange={setToolsDirectoryInput}
-        onOpen={handleOpenPath}
-        onSave={handleSaveToolsDirectory}
-        onReset={handleResetToolsDirectory}
-      />
-      <HashcatCard
-        status={hashcat}
-        busy={engineBusy}
-        onDownload={handleDownloadHashcat}
-      />
-      <JohnPerlCard
-        status={johnPerl}
-        johnDirectory={johnDirectory}
-        perlPath={perlPath}
-        busy={engineBusy}
-        onJohnDirectoryChange={setJohnDirectory}
-        onPerlPathChange={setPerlPath}
-        onOpen={handleOpenPath}
-        onProbe={handleProbeJohnPerl}
-        onSave={handleSaveJohnPerl}
-      />
+      <section className="byte-engine-actions flex flex-col items-start gap-3 border-t pt-6">
+        <div>
+          <h3 className="text-sm font-medium">引擎与工具</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            管理完整引擎包、工具目录与运行环境。
+          </p>
+        </div>
+        <Tabs defaultValue="bundle" className="w-full">
+          <WorkbenchDetails
+            title="引擎管理"
+            description="安装引擎、配置工具路径与检查运行环境。"
+            footer={
+              engineMessage ? (
+                <p
+                  role="status"
+                  className="order-first mb-3 flex max-h-20 items-start gap-2 overflow-y-auto text-sm break-words text-muted-foreground"
+                >
+                  {engineBusy ? <Spinner className="mt-0.5 shrink-0" /> : null}
+                  {engineMessage}
+                </p>
+              ) : null
+            }
+            toolbar={
+              <TabsList className="grid h-auto w-full grid-cols-2 gap-1 sm:grid-cols-4">
+                <TabsTrigger value="bundle">完整引擎包</TabsTrigger>
+                <TabsTrigger value="tools">工具目录</TabsTrigger>
+                <TabsTrigger value="hashcat">Hashcat</TabsTrigger>
+                <TabsTrigger value="john">John / Perl</TabsTrigger>
+              </TabsList>
+            }
+          >
+            <TabsContent value="bundle" className="mt-0">
+              <FullBundleCard
+                status={fullBundle}
+                busy={engineBusy}
+                onInstall={handleInstallBundle}
+                onOpen={handleOpenPath}
+              />
+            </TabsContent>
+            <TabsContent value="tools" className="mt-0">
+              <ToolsDirectoryCard
+                status={hashcat}
+                value={toolsDirectory}
+                busy={engineBusy}
+                onChange={setToolsDirectoryInput}
+                onOpen={handleOpenPath}
+                onSave={handleSaveToolsDirectory}
+                onReset={handleResetToolsDirectory}
+              />
+            </TabsContent>
+            <TabsContent value="hashcat" className="mt-0">
+              <HashcatCard
+                status={hashcat}
+                busy={engineBusy}
+                onDownload={handleDownloadHashcat}
+              />
+            </TabsContent>
+            <TabsContent value="john" className="mt-0">
+              <JohnPerlCard
+                status={johnPerl}
+                johnDirectory={johnDirectory}
+                perlPath={perlPath}
+                busy={engineBusy}
+                onJohnDirectoryChange={setJohnDirectory}
+                onPerlPathChange={setPerlPath}
+                onOpen={handleOpenPath}
+                onProbe={handleProbeJohnPerl}
+                onSave={handleSaveJohnPerl}
+              />
+            </TabsContent>
+          </WorkbenchDetails>
+        </Tabs>
+      </section>
     </div>
   )
 }

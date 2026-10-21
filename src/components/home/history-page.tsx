@@ -1,5 +1,8 @@
 "use client"
 
+import { FullText } from "@/components/home/full-text"
+import { WorkbenchDetails, WorkbenchDetailsActions } from "./workbench-details"
+
 import {
   Check,
   ChevronDown,
@@ -291,9 +294,9 @@ export function HistoryPage() {
     if (!target) {
       return
     }
-    setDeleteTarget(null)
     void runBusy(async () => {
       const deleted = await deleteRecoveryHistory(target.id)
+      setDeleteTarget(null)
       if (!(await load())) {
         if (deleted) {
           toast.warning("历史记录已删除，但列表刷新失败，请重试刷新", {
@@ -330,9 +333,9 @@ export function HistoryPage() {
   )
 
   const handleClear = React.useCallback(() => {
-    setClearDialogOpen(false)
     void runBusy(async () => {
       const removed = await clearRecoveryHistory()
+      setClearDialogOpen(false)
       setSearchInput("")
       if (!(await load("", 0))) {
         toast.warning(
@@ -525,10 +528,22 @@ export function HistoryPage() {
               }
               description={
                 loadFailed
-                  ? "请点击右上角刷新重试。"
+                  ? "暂时无法读取本机恢复记录，请重试。"
                   : appliedSearch
                     ? "试试压缩包名称或路径中的关键词，或清空搜索查看全部。"
                     : "成功解压后，会在这里保存压缩包原名、密码和文件位置。"
+              }
+              action={
+                loadFailed ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={handleRefresh}
+                  >
+                    重试读取历史
+                  </Button>
+                ) : undefined
               }
             />
           )}
@@ -558,7 +573,7 @@ export function HistoryPage() {
       <AlertDialog
         open={deleteTarget != null}
         onOpenChange={(open) => {
-          if (!open) {
+          if (!open && !operationBusy.current) {
             setDeleteTarget(null)
           }
         }}
@@ -575,19 +590,27 @@ export function HistoryPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               disabled={busy}
               onClick={handleDelete}
             >
-              删除
+              {busy ? (
+                <Spinner aria-hidden="true" data-icon="inline-start" />
+              ) : null}
+              {busy ? "删除中…" : "删除"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
+      <AlertDialog
+        open={clearDialogOpen}
+        onOpenChange={(open) => {
+          if (!operationBusy.current) setClearDialogOpen(open)
+        }}
+      >
         <AlertDialogContent size="default">
           <AlertDialogHeader>
             <AlertDialogTitle>清空解压历史</AlertDialogTitle>
@@ -596,13 +619,16 @@ export function HistoryPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               disabled={busy}
               onClick={handleClear}
             >
-              清空历史
+              {busy ? (
+                <Spinner aria-hidden="true" data-icon="inline-start" />
+              ) : null}
+              {busy ? "清空中…" : "清空历史"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -628,7 +654,6 @@ function HistoryLocations({
   onCopy: (path: string) => void
   onOpen: (path: string, kind: "archive" | "output") => void
 }) {
-  const [expanded, setExpanded] = React.useState(false)
   const locationsId = React.useId()
 
   if (!entry.archivePath && !entry.outputDirectory) {
@@ -670,10 +695,7 @@ function HistoryLocations({
             </dt>
             <dd className="flex min-w-0 flex-1 items-start gap-1">
               <span
-                className={cn(
-                  "min-w-0 flex-1 py-2.5 md:py-2",
-                  expanded ? "wrap-anywhere whitespace-pre-wrap" : "truncate"
-                )}
+                className="min-w-0 flex-1 py-2.5 wrap-anywhere whitespace-pre-wrap md:py-2"
                 title={path ?? undefined}
               >
                 {path || "—"}
@@ -708,20 +730,6 @@ function HistoryLocations({
           </div>
         ))}
       </dl>
-      <Button
-        size="xs"
-        variant="ghost"
-        className="mt-1 h-8 gap-1 px-1 text-xs text-muted-foreground md:h-7"
-        aria-expanded={expanded}
-        aria-controls={locationsId}
-        onClick={() => setExpanded((value) => !value)}
-      >
-        <ChevronDown
-          aria-hidden
-          className={cn("size-3.5", expanded && "rotate-180")}
-        />
-        {expanded ? "收起路径" : "展开路径"}
-      </Button>
     </div>
   )
 }
@@ -754,7 +762,7 @@ function HistoryEntry({
   return (
     <article
       aria-labelledby={titleId}
-      className="flex min-w-0 flex-col gap-3 p-4"
+      className="byte-history-entry flex min-w-0 flex-col gap-3 p-4"
     >
       <header className="flex items-start gap-3">
         <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground">
@@ -764,9 +772,11 @@ function HistoryEntry({
           <h2
             id={titleId}
             className="line-clamp-2 font-heading text-sm leading-5 font-semibold wrap-anywhere"
-            title={entry.archiveName ?? undefined}
           >
-            {historyEntryName(entry)}
+            <FullText
+              text={historyEntryName(entry)}
+              className="line-clamp-2 whitespace-normal"
+            />
           </h2>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
             <Badge variant="outline" className="rounded-md px-1.5 py-0">
@@ -785,32 +795,54 @@ function HistoryEntry({
             </time>
           </div>
         </div>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          className="text-muted-foreground"
-          disabled={busy}
-          onClick={onDelete}
-          aria-label={
-            entry.archiveName
-              ? `删除 ${entry.archiveName} 的记录`
-              : "删除此条历史记录"
-          }
-          title="删除记录"
-        >
-          <Trash2 />
-        </Button>
       </header>
 
       <div className="flex min-w-0 flex-col gap-3 md:flex-row md:items-start md:gap-6 md:pl-11">
-        <div className="min-w-0 flex-1">
-          <HistoryLocations
-            entry={entry}
-            busy={busy}
-            copiedPath={copiedPath}
-            onCopy={onCopyPath}
-            onOpen={onOpenPath}
-          />
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          {entry.outputDirectory ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => onOpenPath(entry.outputDirectory!, "output")}
+            >
+              <FolderOpen />
+              打开解压目录
+            </Button>
+          ) : null}
+          <WorkbenchDetails
+            title="记录详情"
+            description={historyEntryName(entry)}
+          >
+            <div className="min-w-0">
+              <HistoryLocations
+                entry={entry}
+                busy={busy}
+                copiedPath={copiedPath}
+                onCopy={onCopyPath}
+                onOpen={onOpenPath}
+              />
+            </div>
+            <WorkbenchDetailsActions>
+              {" "}
+              <Button
+                size="sm"
+                variant="ghost"
+                className="self-start text-destructive"
+                disabled={busy}
+                onClick={onDelete}
+                aria-label={
+                  entry.archiveName
+                    ? `删除 ${entry.archiveName} 的记录`
+                    : "删除此条历史记录"
+                }
+                title="删除记录"
+              >
+                <Trash2 />
+                删除记录
+              </Button>
+            </WorkbenchDetailsActions>
+          </WorkbenchDetails>
         </div>
         <div className="flex min-w-0 flex-col gap-2 border-t border-border/60 pt-3 md:w-72 md:shrink-0 md:border-t-0 md:border-l md:pt-0 md:pl-5">
           <span className="text-xs text-muted-foreground">解压密码</span>
@@ -832,10 +864,12 @@ function HistoryState({
   icon,
   title,
   description,
+  action,
 }: {
   icon: React.ReactNode
   title: string
   description: string
+  action?: React.ReactNode
 }) {
   return (
     <Empty className="h-full min-h-56 border-0 px-6 py-10">
@@ -846,6 +880,7 @@ function HistoryState({
           {description}
         </EmptyDescription>
       </EmptyHeader>
+      {action}
     </Empty>
   )
 }

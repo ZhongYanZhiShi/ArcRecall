@@ -44,6 +44,154 @@ const task = {
   events: [],
 }
 
+for (const theme of ["light", "dark"])
+  for (const [width, height] of [
+    [1280, 800],
+    [960, 640],
+    [1920, 1080],
+  ]) {
+    test(`完成补扫结果在首屏完整显示，无多余滚动（${theme} ${width}）`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height })
+      await mockDesktop(page, undefined, {
+        ...task,
+        scannedFileCount: 144,
+        elapsedMs: 40000,
+        skippedScanDirectories: Array.from(
+          { length: 21 },
+          (_, i) => `C:/fixtures/output/待扫描目录${i}`
+        ),
+      })
+      await page.goto("/")
+      await expect(page.getByLabel("本次任务统计")).toBeVisible()
+      if (theme === "light")
+        await page
+          .getByRole("button", { name: "切换到浅色", exact: true })
+          .click()
+      const content = page.locator(
+        '[data-workbench="extract"] [data-slot="workbench-page-content"]'
+      )
+      await content.evaluate((el) => {
+        el.scrollTop = 0
+      })
+      await expect(
+        page.getByRole("button", { name: "继续扫描剩余目录", exact: true })
+      ).toBeInViewport()
+      await expect(
+        page.getByRole("button", { name: "打开解压选项", exact: true })
+      ).toBeInViewport({ ratio: 1 })
+      expect(
+        await content.evaluate((el) => el.scrollHeight - el.clientHeight)
+      ).toBeLessThanOrEqual(1)
+      if (process.env.UI_COMPLETION_SHOTS) {
+        await mkdir(process.env.UI_COMPLETION_SHOTS, { recursive: true })
+        await page.screenshot({
+          path: `${process.env.UI_COMPLETION_SHOTS}/${theme}-${width}.png`,
+        })
+      }
+    })
+  }
+
+for (const width of [900, 390])
+  for (const mode of ["extract", "compress"]) {
+    test(`取消请求防重复，切页保留停止中状态，失败可再次取消（${mode} ${width}px）`, async ({
+      page,
+    }) => {
+      const active = {
+        ...task,
+        taskId: `${mode}-cancel-fixture`,
+        running: true,
+        completed: false,
+        success: false,
+        phase: mode === "compress" ? "compressing" : "extracting",
+        message: "正在处理测试归档",
+        recoveredPassword: null,
+        ...(mode === "compress"
+          ? {
+              outputPath: "C:/fixtures/result.zip",
+              totalSourceCount: 2,
+              processedSourceCount: 1,
+            }
+          : {}),
+      }
+      await mockDesktop(page, undefined, active)
+      await page.setViewportSize({ width, height: 650 })
+      await page.goto("/")
+      const name = mode === "compress" ? "压缩" : "解压"
+      const cancelLabel = mode === "compress" ? "取消压缩" : "取消任务"
+      await page
+        .getByRole("navigation")
+        .getByRole("button", { name, exact: true })
+        .click()
+      const cancel = page.getByRole("button", {
+        name: cancelLabel,
+        exact: true,
+      })
+      await expect(cancel).toBeVisible()
+      await cancel.evaluate((el) => {
+        el.click()
+        el.click()
+      })
+      await expect
+        .poll(() =>
+          page.evaluate(() => window.__ARC_TEST__.cancellations.length)
+        )
+        .toBe(1)
+      await expect(
+        page.getByRole("button", { name: "正在停止…", exact: true })
+      ).toBeDisabled()
+      await page
+        .getByRole("navigation")
+        .getByRole("button", { name: "字典", exact: true })
+        .click()
+      await page
+        .getByRole("navigation")
+        .getByRole("button", { name, exact: true })
+        .click()
+      await expect(
+        page.getByRole("button", { name: "正在停止…", exact: true })
+      ).toBeDisabled()
+      await page.evaluate(() =>
+        window.__ARC_TEST__.cancellations[0].reject(
+          new Error("停止请求暂不可用")
+        )
+      )
+      await expect(cancel).toBeEnabled()
+      await page.getByRole("button", { name: "关闭通知", exact: true }).click()
+      await cancel.click()
+      await expect
+        .poll(() =>
+          page.evaluate(() => window.__ARC_TEST__.cancellations.length)
+        )
+        .toBe(2)
+      await page.evaluate(() =>
+        window.__ARC_TEST__.cancellations[1].resolve(true)
+      )
+      await expect(
+        page.getByRole("button", { name: "正在停止…", exact: true })
+      ).toBeDisabled()
+      await page.evaluate(
+        (active) =>
+          window.__ARC_TEST__.setTask({
+            ...active,
+            running: false,
+            completed: true,
+            cancelled: true,
+            phase: "cancelled",
+            message: "任务已取消",
+          }),
+        active
+      )
+      await expect(
+        page.getByRole("button", { name: "正在停止…", exact: true })
+      ).toHaveCount(0)
+      expect(
+        await page.evaluate(() => window.__ARC_TEST__.cancellations.length)
+      ).toBe(2)
+    })
+  }
+
 async function mockDesktop(
   page,
   journal = { version: 1, enabled: false, items: [] },
@@ -59,6 +207,7 @@ async function mockDesktop(
         reports: [],
         saves: [],
         unexpected: [],
+        cancellations: [],
         setTask(next) {
           current = next
         },
@@ -114,7 +263,31 @@ async function mockDesktop(
             window.__ARC_TEST__.saves.push(args)
             return
           }
-          if (command === "recovery_status") return current
+          if (command === "recovery_status")
+            return "outputPath" in task ? null : current
+          if (command === "compression_status")
+            return "outputPath" in task ? current : null
+          if (command === "compression_password_status")
+            return { hasPassword: false }
+          if (command === "ai_profiles_list")
+            return {
+              profiles: [],
+              activeProfileId: "",
+              renamePrompt: "测试提示词",
+            }
+          if (
+            command === "recovery_cancel" ||
+            command === "compression_cancel"
+          ) {
+            return new Promise((resolve, reject) =>
+              window.__ARC_TEST__.cancellations.push({
+                command,
+                args,
+                resolve,
+                reject,
+              })
+            )
+          }
           if (command === "recovery_start") {
             window.__ARC_TEST__.starts.push(args.request)
             current = {
@@ -323,6 +496,9 @@ test("参考后缀标签支持多选、回车和按钮添加、自定义去重�
   await page.goto("/")
   await page.getByRole("button", { name: "压缩", exact: true }).click()
   await page
+    .getByRole("button", { name: "AI 命名 · 未开启", exact: true })
+    .click()
+  await page
     .getByRole("switch", { name: "使用 AI 优化名称", exact: true })
     .check()
   await page.getByRole("switch", { name: "参考文件内容", exact: true }).check()
@@ -360,8 +536,15 @@ test("参考后缀标签支持多选、回车和按钮添加、自定义去重�
   await tag(".rst").focus()
   await page.keyboard.press("Space")
   await expect(tag(".rst")).toHaveAttribute("aria-pressed", "false")
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "关闭", exact: true })
+    .click()
   await page.getByRole("button", { name: "解压", exact: true }).click()
   await page.getByRole("button", { name: "压缩", exact: true }).click()
+  await page
+    .getByRole("button", { name: "AI 命名 · 已开启", exact: true })
+    .click()
   await expect(tag(".rst")).toHaveAttribute("aria-pressed", "false")
   await expect(tag(".custom")).toHaveAttribute("aria-pressed", "true")
   await custom.fill("../txt")

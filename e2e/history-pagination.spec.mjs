@@ -85,8 +85,14 @@ for (const width of [1280, 390]) {
     await expect(
       page.getByRole("combobox", { name: "每页条数" })
     ).toContainText("100 组/页")
-    await root
+    await root.getByRole("button", { name: "记录详情", exact: true }).click()
+    await page
+      .getByRole("dialog")
       .getByRole("button", { name: "打开压缩包所在文件夹", exact: true })
+      .click()
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "关闭", exact: true })
       .click()
     await child
       .getByRole("button", { name: "打开解压目录", exact: true })
@@ -132,7 +138,7 @@ for (const width of [1280, 390]) {
 }
 
 for (const width of [1280, 900, 390, 320]) {
-  test(`长路径默认紧凑展示，展开和复制保留完整内容（${width}px）`, async ({
+  test(`长路径在详情抽屉完整展示，复制与关闭恢复列表焦点（${width}px）`, async ({
     page,
     context,
   }) => {
@@ -173,36 +179,31 @@ for (const width of [1280, 900, 390, 320]) {
     }, archivePath)
     await page.getByRole("button", { name: "刷新", exact: true }).click()
     const record = page.getByRole("article").filter({ hasText: "加密归档.dll" })
-    const path = record.getByTitle(archivePath, { exact: true })
-    await expect(path).toBeVisible()
-    await expect
-      .poll(() => path.evaluate((el) => el.scrollWidth > el.clientWidth))
-      .toBe(true)
-    const collapsed = await record.boundingBox()
-    expect(collapsed.height).toBeLessThan(340)
-    await page.screenshot({
-      path: test.info().outputPath("history-long-paths.png"),
-      animations: "disabled",
+    const compact = await record.boundingBox()
+    expect(compact.height).toBeLessThan(340)
+    await expect(record.getByTitle(archivePath, { exact: true })).toHaveCount(0)
+    const trigger = record.getByRole("button", {
+      name: "记录详情",
+      exact: true,
     })
-    const toggle = record.getByRole("button", { name: /^(展开|收起)路径$/ })
-    await toggle.focus()
-    await toggle.press("Enter")
-    await expect(toggle).toHaveAttribute("aria-expanded", "true")
+    await trigger.focus()
+    await trigger.press("Enter")
+    const details = page.getByRole("dialog", { name: "记录详情" })
+    const path = details.getByTitle(archivePath, { exact: true })
+    await expect(path).toBeVisible()
     await expect
       .poll(() => path.evaluate((el) => el.scrollWidth <= el.clientWidth))
       .toBe(true)
-    expect((await record.boundingBox()).height).toBeGreaterThan(
-      collapsed.height
-    )
-    await record
+    await details
       .getByRole("button", { name: "复制压缩包路径", exact: true })
       .click()
     await expect
       .poll(() => page.evaluate(() => navigator.clipboard.readText()))
       .toBe(archivePath)
-    await record.getByRole("button", { name: "收起路径", exact: true }).click()
-    await expect(toggle).toHaveAttribute("aria-expanded", "false")
-    expect((await record.boundingBox()).height).toBe(collapsed.height)
+    await page.keyboard.press("Escape")
+    await expect(details).not.toBeVisible()
+    await expect(trigger).toBeFocused()
+    expect((await record.boundingBox()).height).toBe(compact.height)
     expect(
       await page.evaluate(
         () =>
@@ -261,7 +262,7 @@ for (const width of [1280, 390]) {
     await expect(
       records.getByText("项目设计素材.7z", { exact: true })
     ).toBeVisible()
-    await expect(records.getByText("—", { exact: true })).toHaveCount(3)
+    await expect(records.getByText("—", { exact: true })).toHaveCount(2)
     await expect(page.getByRole("table")).toHaveCount(0)
     const first = await records.nth(0).boundingBox()
     const second = await records.nth(1).boundingBox()
@@ -329,6 +330,7 @@ for (const width of [1280, 390]) {
     await expect
       .poll(() => page.evaluate(() => navigator.clipboard.readText()))
       .toBe("www.example.com")
+    await records.getByRole("button", { name: "记录详情", exact: true }).click()
     await page
       .getByRole("button", { name: "复制压缩包路径", exact: true })
       .click()
@@ -343,6 +345,10 @@ for (const width of [1280, 390]) {
       .poll(() => page.evaluate(() => navigator.clipboard.readText()))
       .toBe("D:\\工作\\项目设计素材")
     await expect(page.locator("[data-sonner-toast]")).toHaveCount(1)
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "关闭", exact: true })
+      .click()
     await search.fill("已重命名")
     await search.press("Enter")
     await expect(
@@ -369,6 +375,10 @@ for (const width of [1280, 390]) {
     await expect(
       toaster.getByText("历史记录已刷新", { exact: true })
     ).toBeVisible()
+    await records
+      .filter({ hasText: "项目设计素材.7z" })
+      .getByRole("button", { name: "记录详情", exact: true })
+      .click()
     const deleteButton = page.getByRole("button", {
       name: "删除 项目设计素材.7z 的记录",
       exact: true,

@@ -1,0 +1,20 @@
+{
+  "build": { "beforeBuildCommand": "" },
+  "app": {
+    "security": {
+      "capabilities": [
+        "default",
+        {
+          "identifier": "native-layout-test",
+          "windows": ["main"],
+          "permissions": [
+            "core:window:allow-set-size",
+            "core:window:allow-set-position",
+            "core:window:allow-set-focus",
+            "core:webview:allow-set-webview-zoom"
+          ]
+        }
+      ]
+    }
+  }
+}

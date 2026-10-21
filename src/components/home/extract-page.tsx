@@ -477,16 +477,27 @@ export function ExtractPage({
     [computeMode, computeModeBusy, isInputLocked]
   )
 
+  const cancelRequest = React.useRef<string | null>(null)
+  const [cancellingTaskId, setCancellingTaskId] = React.useState<string | null>(
+    null
+  )
   const handleCancel = React.useCallback(async () => {
-    if (!activeTask?.running) {
+    if (!activeTask?.running || cancelRequest.current === activeTask.taskId) {
       return
     }
+    const taskId = activeTask.taskId
+    cancelRequest.current = taskId
+    setCancellingTaskId(taskId)
     try {
-      await cancelRecovery(activeTask.taskId)
+      await cancelRecovery(taskId)
       setTask((current) =>
-        current ? { ...current, message: "正在停止外部引擎…" } : current
+        current?.taskId === taskId && current.running
+          ? { ...current, message: "正在停止外部引擎…" }
+          : current
       )
     } catch (reason) {
+      if (cancelRequest.current === taskId) cancelRequest.current = null
+      setCancellingTaskId((current) => (current === taskId ? null : current))
       notifyExtractError(reason)
     }
   }, [setTask, activeTask])
@@ -673,6 +684,9 @@ export function ExtractPage({
       handleComputeModeChange={handleComputeModeChange}
       handleStart={handleStart}
       handleCancel={handleCancel}
+      cancelling={Boolean(
+        activeTask?.running && cancellingTaskId === activeTask.taskId
+      )}
       handleCopyPassword={handleCopyPassword}
       onOpenOutput={handleOpenOutput}
       onOpenDirectory={handleOpenDirectory}

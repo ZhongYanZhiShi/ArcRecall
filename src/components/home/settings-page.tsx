@@ -2,6 +2,7 @@
 
 import { ArrowLeft, Cpu, Database, Sparkles, Settings2 } from "lucide-react"
 import * as React from "react"
+import { toast } from "sonner"
 
 import {
   AiSettingsPanel,
@@ -31,6 +32,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 export type SettingsCategory = "ai" | "engine" | "app" | "data"
 
 export type SettingsPageHandle = {
+  canLeave: () => boolean
   saveAiChanges: () => Promise<boolean>
   discardAiChanges: () => void
 }
@@ -91,8 +93,12 @@ export const SettingsPage = React.forwardRef<
   ref
 ) {
   const aiSettingsPanelRef = React.useRef<AiSettingsPanelHandle>(null)
+  const settingsScrollRef = React.useRef<HTMLDivElement>(null)
   const [category, setCategory] =
     React.useState<SettingsCategory>(initialCategory)
+  React.useEffect(() => {
+    settingsScrollRef.current?.scrollTo({ top: 0 })
+  }, [category])
   const [visitedCategories, setVisitedCategories] = React.useState([
     initialCategory,
   ])
@@ -102,6 +108,16 @@ export const SettingsPage = React.forwardRef<
   const [pendingSettingsLeave, setPendingSettingsLeave] =
     React.useState<PendingSettingsLeave | null>(null)
   const [leaveSaveBusy, setLeaveSaveBusy] = React.useState(false)
+  const leaveOperation = React.useRef(false)
+  const canLeave = () => {
+    if (leaveOperation.current || aiSettingsPanelRef.current?.isSubmitting()) {
+      toast.info("AI 操作正在进行，请等待完成后再切换。", {
+        id: "settings-pending",
+      })
+      return false
+    }
+    return true
+  }
 
   if (handledCategoryRequestId !== categoryRequestId) {
     setHandledCategoryRequestId(categoryRequestId)
@@ -134,6 +150,7 @@ export const SettingsPage = React.forwardRef<
   )
 
   const requestCategoryChange = (next: SettingsCategory) => {
+    if (!canLeave()) return
     if (next === category) {
       return
     }
@@ -145,6 +162,7 @@ export const SettingsPage = React.forwardRef<
   }
 
   const requestReturn = () => {
+    if (!canLeave()) return
     if (category === "ai" && aiDirty) {
       setPendingSettingsLeave({ type: "return" })
       return
@@ -153,10 +171,11 @@ export const SettingsPage = React.forwardRef<
   }
 
   const handleSaveAndLeaveSettings = async () => {
-    if (!pendingSettingsLeave || leaveSaveBusy) {
+    if (!pendingSettingsLeave || leaveSaveBusy || leaveOperation.current) {
       return
     }
     const pending = pendingSettingsLeave
+    leaveOperation.current = true
     setLeaveSaveBusy(true)
     try {
       const saved = await aiSettingsPanelRef.current?.saveUnsavedChanges()
@@ -164,11 +183,13 @@ export const SettingsPage = React.forwardRef<
         completeSettingsLeave(pending)
       }
     } finally {
+      leaveOperation.current = false
       setLeaveSaveBusy(false)
     }
   }
 
   React.useImperativeHandle(ref, () => ({
+    canLeave,
     saveAiChanges: async () =>
       (await aiSettingsPanelRef.current?.saveUnsavedChanges()) ?? true,
     discardAiChanges: () => aiSettingsPanelRef.current?.discardUnsavedChanges(),
@@ -220,8 +241,15 @@ export const SettingsPage = React.forwardRef<
             })}
           </TabsList>
 
-          <div className="min-h-0 flex-1 scroll-fade overflow-y-auto pb-1">
-            <TabsContent value="ai" className="mt-0 outline-none">
+          <div
+            ref={settingsScrollRef}
+            className="byte-settings-scroll min-h-0 flex-1 scroll-fade overflow-y-auto pb-1"
+          >
+            <TabsContent
+              value="ai"
+              keepMounted={visitedCategories.includes("ai")}
+              className="mt-0 outline-none"
+            >
               <AiSettingsPanel
                 ref={aiSettingsPanelRef}
                 onDirtyChange={handleAiDirtyChange}
@@ -241,7 +269,11 @@ export const SettingsPage = React.forwardRef<
             >
               <AppSettingsPanel />
             </TabsContent>
-            <TabsContent value="data" className="mt-0 outline-none">
+            <TabsContent
+              value="data"
+              keepMounted={visitedCategories.includes("data")}
+              className="mt-0 outline-none"
+            >
               <DataSettingsPanel onRestored={onDatabaseRestored} />
             </TabsContent>
           </div>

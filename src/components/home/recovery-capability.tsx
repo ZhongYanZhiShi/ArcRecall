@@ -57,11 +57,13 @@ export function RecoveryCapabilityNotice({
   computeMode,
   error,
   onOpenEngineSettings,
+  showAction = true,
 }: {
   capabilities: RecoveryCapabilities | null
   computeMode: RecoveryComputeMode
   error: string | null
   onOpenEngineSettings: () => void
+  showAction?: boolean
 }) {
   const notice = resolveRecoveryCapabilityNotice(
     capabilities,
@@ -85,15 +87,17 @@ export function RecoveryCapabilityNotice({
             ))}
           </ul>
         ) : null}
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={onOpenEngineSettings}
-        >
-          <Settings2 data-icon="inline-start" />
-          前往解密引擎设置
-        </Button>
+        {showAction ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onOpenEngineSettings}
+          >
+            <Settings2 data-icon="inline-start" />
+            前往解密引擎设置
+          </Button>
+        ) : null}
       </AlertDescription>
     </Alert>
   )

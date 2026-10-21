@@ -1,3 +1,4 @@
+import { FullText } from "@/components/home/full-text"
 import {
   ChevronRight,
   CircleAlert,
@@ -20,6 +21,7 @@ import { OutputLocationField } from "@/components/home/output-location-field"
 import {
   RecoveryCapabilityBadge,
   RecoveryCapabilityNotice,
+  resolveRecoveryCapabilityNotice,
 } from "@/components/home/recovery-capability"
 import { RecoveryTaskResult } from "@/components/home/recovery-task-result"
 import {
@@ -32,7 +34,6 @@ import {
 import {
   WorkbenchPage,
   WorkbenchPageContent,
-  WorkbenchPageHeader,
 } from "@/components/layout/workbench-page"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -42,7 +43,6 @@ import {
   CardContent,
   CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card"
 import {
   Field,
@@ -122,6 +122,7 @@ type ExtractPageViewProps = {
   handleComputeModeChange: (mode: RecoveryComputeMode) => Promise<void>
   handleStart: () => Promise<void>
   handleCancel: () => Promise<void>
+  cancelling: boolean
   handleCopyPassword: () => Promise<void>
   onOpenDirectory: (path: string) => void
   onRescan?: () => void
@@ -173,6 +174,7 @@ export function ExtractPageView({
   handleComputeModeChange,
   handleStart,
   handleCancel,
+  cancelling,
   handleCopyPassword,
   onOpenOutput,
   onOpenDirectory,
@@ -212,10 +214,12 @@ export function ExtractPageView({
   const PasswordContainer = collapseRestart ? "details" : "div"
 
   return (
-    <WorkbenchPage data-workbench="extract" data-task-active={Boolean(task)}>
+    <WorkbenchPage
+      data-workbench="extract"
+      data-task-active={Boolean(task)}
+      data-task-completed={Boolean(task?.completed)}
+    >
       <WorkbenchPageContent className="overflow-y-auto pb-4">
-        <WorkbenchPageHeader title="解压" />
-
         <div
           className="byte-extract-stage"
           data-has-archive={Boolean(analysis || analyzingPath || task)}
@@ -267,15 +271,16 @@ export function ExtractPageView({
                   aria-busy={Boolean(analyzingPath)}
                   className="byte-archive-heading min-w-0 flex-1"
                 >
-                  <p
+                  <FullText
                     className="byte-archive-origin"
-                    title={task?.archivePath ?? analysis?.archivePath}
-                  >
-                    {task?.archivePath ??
+                    text={
+                      task?.archivePath ??
                       analysis?.archivePath ??
-                      analyzingPath}
-                  </p>
-                  <CardTitle className="byte-lead" data-phase={task?.phase}>
+                      analyzingPath ??
+                      ""
+                    }
+                  />
+                  <h1 className="byte-lead" data-phase={task?.phase}>
                     {task?.phase === "exhausted"
                       ? "需要密码"
                       : task?.success && !task.running
@@ -289,7 +294,7 @@ export function ExtractPageView({
                             (task
                               ? archiveNameFromPath(task.archivePath)
                               : ""))}
-                  </CardTitle>
+                  </h1>
                   <CardDescription className="mt-0.5 truncate text-xs leading-relaxed">
                     {analyzingName
                       ? "正在识别格式…"
@@ -298,7 +303,10 @@ export function ExtractPageView({
                         : null}
                   </CardDescription>
                 </div>
-                <div className="byte-archive-actions flex basis-full flex-wrap items-center gap-2 sm:basis-auto">
+                <div
+                  hidden={running}
+                  className="byte-archive-actions flex basis-full flex-wrap items-center gap-2 sm:basis-auto"
+                >
                   <Button
                     size="sm"
                     variant="outline"
@@ -322,7 +330,10 @@ export function ExtractPageView({
                     批量添加
                   </Button>
                 </div>
-                <div className="byte-archive-help flex basis-full flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2">
+                <div
+                  hidden={running}
+                  className="byte-archive-help flex basis-full flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2"
+                >
                   <p className="text-xs text-muted-foreground">
                     支持多文件拖入或多行路径粘贴
                     <Kbd className="ml-1">Ctrl + V</Kbd>
@@ -351,9 +362,9 @@ export function ExtractPageView({
                   >
                     <PackageOpen className="size-6" strokeWidth={1.75} />
                   </div>
-                  <h2 className="byte-lead">
+                  <h1 className="byte-lead">
                     {dragOver ? "松开，看看里面有什么。" : "打开压缩包。"}
-                  </h2>
+                  </h1>
                   <CardDescription className="max-w-lg text-xs leading-relaxed text-pretty">
                     支持 7z / ZIP / RAR，可识别错误后缀、无后缀及内嵌归档
                   </CardDescription>
@@ -402,61 +413,11 @@ export function ExtractPageView({
             副本位置：{repairedCopyPath}
           </p>
         ) : null}
-        <button
-          type="button"
-          onClick={() => setOptionsOpen(true)}
-          aria-label="打开解压选项"
-          aria-describedby="extract-options-summary"
-          className="workbench-panel mt-3 flex min-w-0 shrink-0 items-center gap-2 rounded-2xl border border-border/80 bg-card px-3 py-2.5 text-left transition-colors hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 focus-visible:outline-none"
-        >
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <Badge variant="secondary" className="font-normal">
-                {computeMode === "cpuOnly" ? (
-                  <Cpu className="size-3" />
-                ) : (
-                  <Zap className="size-3" />
-                )}
-                {computeModeLabel}
-              </Badge>
-              <Badge
-                variant={
-                  outputMode === "custom" && !outputDir
-                    ? "outline"
-                    : "secondary"
-                }
-                className="max-w-full font-normal"
-                title={outputSummaryLabel}
-              >
-                <span className="truncate">{outputChipLabel}</span>
-              </Badge>
-              <Badge variant="secondary" className="font-normal">
-                {recursive ? "递归扫描" : "仅主归档"}
-              </Badge>
-              {openWhenDone ? (
-                <Badge variant="outline" className="font-normal">
-                  完成后打开
-                </Badge>
-              ) : null}
-            </div>
-            <p
-              id="extract-options-summary"
-              className="truncate text-xs text-muted-foreground"
-              title={computeSummary}
-            >
-              {computeSummary}
-            </p>
-          </div>
-          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground">
-            选项
-            <ChevronRight className="size-3.5" />
-          </span>
-        </button>
 
         <Sheet open={optionsOpen} onOpenChange={setOptionsOpen}>
           <SheetContent
             side="right"
-            className="byte-extract-options gap-0 overflow-hidden p-0"
+            className="workbench-details-panel byte-extract-options gap-0 overflow-hidden p-0"
           >
             <SheetHeader className="shrink-0 border-b border-border/80 px-5 py-4 pr-14">
               <SheetTitle>解压选项</SheetTitle>
@@ -608,6 +569,7 @@ export function ExtractPageView({
                     )}
                   </div>
                   <RecoveryCapabilityNotice
+                    showAction={false}
                     capabilities={capabilities}
                     computeMode={computeMode}
                     error={capabilityError}
@@ -625,6 +587,28 @@ export function ExtractPageView({
                 </section>
               ) : null}
             </div>
+            {resolveRecoveryCapabilityNotice(
+              capabilities,
+              computeMode,
+              capabilityError
+            ) ? (
+              <div
+                className="shrink-0 border-t bg-background p-4"
+                data-slot="extract-options-footer"
+              >
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={onOpenEngineSettings}
+                  >
+                    <Settings2 data-icon="inline-start" />
+                    前往解密引擎设置
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </SheetContent>
         </Sheet>
 
@@ -680,9 +664,14 @@ export function ExtractPageView({
                     </InputGroupAddon>
                   </InputGroup>
                   {running ? (
-                    <Button variant="outline" onClick={handleCancel}>
+                    <Button
+                      variant="outline"
+                      onClick={handleCancel}
+                      disabled={cancelling}
+                      aria-busy={cancelling}
+                    >
                       <Square data-icon="inline-start" />
-                      取消
+                      {cancelling ? "正在停止…" : "取消"}
                     </Button>
                   ) : (
                     <Button
@@ -728,7 +717,7 @@ export function ExtractPageView({
 
         {task && !analysis ? (
           <section className="byte-recovery-flow mt-3 flex shrink-0 flex-col gap-2 pr-1 pb-1">
-            <Alert className="shrink-0">
+            <Alert className="shrink-0" hidden={task.completed}>
               <PackageOpen />
               <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
                 <span>
@@ -743,9 +732,11 @@ export function ExtractPageView({
                     size="xs"
                     variant="outline"
                     onClick={handleCancel}
+                    disabled={cancelling}
+                    aria-busy={cancelling}
                   >
                     <Square data-icon="inline-start" />
-                    取消任务
+                    {cancelling ? "正在停止…" : "取消任务"}
                   </Button>
                 ) : null}
               </AlertDescription>
@@ -768,6 +759,53 @@ export function ExtractPageView({
             />
           </section>
         ) : null}
+
+        <button
+          type="button"
+          onClick={() => setOptionsOpen(true)}
+          aria-label="打开解压选项"
+          aria-describedby="extract-options-summary"
+          className="workbench-panel mt-3 flex min-w-0 shrink-0 items-center gap-2 rounded-2xl border border-border/80 bg-card px-3 py-2.5 text-left transition-colors hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 focus-visible:outline-none"
+        >
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <span className="byte-option-item">
+                {computeMode === "cpuOnly" ? (
+                  <Cpu className="size-3" />
+                ) : (
+                  <Zap className="size-3" />
+                )}
+                {computeModeLabel}
+              </span>
+              <span
+                className={cn(
+                  "byte-option-item",
+                  outputMode === "custom" && !outputDir && "text-warning"
+                )}
+                title={outputSummaryLabel}
+              >
+                <span className="truncate">{outputChipLabel}</span>
+              </span>
+              <span className="byte-option-item">
+                {recursive ? "递归扫描" : "仅主归档"}
+              </span>
+              {openWhenDone ? (
+                <span className="byte-option-item">完成后打开</span>
+              ) : null}
+            </div>
+            <p
+              id="extract-options-summary"
+              className="truncate text-xs text-muted-foreground"
+              title={computeSummary}
+            >
+              {computeSummary}
+            </p>
+          </div>
+          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground">
+            选项
+            <ChevronRight className="size-3.5" />
+          </span>
+        </button>
 
         {queueContent}
 
@@ -829,9 +867,7 @@ function TaskPreflight({
     >
       <div className="min-w-0 px-4 py-3">
         <p className="text-xs font-medium text-muted-foreground">输出位置</p>
-        <p className="mt-1 truncate text-sm text-foreground" title={outputPath}>
-          {outputPath}
-        </p>
+        <FullText text={outputPath} className="mt-1 text-sm text-foreground" />
       </div>
       <div className="grid divide-y divide-border/60 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
         <PreflightItem label="同名处理" value={collisionPolicy} />

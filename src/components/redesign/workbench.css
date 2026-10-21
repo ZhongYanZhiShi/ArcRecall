@@ -49,7 +49,7 @@ html.byte.light {
   --secondary: #dfeceb;
   --secondary-foreground: #142c35;
   --muted: #e4eeee;
-  --muted-foreground: #516a75;
+  --muted-foreground: #405963;
   --accent: #d9eae7;
   --accent-foreground: #142c35;
   --border: #c5d8dc;
@@ -60,6 +60,123 @@ html.byte.light {
   --warning: #9e6508;
   --warning-foreground: #9e6508;
   --destructive: #b63a2a;
+}
+
+/* Controls need stronger boundaries than decorative dividers on both themes. */
+html.byte.dark {
+  --byte-control-border: #5c7d85;
+}
+html.byte.light {
+  --byte-control-border: #56717a;
+}
+.byte.light
+  :is(
+    [data-slot="button"],
+    [data-slot="alert-dialog-action"],
+    [data-slot="alert-dialog-cancel"]
+  ).bg-primary:hover:not(:disabled),
+.byte.light
+  :is(
+    [data-slot="button"],
+    [data-slot="alert-dialog-action"],
+    [data-slot="alert-dialog-cancel"]
+  ).bg-primary:active:not(:disabled) {
+  background: #066455;
+}
+.byte.light [data-slot="toggle-group-item"][aria-pressed="true"] {
+  --primary: #066455;
+}
+.byte:is(.dark, .light)
+  :is(
+    [data-slot="input"],
+    [data-slot="textarea"],
+    [data-slot="select-trigger"]
+  ):not(:focus-visible):not([aria-invalid="true"]),
+.byte:is(.dark, .light)
+  [data-slot="input-group"]:not(:focus-within):not(:has([aria-invalid="true"])),
+.byte:is(.dark, .light)
+  :is(
+    [data-slot="button"],
+    [data-slot="alert-dialog-action"],
+    [data-slot="alert-dialog-cancel"]
+  ).border-border:not(:focus-visible),
+.byte:is(.dark, .light)
+  [data-slot="toggle-group-item"][data-variant="outline"]:not(:focus-visible) {
+  border-color: var(--byte-control-border);
+}
+.byte:is(.dark, .light)
+  :is(
+    [data-slot="button"],
+    [data-slot="alert-dialog-action"],
+    [data-slot="alert-dialog-cancel"]
+  ).border-border:hover:not(:disabled) {
+  border-color: var(--primary);
+  background: var(--accent);
+}
+.byte:is(.dark, .light) [data-slot="toggle-group-item"][aria-pressed="true"] {
+  color: var(--primary);
+  background: var(--accent);
+  box-shadow: inset 0 -2px var(--primary);
+}
+.byte:is(.dark, .light)
+  :is(
+    [data-slot="button"],
+    [data-slot="alert-dialog-action"],
+    [data-slot="alert-dialog-cancel"]
+  ):disabled {
+  color: var(--muted-foreground);
+  background: var(--muted);
+  border-color: var(--border);
+  opacity: 1;
+}
+
+/* Portal surfaces retain a clear edge and fit short or narrow windows. */
+.byte
+  :is(
+    [data-slot="select-content"],
+    [data-slot="combobox-content"],
+    [data-slot="dropdown-menu-content"],
+    [data-slot="alert-dialog-content"]
+  ) {
+  border: 1px solid var(--byte-control-border);
+  border-radius: 0;
+  overflow-wrap: anywhere;
+}
+.byte :is([data-slot="select-content"], [data-slot="dropdown-menu-content"]) {
+  max-width: min(var(--available-width, 100vw), calc(100vw - 16px));
+}
+.byte [data-slot="alert-dialog-content"] {
+  width: calc(100vw - 32px);
+  gap: 16px;
+}
+.byte [data-slot="alert-dialog-footer"] {
+  flex-wrap: wrap;
+}
+.byte
+  :is(
+    [data-slot="select-item"],
+    [data-slot="combobox-item"],
+    [data-slot="dropdown-menu-item"]
+  ) {
+  border-radius: 0;
+}
+.byte
+  :is(
+    [data-slot="select-item"],
+    [data-slot="combobox-item"],
+    [data-slot="dropdown-menu-item"]
+  )[data-disabled] {
+  color: var(--muted-foreground);
+  opacity: 1;
+}
+.byte [data-sonner-toast] {
+  border-color: var(--byte-control-border);
+}
+.byte [data-sonner-toast] [data-content] {
+  min-width: 0;
+  max-height: min(240px, calc(100dvh - 160px));
+  overflow-y: auto;
+  overflow-wrap: anywhere;
 }
 
 /* Reserve a right-side field beside the extraction workspace. */
@@ -690,8 +807,62 @@ html.byte.light {
   white-space: nowrap;
 }
 .byte .byte-archive-heading .byte-lead {
-  font-size: clamp(28px, 3vw, 44px);
+  font-size: clamp(32px, 3.65vw, 52px);
   line-height: 1.2;
+}
+.byte [data-workbench="extract"] [data-slot="workbench-page-content"] {
+  padding-top: clamp(40px, 7vh, 72px);
+}
+.byte-extract-stage[data-has-archive="false"] {
+  padding-block: clamp(24px, 6vh, 64px) 32px;
+}
+.byte .byte-extract-stage[data-has-archive="false"] .byte-lead {
+  font-size: clamp(36px, 3.65vw, 52px);
+  line-height: 1.2;
+}
+.byte-extract-stage[data-has-archive="false"] [data-slot="card-description"] {
+  margin-top: 16px;
+  font-family: var(--font-app-sans);
+  font-size: 14px;
+  line-height: 1.8;
+}
+.byte-extract-stage[data-has-archive="false"] [data-slot="card-content"] {
+  padding-top: 24px;
+  gap: 20px;
+}
+.byte-extract-stage[data-has-archive="false"] [data-slot="button"] {
+  min-height: 46px;
+  padding-inline: 22px;
+  font-size: 14px;
+}
+.byte-extract-stage[data-has-archive="false"] [data-slot="card-content"] p {
+  font-size: 14px;
+  text-align: left;
+}
+.byte-archive-actions[hidden],
+.byte-archive-help[hidden] {
+  display: none;
+}
+.byte-option-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.byte-option-item + .byte-option-item::before {
+  content: "";
+  width: 1px;
+  height: 12px;
+  margin-inline: 6px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.byte [data-workbench="extract"] [aria-label="打开解压选项"] {
+  margin-top: 28px;
+  padding-block: 18px;
+  color: var(--muted-foreground);
 }
 .byte-archive-heading [data-phase="exhausted"] {
   color: var(--warning);
@@ -765,17 +936,24 @@ html.byte.light {
     [data-workbench="extract"]
     [data-slot="workbench-page-content"]
     > :not([data-slot="workbench-page-header"]):not([aria-label="批次队列"]) {
-    max-width: calc(100% - 360px);
+    width: 100%;
+    max-width: min(860px, calc(100% - 360px));
   }
   .byte-app[data-active-page="extract"] .byte-stream-right {
     right: max(16px, calc((100% - 1600px) / 2 + 16px));
-    width: 320px;
+    width: 400px;
     mask-image:
-      linear-gradient(90deg, transparent, #000 45%),
+      linear-gradient(90deg, transparent, #000 65%),
       linear-gradient(180deg, transparent, #000 25%, #000 75%, transparent);
   }
 }
 @media (max-width: 767px) {
+  .byte [data-workbench="extract"] [data-slot="workbench-page-content"] {
+    padding-top: 32px;
+  }
+  .byte-extract-stage[data-has-archive="false"] {
+    padding-block: 24px;
+  }
   .byte-result-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -801,10 +979,6 @@ html.byte.light {
   cursor: pointer;
   font-size: 13px;
   color: var(--muted-foreground);
-}
-.byte .byte-preflight summary:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 3px;
 }
 .byte [aria-label="字典恢复进度"] {
   border: 0;
@@ -842,10 +1016,6 @@ html.byte.light {
 }
 .byte-disclosure > summary:hover {
   color: var(--foreground);
-}
-.byte-disclosure > summary:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
 }
 .byte [aria-label="任务记忆"] {
   padding: 10px 12px;
@@ -943,6 +1113,66 @@ html.byte.light {
   }
 }
 
+/* Finished tasks keep primary results in the viewport; details can still expand. */
+.byte [data-workbench="extract"][data-task-completed="true"] {
+  & [data-slot="workbench-page-content"] {
+    padding-top: 18px;
+    padding-bottom: 12px;
+  }
+  & .byte-archive-heading .byte-lead {
+    font-size: clamp(26px, 2.5vw, 34px);
+    line-height: 1.2;
+  }
+  & .byte-archive-origin {
+    margin-bottom: 4px;
+  }
+  & .byte-archive-heading [data-slot="card-description"]:empty {
+    display: none;
+  }
+  & .byte-disclosure > summary {
+    padding-block: 6px;
+  }
+  & .byte-result-body {
+    padding-block: 4px;
+    gap: 8px;
+  }
+  & .byte-result-metrics > div {
+    padding-block: 6px;
+  }
+  & .byte-result-metrics dd {
+    margin-top: 2px;
+    font-size: 20px;
+  }
+  & [aria-label="打开解压选项"] {
+    margin-top: 4px;
+    padding-block: 8px;
+  }
+}
+.byte .byte-rescan-notice {
+  display: grid;
+  gap: 6px 16px;
+  padding: 10px 12px;
+}
+.byte .byte-rescan-notice > * {
+  margin-block: 0;
+}
+.byte .byte-rescan-notice > button {
+  justify-self: start;
+}
+@media (min-width: 768px) {
+  .byte .byte-rescan-notice {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .byte .byte-rescan-notice > p {
+    grid-column: 1;
+  }
+  .byte .byte-rescan-notice > button {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    align-self: center;
+  }
+}
+
 .byte-result-actions {
   display: flex;
   flex-wrap: wrap;
@@ -952,150 +1182,142 @@ html.byte.light {
 .byte-result-actions:empty {
   display: none;
 }
+@media (min-width: 600px) and (max-height: 600px) {
+  .byte {
+    & .byte-header {
+      flex-wrap: nowrap;
+      padding: 4px 20px 0;
+      gap: 16px;
+    }
+    & .byte-brand {
+      flex: none;
+      font-size: 13px;
+    }
+    & .byte-nav {
+      order: 0;
+      flex-basis: auto;
+      gap: 16px;
+    }
+    & .byte-nav-spacer {
+      display: block;
+    }
+  }
+  .byte [data-workbench="extract"][data-task-completed="true"] {
+    & [data-slot="workbench-page-content"] {
+      padding: 8px 20px;
+    }
+    & .byte-extract-stage[data-has-archive="true"] > [data-slot="card"] {
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 4px 12px;
+    }
+    & .byte-archive-heading .byte-lead {
+      font-size: 22px;
+    }
+    & .byte-archive-origin {
+      font-size: 11px;
+      line-height: 1.2;
+      margin-bottom: 3px;
+    }
+    & .byte-disclosure > summary {
+      padding-block: 3px;
+    }
+    & .byte-recovery-flow {
+      margin-top: 4px;
+      gap: 4px;
+      padding-bottom: 0;
+    }
+    & .byte-result-body {
+      padding: 0;
+      gap: 6px;
+    }
+    & .byte-result-metrics {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    & .byte-result-metrics > div {
+      padding: 4px 8px;
+    }
+    & .byte-result-metrics dt {
+      font-size: 11px;
+    }
+    & .byte-result-metrics dd {
+      font-size: 16px;
+      margin-top: 0;
+    }
+    & .byte-result-phase {
+      font-size: 13px;
+    }
+    & .byte-rescan-notice {
+      grid-template-columns: minmax(0, 1fr) auto;
+      padding: 6px 8px;
+      gap: 2px 10px;
+    }
+    & .byte-rescan-notice > p {
+      grid-column: 1;
+    }
+    & .byte-rescan-notice > button {
+      grid-column: 2;
+      grid-row: 1 / 3;
+      align-self: center;
+    }
+    & .byte-result-actions {
+      gap: 4px 10px;
+      align-items: center;
+    }
+    & [aria-label="打开解压选项"] {
+      margin-top: 2px;
+      padding-block: 4px;
+    }
+    & [aria-label="打开解压选项"] > div {
+      flex-direction: row;
+      align-items: center;
+      gap: 10px;
+    }
+    & #extract-options-summary {
+      max-width: 24ch;
+    }
+  }
+}
 .byte-result-actions [aria-label="导出任务报告"] {
   border: 0;
   padding-top: 0;
   min-width: 0;
   flex: 1;
 }
-/* Shared native and Base UI scrollbars, including portalled sheets and dialogs. */
-html.byte {
-  --byte-scroll-thumb: color-mix(
-    in oklab,
-    var(--muted-foreground) 42%,
-    var(--background)
-  );
-  --byte-scroll-hover: color-mix(
-    in oklab,
-    var(--primary) 48%,
-    var(--muted-foreground)
-  );
-  --byte-scroll-active: color-mix(
-    in oklab,
-    var(--primary) 72%,
-    var(--muted-foreground)
-  );
-}
-html.byte,
-.byte :not([data-slot="scroll-area-viewport"]) {
-  scrollbar-width: thin;
-  scrollbar-color: var(--byte-scroll-thumb) transparent;
-}
-/* Chromium/WebView2 gets a 6px visible rail inside a 10px drag target. */
-@supports selector(::-webkit-scrollbar) {
-  html.byte,
-  .byte :not([data-slot="scroll-area-viewport"]) {
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-  .byte::-webkit-scrollbar,
-  .byte :not([data-slot="scroll-area-viewport"])::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-  }
-  .byte::-webkit-scrollbar-track,
-  .byte ::-webkit-scrollbar-track,
-  .byte::-webkit-scrollbar-corner,
-  .byte ::-webkit-scrollbar-corner {
-    background: transparent;
-  }
-  .byte::-webkit-scrollbar-thumb,
-  .byte ::-webkit-scrollbar-thumb {
-    border: 2px solid transparent;
-    border-radius: 0;
-    background: var(--byte-scroll-thumb);
-    background-clip: padding-box;
-  }
-  .byte::-webkit-scrollbar-thumb:hover,
-  .byte ::-webkit-scrollbar-thumb:hover {
-    background-color: var(--byte-scroll-hover);
-  }
-  .byte::-webkit-scrollbar-thumb:active,
-  .byte ::-webkit-scrollbar-thumb:active {
-    background-color: var(--byte-scroll-active);
-  }
-  .byte::-webkit-scrollbar-button,
-  .byte ::-webkit-scrollbar-button {
-    display: none;
-    width: 0;
-    height: 0;
-  }
-}
-.byte [data-slot="scroll-area-scrollbar"] {
-  border: 0;
-  padding: 2px;
-  background: transparent;
-}
-.byte [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] {
-  width: 10px;
-}
-.byte [data-slot="scroll-area-scrollbar"][data-orientation="horizontal"] {
-  height: 10px;
-}
-.byte [data-slot="scroll-area-thumb"] {
-  border-radius: 0;
-  background: var(--byte-scroll-thumb);
-}
-.byte
-  [data-slot="scroll-area-scrollbar"]:hover
-  [data-slot="scroll-area-thumb"] {
-  background: var(--byte-scroll-hover);
-}
-.byte
-  [data-slot="scroll-area-scrollbar"]:active
-  [data-slot="scroll-area-thumb"] {
-  background: var(--byte-scroll-active);
-}
-@media (forced-colors: active) {
-  html.byte {
-    --byte-scroll-thumb: ButtonText;
-    --byte-scroll-hover: Highlight;
-    --byte-scroll-active: Highlight;
-  }
-  html.byte,
-  .byte :not([data-slot="scroll-area-viewport"]) {
-    scrollbar-color: auto;
-  }
-}
 /* Extraction options use one scroll surface under a fixed, compact header. */
 .byte .byte-extract-options {
-  width: min(100vw, 480px);
-  max-width: 480px;
+  width: min(100vw, 560px);
+  max-width: 560px;
   background: var(--background);
   border-radius: 0;
 }
 .byte-extract-options [data-slot="sheet-header"] {
-  padding: 24px 56px 20px 24px;
+  padding: 16px 56px 16px 16px;
 }
 .byte-extract-options [data-slot="sheet-title"] {
-  font-size: 20px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 500;
 }
 .byte-extract-options [data-slot="sheet-description"] {
   font-size: 12px;
   line-height: 1.7;
 }
 .byte-options-scroll {
-  padding: 0 24px;
+  padding: 0 12px;
   overscroll-behavior-y: contain;
   scrollbar-gutter: stable;
   scroll-padding-block: 20px;
-}
-.byte-options-scroll:focus-visible {
-  outline: 1px solid var(--ring);
-  outline-offset: -2px;
 }
 .byte-options-group {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding-block: 24px;
+  gap: 12px;
+  padding-block: 12px;
   border-bottom: 1px solid var(--border);
 }
 .byte-options-group:last-child {
   border-bottom: 0;
-  padding-bottom: 28px;
+  padding-bottom: 12px;
 }
 .byte-options-group > h3,
 .byte-options-group [data-slot="field-legend"] {
@@ -1142,13 +1364,704 @@ html.byte,
 }
 @media (max-width: 480px) {
   .byte-extract-options [data-slot="sheet-header"] {
-    padding-left: 20px;
+    padding-left: 16px;
   }
   .byte-options-scroll {
-    padding-inline: 20px;
+    padding-inline: 12px;
   }
   .byte-options-group {
-    padding-block: 20px;
+    padding-block: 12px;
     gap: 12px;
   }
+}
+
+/* Task pages use a compact rhythm; the extraction stage keeps its own hierarchy. */
+.byte
+  [data-workbench]:not([data-workbench="extract"])
+  [data-slot="workbench-page-content"] {
+  padding: 24px 32px 20px;
+  max-width: 1480px;
+}
+.byte
+  [data-workbench]:not([data-workbench="extract"])
+  [data-slot="workbench-page-header"] {
+  margin-bottom: 12px;
+}
+.byte
+  [data-workbench]:not([data-workbench="extract"])
+  [data-slot="workbench-page-header"]
+  h1 {
+  font-size: 28px;
+}
+.byte
+  [data-workbench]:not([data-workbench="extract"])
+  [data-slot="workbench-page-header"]
+  p {
+  margin-top: 6px;
+  font-size: 13px;
+}
+.byte
+  [data-workbench="settings"]:not([data-workbench="extract"])
+  [data-slot="workbench-page-content"] {
+  max-width: 1200px;
+}
+.byte [data-workbench="settings"] [data-slot="tabs-list"] {
+  margin-bottom: 4px;
+  gap: 8px;
+}
+.byte [data-workbench="settings"] [data-slot="tabs-trigger"] {
+  height: 38px;
+}
+.byte [data-workbench="settings"] [data-slot="card"],
+.byte [data-workbench="settings"] .byte-settings-grid > [data-slot="card"] {
+  padding-block: 12px;
+  gap: 12px;
+}
+.byte [data-workbench="settings"] [data-slot="card-header"] {
+  padding-bottom: 12px;
+}
+.byte .byte-compress-stage {
+  gap: 24px;
+}
+.byte .byte-compress-stage > [data-slot="card"]:last-child {
+  padding-left: 24px;
+}
+.byte .byte-compress-stage > [data-slot="card"] > [data-slot="card-header"] {
+  padding-bottom: 12px;
+}
+.byte [data-workbench="compress"] [data-slot="empty"] {
+  max-height: 240px;
+}
+.byte
+  .byte-compress-stage
+  > [data-slot="card"]:last-child
+  [data-slot="card-footer"] {
+  gap: 8px;
+  padding-block: 12px;
+}
+.byte [data-slot="history-scroll-area"] article {
+  padding-block: 12px;
+  gap: 8px;
+}
+.byte [data-workbench="logs"] [aria-label="日志概览"] {
+  padding-block: 4px;
+}
+.byte [data-workbench="logs"] [aria-label="日志概览"] > * {
+  padding-block: 6px;
+}
+.byte [data-workbench="logs"] [data-slot="empty"] {
+  height: auto;
+  min-height: 220px;
+  padding-block: 32px;
+}
+/* Drawers stay attached to the edge; only their contents scroll. */
+.workbench-details-panel[data-slot="sheet-content"][data-side="right"] {
+  inset: 0 0 0 auto;
+  width: min(560px, 100vw);
+  max-width: none;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+  border: 0;
+  border-left: 1px solid var(--border);
+}
+.workbench-details-panel [data-slot="sheet-description"] {
+  overflow-wrap: anywhere;
+}
+.workbench-details-panel [data-slot="sheet-header"] {
+  padding: 16px 56px 16px 16px;
+}
+.workbench-details-panel [data-slot="tabs-list"],
+.workbench-details-panel [data-slot="tabs-trigger"] {
+  border-radius: 0;
+}
+/* Notifications stay above the fixed drawer action bar. */
+.byte:has([data-slot="sheet-content"])
+  [data-sonner-toaster][data-y-position="bottom"] {
+  bottom: 96px;
+}
+.workbench-details-panel [data-slot="card"] {
+  gap: 12px;
+  padding-block: 12px;
+}
+.workbench-details-panel [data-slot="card-header"] {
+  padding-bottom: 12px;
+}
+/* A drawer already supplies its frame and title; sections need no second card. */
+.workbench-details-panel .drawer-section[data-slot="card"] {
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.workbench-details-panel .drawer-section > [data-slot="card-header"],
+.workbench-details-panel .drawer-section > [data-slot="card-content"] {
+  padding: 0;
+  border: 0;
+}
+.workbench-details-body {
+  gap: 12px;
+  padding: 12px;
+}
+.workbench-details-panel > [data-slot$="-footer"] {
+  padding: 12px;
+}
+@media (min-width: 768px) {
+  .byte .byte-compress-stage {
+    max-height: min(680px, calc(100dvh - 164px));
+  }
+}
+@media (min-width: 900px) and (max-width: 1199px) {
+  .byte .byte-compress-stage {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 520px);
+  }
+}
+@media (min-width: 1200px) {
+  .byte .byte-compress-stage {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  }
+  .byte [data-slot="history-scroll-area"] .byte-history-entry {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) minmax(600px, 1.4fr);
+    align-items: center;
+    column-gap: 20px;
+  }
+  .byte-history-entry > div {
+    padding-left: 0;
+    align-items: center;
+    gap: 16px;
+  }
+  .byte-history-entry > div > div:last-child {
+    width: 288px;
+    padding-left: 16px;
+  }
+}
+@media (max-width: 767px) {
+  .byte
+    [data-workbench]:not([data-workbench="extract"])
+    [data-slot="workbench-page-content"] {
+    padding: 16px 16px 12px;
+  }
+  .byte
+    [data-workbench]:not([data-workbench="extract"])
+    [data-slot="workbench-page-header"]
+    h1 {
+    font-size: 24px;
+  }
+  .byte .byte-compress-stage {
+    gap: 16px;
+  }
+  .byte .byte-compress-stage > [data-slot="card"]:last-child {
+    padding-left: 0;
+    padding-top: 12px;
+  }
+  .byte [data-workbench="compress"] [data-slot="empty"] {
+    height: 160px;
+  }
+}
+
+/* Keep the action attached to its form instead of stretching it to the stage edge. */
+@media (min-width: 768px) {
+  .byte .byte-compress-stage > [data-slot="card"]:last-child {
+    align-self: start;
+  }
+  .byte
+    .byte-compress-stage
+    > [data-slot="card"]:last-child
+    > [data-slot="card-content"] {
+    flex: 0 1 auto;
+  }
+  .byte .byte-compress-stage [data-testid="compress-settings-scroll"],
+  .byte
+    .byte-compress-stage
+    [data-testid="compress-settings-scroll"]
+    > [data-slot="scroll-area-viewport"] {
+    height: auto;
+    max-height: min(540px, calc(100dvh - 300px));
+  }
+}
+
+@media (min-width: 1200px) {
+  .byte
+    .byte-compress-stage
+    > [data-slot="card"]:last-child
+    [data-slot="card-footer"] {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 16px;
+  }
+  .byte
+    .byte-compress-stage
+    > [data-slot="card"]:last-child
+    [data-slot="card-footer"]
+    > button {
+    width: auto;
+    min-width: 180px;
+  }
+}
+
+/* Short windows reserve space for controls; long content scrolls within panels. */
+@media (max-height: 800px) {
+  .byte
+    [data-workbench]:not([data-workbench="extract"]):not(
+      [data-workbench="compress"]
+    )
+    [data-slot="workbench-page-content"] {
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+  .byte [data-workbench="settings"] [data-slot="card"] {
+    padding-block: 8px;
+    gap: 8px;
+  }
+  .byte [data-workbench="settings"] .byte-settings-grid > [data-slot="card"] {
+    align-self: stretch;
+  }
+  .byte [data-ai-profile-fields] {
+    gap: 8px;
+  }
+  .workbench-details-panel [data-slot="sheet-header"] {
+    padding-block: 12px;
+  }
+  .workbench-details-body {
+    padding: 12px;
+    gap: 12px;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: stable;
+    scroll-padding-block: 12px;
+  }
+  .workbench-details-body [data-slot="field"] {
+    gap: 8px;
+  }
+  .workbench-details-body textarea {
+    max-height: 30dvh;
+    overflow-y: auto;
+  }
+  .byte-extract-options [data-slot="sheet-header"] {
+    padding: 12px 56px 12px 16px;
+  }
+  .byte-options-scroll {
+    padding-inline: 12px;
+    scroll-padding-block: 12px;
+  }
+  .byte-options-group {
+    gap: 8px;
+    padding-block: 12px;
+  }
+  .byte-options-group:last-child {
+    padding-bottom: 12px;
+  }
+}
+
+/* The prompt editor consumes the drawer body; actions remain outside its scroll area. */
+@media (max-height: 650px) {
+  .byte
+    :is(
+      [data-workbench="dictionary"],
+      [data-workbench="history"],
+      [data-workbench="logs"]
+    )
+    [data-slot="empty"] {
+    height: auto;
+    min-height: 0;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  .byte
+    :is(
+      [data-workbench="dictionary"],
+      [data-workbench="history"],
+      [data-workbench="logs"]
+    )
+    [data-slot="empty-header"] {
+    gap: 4px;
+  }
+  .byte
+    :is(
+      [data-workbench="dictionary"],
+      [data-workbench="history"],
+      [data-workbench="logs"]
+    )
+    [data-slot="empty-icon"] {
+    width: 24px;
+    height: 24px;
+    margin-bottom: 0;
+  }
+}
+@media (min-width: 768px) and (max-height: 650px) {
+  .byte
+    [data-workbench="settings"]:not([data-workbench="extract"])
+    [data-slot="workbench-page-header"] {
+    margin-bottom: 0;
+  }
+  .byte [data-workbench="settings"] [data-slot="tabs-trigger"] {
+    height: 32px;
+  }
+  .byte [data-workbench="settings"] [data-slot="card-header"] {
+    padding-bottom: 8px;
+  }
+  .byte [data-ai-profile-fields] [data-slot="field"] {
+    gap: 6px;
+  }
+}
+@media (min-width: 768px) and (max-height: 625px) {
+  .byte [data-workbench="settings"] [data-slot="workbench-page-header"] p {
+    display: none;
+  }
+}
+@media (min-width: 768px) and (max-width: 899px) {
+  .byte .byte-compress-stage .byte-compress-output {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.workbench-details-body.ai-prompt-body > [data-slot="field"],
+.workbench-details-body.dictionary-add-body > .dictionary-paste-field {
+  flex: 1 0 160px;
+  min-height: 160px;
+}
+.workbench-details-body.ai-prompt-body textarea,
+.workbench-details-body.dictionary-add-body textarea {
+  field-sizing: fixed;
+  flex: 1 1 auto;
+  min-height: 120px;
+  height: 100%;
+  max-height: none;
+  resize: none;
+  overflow-y: auto;
+}
+
+/* Preserve room for retry above pagination in very short history windows. */
+@media (max-height: 550px) {
+  .byte [data-workbench="history"] [data-slot="empty"] {
+    gap: 6px;
+    padding: 4px 8px;
+  }
+  .byte [data-workbench="history"] [data-slot="empty-icon"] {
+    display: none;
+  }
+}
+
+/* Compact desktop windows keep the common settings and action together. */
+@media (min-width: 768px) and (max-width: 1199px) {
+  .byte
+    [data-workbench="compress"]:not([data-workbench="extract"])
+    [data-slot="workbench-page-content"] {
+    padding-top: 12px;
+  }
+  .byte .byte-compress-settings {
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  .byte .byte-compress-output {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 180px;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 8px;
+  }
+  .byte .byte-compress-output > [data-slot="toggle-group"] {
+    margin-top: 0;
+  }
+  .byte .byte-compress-output > div:last-child {
+    grid-column: 1 / -1;
+    margin-top: 0;
+    min-height: 32px;
+    padding-block: 4px;
+  }
+  .byte .byte-compress-stage [data-testid="compress-settings-scroll"],
+  .byte
+    .byte-compress-stage
+    [data-testid="compress-settings-scroll"]
+    > [data-slot="scroll-area-viewport"] {
+    max-height: calc(100dvh - 213px);
+  }
+  @container (min-width: 30rem) {
+    .byte .byte-compress-security {
+      grid-template-columns: 160px minmax(0, 1fr);
+      gap: 8px 12px;
+    }
+    .byte .byte-compress-security [data-slot="input-group"] {
+      min-width: 140px;
+    }
+  }
+  .byte
+    .byte-compress-stage
+    > [data-slot="card"]:last-child
+    [data-slot="card-footer"] {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding-block: 4px;
+  }
+  .byte
+    .byte-compress-stage
+    > [data-slot="card"]:last-child
+    [data-slot="card-footer"]
+    > button {
+    width: auto;
+    min-width: 144px;
+  }
+}
+/* Desktop zoom can reduce the logical viewport below the normal tablet breakpoint. */
+@media (min-width: 600px) and (max-height: 600px) {
+  .byte
+    [data-workbench]:not([data-workbench="extract"])
+    [data-slot="workbench-page-content"] {
+    padding: 8px 16px;
+  }
+  .byte [data-slot="workbench-page-header"] {
+    margin-bottom: 4px;
+  }
+  .byte [data-slot="workbench-page-header"] h1 {
+    font-size: 22px;
+  }
+  .byte [data-slot="workbench-page-header"] p {
+    display: none;
+  }
+  .byte [data-workbench="settings"] [data-slot="tabs-trigger"] {
+    height: 30px;
+  }
+  .byte-ai-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    padding-block: 8px;
+    background: var(--background);
+    border-top: 1px solid var(--border);
+  }
+  .byte .byte-compress-stage {
+    grid-template-columns: minmax(0, 0.65fr) minmax(0, 1.35fr);
+    height: calc(100dvh - 100px);
+    max-height: calc(100dvh - 100px);
+    gap: 12px;
+  }
+  .byte .byte-compress-stage > [data-slot="card"] {
+    height: 100%;
+    min-height: 0;
+  }
+  .byte .byte-compress-stage > [data-slot="card"]:last-child {
+    align-self: stretch;
+    padding: 0 0 0 12px;
+  }
+  .byte .byte-compress-stage > [data-slot="card"] > [data-slot="card-header"] {
+    padding-block: 4px;
+  }
+  .byte .byte-compress-stage > [data-slot="card"] > [data-slot="card-content"] {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .byte .byte-compress-stage [data-testid="compress-settings-scroll"],
+  .byte
+    .byte-compress-stage
+    [data-testid="compress-settings-scroll"]
+    > [data-slot="scroll-area-viewport"] {
+    height: 100%;
+    max-height: none;
+  }
+  .byte
+    .byte-compress-stage
+    > [data-slot="card"]:last-child
+    [data-slot="card-footer"] {
+    padding-block: 6px;
+    gap: 6px;
+  }
+  .byte
+    .byte-compress-stage
+    > [data-slot="card"]:last-child
+    [data-slot="card-footer"]
+    > p {
+    display: none;
+  }
+  .byte [data-workbench="compress"] [data-slot="empty"] {
+    height: auto;
+    min-height: 0;
+    padding: 12px;
+  }
+  .byte [data-workbench="compress"] .byte-lead {
+    font-size: 18px;
+  }
+}
+
+.byte-ai-actions {
+  margin-inline: 16px;
+}
+@media (min-width: 600px) and (max-height: 600px) {
+  .byte-settings-scroll > [data-slot="tabs-content"]:has(.byte-ai-panel),
+  .byte-ai-panel {
+    height: 100%;
+    min-height: 0;
+  }
+  .byte-ai-panel > [data-slot="card"] {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .byte-ai-panel > [data-slot="card"] > [data-slot="card-header"],
+  .byte-ai-actions {
+    flex-shrink: 0;
+  }
+  .byte-ai-panel > [data-slot="card"] > [data-slot="card-content"] {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .byte-ai-actions {
+    position: static;
+    padding-block: 4px;
+  }
+  .byte-engine-panel {
+    gap: 8px;
+  }
+  .byte-engine-actions {
+    order: -1;
+    padding-top: 0;
+    border-top: 0;
+  }
+  .byte-engine-actions > div:first-child {
+    display: none;
+  }
+  .byte-engine-panel
+    > [data-slot="card"]
+    > [data-slot="card-header"]
+    [data-slot="card-description"] {
+    display: none;
+  }
+  .byte-engine-panel [data-slot="radio-group"] [data-slot="field"] {
+    padding: 8px;
+    gap: 6px;
+  }
+}
+
+@media (min-width: 600px) and (max-height: 600px) {
+  .byte [data-workbench="compress"] [data-slot="workbench-page-content"] {
+    overflow: hidden;
+  }
+  .byte .byte-compress-stage {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+    max-height: none;
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 600px) and (max-height: 600px) {
+  .byte [data-workbench="settings"] [data-slot="workbench-page-header"] {
+    margin-bottom: 0;
+  }
+  .byte [data-workbench="settings"] [data-slot="tabs-list"] {
+    margin-bottom: 4px;
+  }
+}
+
+@media (min-width: 600px) and (max-height: 600px) {
+  .byte
+    [data-workbench="settings"]:not([data-workbench="extract"])
+    [data-slot="workbench-page-header"] {
+    margin-bottom: 0;
+  }
+  .byte
+    [data-workbench="settings"]:not([data-workbench="extract"])
+    [data-slot="workbench-page-header"]
+    h1 {
+    font-size: 22px;
+  }
+  .byte .byte-app-settings [data-slot="card-content"] {
+    gap: 8px;
+  }
+  .byte .byte-app-settings [data-slot="toggle-group-item"] {
+    min-height: 48px;
+  }
+}
+
+@media (max-height: 500px) {
+  .workbench-details-panel [data-slot="sheet-header"] {
+    padding-block: 8px;
+  }
+  .workbench-details-body {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .workbench-details-panel > [data-slot$="-footer"] {
+    padding-block: 8px;
+  }
+  .workbench-details-body.dictionary-add-body > .dictionary-paste-field {
+    flex: 1 1 120px;
+    min-height: 120px;
+  }
+  .workbench-details-body.dictionary-add-body textarea {
+    min-height: 80px;
+  }
+}
+
+/* Variable-length names must yield space to the adjacent actions. */
+.byte-ai-panel aside {
+  min-width: 0;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.byte .byte-compress-stage [data-slot="card-footer"] > div {
+  max-width: 100%;
+}
+.byte-packing-list {
+  padding-right: 12px;
+}
+@media (max-width: 900px) {
+  .byte-packing-list > li > div {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) repeat(3, 28px);
+    gap: 6px;
+    padding-block: 10px;
+  }
+  .byte-packing-list > li > div > div {
+    grid-column: 2 / -1;
+  }
+  .byte-packing-list > li > div > span {
+    grid-column: 2;
+  }
+}
+
+@media (min-width: 600px) and (max-height: 800px) {
+  .byte-settings-scroll > [data-slot="tabs-content"]:has(.byte-ai-panel),
+  .byte-ai-panel {
+    height: 100%;
+    min-height: 0;
+  }
+  .byte-ai-panel > [data-slot="card"] {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .byte-ai-panel > [data-slot="card"] > [data-slot="card-header"],
+  .byte-ai-actions {
+    flex-shrink: 0;
+  }
+  .byte-ai-panel > [data-slot="card"] > [data-slot="card-content"] {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .byte-ai-actions {
+    position: static;
+    padding-block: 4px;
+    border-top: 1px solid var(--border);
+  }
+}
+
+.byte .full-text-tooltip {
+  max-width: min(560px, calc(100vw - 24px));
+  max-height: min(320px, calc(100dvh - 24px));
+  overflow-y: auto;
+  border: 1px solid var(--byte-control-border);
+  border-radius: 4px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  line-height: 1.6;
+  box-shadow: 0 4px 16px #0003;
+}
+.byte .full-text-tooltip > [aria-hidden="true"] {
+  display: none;
 }

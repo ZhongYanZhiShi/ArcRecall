@@ -1,5 +1,74 @@
 import { test, expect } from "@playwright/test"
 
+test("中等宽度的输出位置开关与目录选项不重叠", async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 600 })
+  await page.goto("/")
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "压缩", exact: true })
+    .click()
+  const output = page.locator(".byte-compress-output")
+  await expect(output).toBeVisible()
+  const heading = await output.locator(":scope > div").first().boundingBox()
+  const options = await output
+    .locator('[data-slot="toggle-group"]')
+    .boundingBox()
+  expect(options.y).toBeGreaterThanOrEqual(heading.y + heading.height)
+  await expect(
+    page.getByRole("button", { name: "开始压缩", exact: true })
+  ).toBeInViewport({ ratio: 1 })
+})
+
+for (const [width, height] of [
+  [900, 650],
+  [768, 600],
+]) {
+  test(`小窗口切换设置分类后回到顶部，AI 保存按钮完整可见（${width}×${height}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height })
+    await page.goto("/")
+    await page.getByRole("button", { name: "设置", exact: true }).click()
+    await page.getByRole("tab", { name: "解密引擎", exact: true }).click()
+    await page
+      .getByRole("button", { name: "引擎管理", exact: true })
+      .scrollIntoViewIfNeeded()
+    await page.getByRole("tab", { name: "AI 模型", exact: true }).click()
+    await expect(
+      page.getByRole("button", { name: "新建配置", exact: true })
+    ).toBeInViewport({ ratio: 1 })
+    await expect(
+      page.getByRole("button", { name: "保存配置", exact: true })
+    ).toBeInViewport({ ratio: 1 })
+    const prompt = page.getByRole("button", {
+      name: "重命名提示词",
+      exact: true,
+    })
+    await expect(prompt).toBeInViewport({ ratio: 1 })
+    await prompt.click()
+    const drawer = page.getByRole("dialog", { name: "归档重命名提示词" })
+    await expect(drawer).toBeVisible()
+    const bounds = await drawer.boundingBox()
+    expect(bounds.y).toBe(0)
+    expect(bounds.height).toBe(height)
+    await expect(
+      drawer.getByRole("heading", { name: "归档重命名提示词", exact: true })
+    ).toHaveCount(1)
+    const editor = drawer.getByRole("textbox", {
+      name: "AI 重命名提示词",
+      exact: true,
+    })
+    expect((await editor.boundingBox()).height).toBeGreaterThan(300)
+    await editor.fill("根据资料内容生成简洁的归档名称。\n".repeat(150))
+    await expect(
+      drawer.getByRole("button", { name: "保存提示词", exact: true })
+    ).toBeInViewport({ ratio: 1 })
+    await expect(
+      drawer.getByRole("button", { name: "关闭", exact: true })
+    ).toBeInViewport({ ratio: 1 })
+  })
+}
+
 for (const width of [2560, 1920, 1280, 900, 390, 320]) {
   test(`主入口使用字节流界面并保留跨页草稿与主题切换（${width}px）`, async ({
     page,
@@ -88,7 +157,11 @@ for (const width of [2560, 1920, 390]) {
       )
       await expect(content).toBeVisible()
       await expect(
-        content.getByRole("heading", { level: 1, name: label, exact: true })
+        content.getByRole("heading", {
+          level: 1,
+          name: id === "extract" ? "打开压缩包。" : label,
+          exact: true,
+        })
       ).toBeVisible()
       const bounds = await content.boundingBox()
       expect(bounds.width).toBeLessThanOrEqual(limit)

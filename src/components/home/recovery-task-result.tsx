@@ -29,7 +29,6 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Separator } from "@/components/ui/separator"
 import {
   Sheet,
   SheetContent,
@@ -262,7 +261,7 @@ export function RecoveryTaskResult({
             </div>
           ) : null}
           {task.completed && skippedDirectories.length > 0 ? (
-            <div className="mt-2 space-y-2 rounded-lg bg-warning/10 p-3 text-xs">
+            <div className="byte-rescan-notice mt-2 space-y-2 rounded-lg bg-warning/10 p-3 text-xs">
               <p className="text-warning-foreground">
                 已解压的文件可直接使用。继续扫描可查找剩余目录中的嵌套压缩包。
               </p>
@@ -286,8 +285,10 @@ export function RecoveryTaskResult({
             onOpenDirectory={onOpenDirectory}
             onRetryArchives={onRetryArchives}
           />
+        </div>
+        <div className="byte-result-actions">
           {task.recoveredPassword != null ? (
-            <div className="mt-2 flex items-center gap-2">
+            <div className="byte-result-password flex items-center gap-2">
               <code className="max-w-full truncate rounded bg-muted px-2 py-1 text-xs">
                 {showPassword ? task.recoveredPassword : "••••••••"}
               </code>
@@ -317,8 +318,6 @@ export function RecoveryTaskResult({
               </Button>
             </div>
           ) : null}
-        </div>
-        <div className="byte-result-actions">
           {task.success || task.rootExtractionCompleted ? (
             <div className="flex flex-wrap items-center gap-2">
               {!task.running &&
@@ -438,7 +437,10 @@ function RecoveryProcessDetails({
       </div>
 
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent side="right">
+        <SheetContent
+          side="right"
+          className="workbench-details-panel gap-0 p-0"
+        >
           <SheetHeader className="shrink-0 border-b border-border/80 px-5 py-4 pr-14">
             <div className="flex flex-wrap items-center gap-2">
               <SheetTitle>解压与扫描详细过程</SheetTitle>
@@ -469,7 +471,7 @@ function RecoveryProcessDetails({
             </div>
           </SheetHeader>
 
-          <ScrollArea className="min-h-0 flex-1 px-5 py-2">
+          <ScrollArea className="min-h-0 flex-1 px-3 py-2">
             <p className="border-b border-border py-3 text-xs leading-relaxed text-muted-foreground">
               {task.message}
             </p>
@@ -552,19 +554,6 @@ function RecoveryProcessDetails({
                         {selectedPaths.length === retryPaths.length
                           ? "取消全选"
                           : "全选未完成归档"}
-                      </Button>
-                      <Button
-                        size="xs"
-                        disabled={
-                          !onRetryArchives || selectedPaths.length === 0
-                        }
-                        onClick={() => {
-                          onRetryArchives?.(selectedPaths)
-                          setSelection([])
-                          setOpen(false)
-                        }}
-                      >
-                        加入重试队列（{selectedPaths.length}）
                       </Button>
                     </div>
                   </div>
@@ -687,10 +676,29 @@ function RecoveryProcessDetails({
             </ol>
           </ScrollArea>
 
-          <Separator />
-          <p className="shrink-0 px-5 py-3 text-xs text-muted-foreground">
-            候选密码不显示、不记录。
-          </p>
+          <div
+            className="shrink-0 border-t bg-background px-5 py-4"
+            data-slot="recovery-details-footer"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                候选密码不显示、不记录。
+              </p>
+              {task.completed && retryPaths.length > 0 ? (
+                <Button
+                  size="xs"
+                  disabled={!onRetryArchives || selectedPaths.length === 0}
+                  onClick={() => {
+                    onRetryArchives?.(selectedPaths)
+                    setSelection([])
+                    setOpen(false)
+                  }}
+                >
+                  加入重试队列（{selectedPaths.length}）
+                </Button>
+              ) : null}
+            </div>
+          </div>
         </SheetContent>
       </Sheet>
     </>

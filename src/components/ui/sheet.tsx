@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { Dialog as SheetPrimitive } from "@base-ui/react/dialog"
+import { toast } from "sonner"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -58,6 +59,7 @@ function SheetContent({
         )}
         {...props}
       >
+        <ClearPreviousNotifications />
         {children}
         {showCloseButton && (
           <SheetPrimitive.Close
@@ -77,6 +79,14 @@ function SheetContent({
       </SheetPrimitive.Popup>
     </SheetPortal>
   )
+}
+
+function ClearPreviousNotifications() {
+  React.useEffect(() => {
+    // Notifications from the previous view must not obscure the new focus scope.
+    toast.dismiss()
+  }, [])
+  return null
 }
 
 function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {

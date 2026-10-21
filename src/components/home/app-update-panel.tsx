@@ -1,5 +1,7 @@
 "use client"
 
+import { WorkbenchDetailsActions } from "./workbench-details"
+
 import { Download, RefreshCw } from "lucide-react"
 
 import { useAppUpdate } from "@/components/update-provider"
@@ -10,7 +12,6 @@ import {
   CardContent,
   CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card"
 import {
   Field,
@@ -47,14 +48,11 @@ export function AppUpdatePanel() {
   }
 
   return (
-    <Card size="sm">
+    <Card size="sm" className="drawer-section">
       <CardHeader className="border-b border-border/80">
-        <div className="flex items-center gap-2">
-          <CardTitle>应用更新</CardTitle>
-          {status.currentVersion ? (
-            <Badge variant="outline">v{status.currentVersion}</Badge>
-          ) : null}
-        </div>
+        {status.currentVersion ? (
+          <Badge variant="outline">当前版本 v{status.currentVersion}</Badge>
+        ) : null}
         <CardDescription>
           获取 ArcRecall 正式版更新，保留本机设置、字典和历史记录。
         </CardDescription>
@@ -101,7 +99,7 @@ export function AppUpdatePanel() {
             </p>
           </details>
         ) : null}
-        <div className="flex flex-wrap gap-2">
+        <WorkbenchDetailsActions>
           <Button
             variant="outline"
             disabled={
@@ -123,7 +121,7 @@ export function AppUpdatePanel() {
               {busy ? "正在安装…" : "安装更新并重启"}
             </Button>
           ) : null}
-        </div>
+        </WorkbenchDetailsActions>
         {status.phase === "ready" ? (
           <p className="text-xs text-muted-foreground">
             请先保存未提交的设置。正在运行任务时无法安装；关闭应用后需重新下载更新。

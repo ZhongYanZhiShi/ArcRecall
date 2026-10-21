@@ -12,6 +12,8 @@ function Toaster(props: ToasterProps) {
       theme={theme as ToasterProps["theme"]}
       position="bottom-right"
       duration={2_000}
+      closeButton
+      toastOptions={{ closeButtonAriaLabel: "关闭通知" }}
       hotkey={[]}
       customAriaLabel="通知"
       style={

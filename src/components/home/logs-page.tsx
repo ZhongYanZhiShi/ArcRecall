@@ -1,14 +1,14 @@
 "use client"
 
+import { WorkbenchDetails } from "./workbench-details"
+
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   DatabaseBackup,
   Download,
-  FileJson,
   FolderOpen,
   MoreHorizontal,
   RefreshCw,
@@ -38,11 +38,6 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -314,14 +309,16 @@ export function LogsPage() {
     }
   }, [autoRefresh, autoRefreshPaused, refresh, refreshQueue])
 
+  const actionRunning = React.useRef(false)
   const runAction = React.useCallback(
     async (
       nextAction: "export" | "backup" | "clear" | "directory",
       operation: () => Promise<string>
     ) => {
-      if (action) {
+      if (action || actionRunning.current) {
         return
       }
+      actionRunning.current = true
       setAction(nextAction)
       try {
         toast.success(await operation(), { id: "logs-action", duration: 6_000 })
@@ -332,6 +329,7 @@ export function LogsPage() {
           duration: 6_000,
         })
       } finally {
+        actionRunning.current = false
         setAction(null)
       }
     },
@@ -360,10 +358,10 @@ export function LogsPage() {
   }
 
   const handleClear = () => {
-    setClearDialogOpen(false)
     setPageIndex(0)
     void runAction("clear", async () => {
       const removed = await clearLogs()
+      setClearDialogOpen(false)
       return `历史日志已清空，共移除 ${removed} 个日志文件。`
     })
   }
@@ -422,7 +420,14 @@ export function LogsPage() {
                 }
               >
                 <MoreHorizontal data-icon="inline-start" />
-                日志工具
+                {action
+                  ? {
+                      export: "导出中…",
+                      backup: "备份中…",
+                      clear: "清空中…",
+                      directory: "打开中…",
+                    }[action]
+                  : "日志工具"}
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" sideOffset={8}>
                 <DropdownMenuGroup>
@@ -459,58 +464,42 @@ export function LogsPage() {
           }
         />
 
-        <Card
-          size="sm"
+        <div
           aria-label="日志概览"
-          className="grid shrink-0 grid-cols-2 gap-px overflow-hidden bg-border py-0 shadow-sm sm:grid-cols-4"
+          className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-y py-3"
         >
-          <SummaryMetric
-            label="当前可见"
-            value={String(visibleEntries.length)}
-            hint={
-              compactMode && hiddenRoutineCount > 0
-                ? `已加载 ${result?.entries.length ?? 0} · 收起 ${hiddenRoutineCount}`
-                : `已加载 ${result?.entries.length ?? 0} · 共匹配 ${result?.matchedCount ?? 0}`
-            }
-            icon={<FileJson className="size-4" />}
-          />
-          <SummaryMetric
-            label="需关注"
-            value={String((stats?.errorCount ?? 0) + (stats?.warnCount ?? 0))}
-            hint={
-              <>
-                <span className="font-medium text-destructive">
-                  {stats?.errorCount ?? 0} 错误
-                </span>
-                <span aria-hidden>·</span>
-                <span className="font-medium text-warning-foreground">
-                  {stats?.warnCount ?? 0} 警告
-                </span>
-              </>
-            }
-            icon={<AlertTriangle className="size-4" />}
-            tone="attention"
-            active={level === "attention"}
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-pressed={level === "attention"}
             onClick={() => {
               setLevel("attention")
               setSearchText("")
               setDisplayMode("summary")
               setPageIndex(0)
             }}
-          />
-          <SummaryMetric
-            label="磁盘占用"
-            value={formatBytes(stats?.diskBytes ?? 0)}
-            hint={`${stats?.fileCount ?? 0} 个文件`}
-            icon={<DatabaseBackup className="size-4" />}
-          />
-          <SummaryMetric
-            label="隐私保护"
-            value="已启用"
-            hint="敏感字段写入前脱敏"
-            icon={<ShieldCheck className="size-4" />}
-          />
-        </Card>
+          >
+            <AlertTriangle />
+            {stats?.errorCount ?? 0} 错误 · {stats?.warnCount ?? 0} 警告
+          </Button>
+          <WorkbenchDetails
+            title="日志诊断"
+            description="本机日志存储与隐私保护信息。"
+          >
+            <SummaryMetric
+              label="磁盘占用"
+              value={formatBytes(stats?.diskBytes ?? 0)}
+              hint={`${stats?.fileCount ?? 0} 个文件`}
+              icon={<DatabaseBackup className="size-4" />}
+            />
+            <SummaryMetric
+              label="隐私保护"
+              value="已启用"
+              hint="敏感字段写入前脱敏"
+              icon={<ShieldCheck className="size-4" />}
+            />
+          </WorkbenchDetails>
+        </div>
 
         <Card size="sm" className="min-h-0 flex-1 gap-0 overflow-hidden py-0">
           <CardContent className="flex h-full min-h-0 flex-col p-0">
@@ -660,9 +649,30 @@ export function LogsPage() {
                       icon={<CheckCircle2 className="size-5" />}
                       title="没有需要关注的摘要"
                       description="切换到“全部事件”查看常规记录。"
-                    />
+                    >
+                      <Button
+                        variant="outline"
+                        onClick={() => setDisplayMode("all")}
+                      >
+                        查看全部事件
+                      </Button>
+                    </LogState>
                   )}
                 </>
+              ) : error ? (
+                <LogState
+                  icon={<AlertTriangle className="size-5" />}
+                  title="日志读取失败"
+                  description="暂时无法读取本机日志，请重试。"
+                >
+                  <Button
+                    variant="outline"
+                    disabled={refreshing}
+                    onClick={() => void refresh()}
+                  >
+                    {refreshing ? "正在重试" : "重试读取日志"}
+                  </Button>
+                </LogState>
               ) : (
                 <LogState
                   icon={<CheckCircle2 className="size-5" />}
@@ -678,7 +688,20 @@ export function LogsPage() {
                         ? "尝试调整级别或搜索条件。"
                         : "新的运行事件会自动出现在这里。"
                   }
-                />
+                >
+                  {level === "attention" ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setLevel("all")
+                        setDisplayMode("all")
+                        setPageIndex(0)
+                      }}
+                    >
+                      查看全部事件
+                    </Button>
+                  ) : null}
+                </LogState>
               )}
             </div>
 
@@ -719,7 +742,12 @@ export function LogsPage() {
         </Card>
       </WorkbenchPageContent>
 
-      <AlertDialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
+      <AlertDialog
+        open={clearDialogOpen}
+        onOpenChange={(open) => {
+          if (!actionRunning.current) setClearDialogOpen(open)
+        }}
+      >
         <AlertDialogContent size="default">
           <AlertDialogHeader>
             <AlertDialogTitle>清空本机日志</AlertDialogTitle>
@@ -728,13 +756,13 @@ export function LogsPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={isBusy}>取消</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               disabled={isBusy}
               onClick={handleClear}
             >
-              清空日志
+              {isBusy ? "清空中…" : "清空日志"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -849,28 +877,23 @@ function LogRow({
             {presentation.description}
           </p>
         ) : null}
-        <Collapsible
+        <WorkbenchDetails
+          title="技术详情"
+          description={presentation.title}
           open={expanded}
           onOpenChange={onExpandedChange}
-          className="group mt-1.5"
         >
-          <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-md text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30">
-            技术详情
-            <ChevronDown className="size-3 transition-transform group-data-[open]/collapsible:rotate-180" />
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <dl className="mt-2 grid gap-1.5 rounded-lg border border-border/70 bg-muted/20 p-2 text-xs sm:grid-cols-2">
-              <TechnicalField
-                label="来源"
-                value={`${sourceLabel(entry.source)}（${entry.source}）`}
-              />
-              <TechnicalField label="事件标识" value={entry.event} />
-              {context.map(([key, value]) => (
-                <TechnicalField key={key} label={key} value={value} />
-              ))}
-            </dl>
-          </CollapsibleContent>
-        </Collapsible>
+          <dl className="grid gap-1.5 text-xs sm:grid-cols-2">
+            <TechnicalField
+              label="来源"
+              value={`${sourceLabel(entry.source)}（${entry.source}）`}
+            />
+            <TechnicalField label="事件标识" value={entry.event} />
+            {context.map(([key, value]) => (
+              <TechnicalField key={key} label={key} value={value} />
+            ))}
+          </dl>
+        </WorkbenchDetails>
       </div>
     </li>
   )
@@ -891,9 +914,11 @@ function LogState({
   icon,
   title,
   description,
+  children,
 }: {
   icon: React.ReactNode
   title: string
+  children?: React.ReactNode
   description?: string
 }) {
   return (
@@ -905,6 +930,7 @@ function LogState({
           <EmptyDescription className="text-xs">{description}</EmptyDescription>
         ) : null}
       </EmptyHeader>
+      {children}
     </Empty>
   )
 }

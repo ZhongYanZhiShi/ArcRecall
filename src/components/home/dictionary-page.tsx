@@ -204,13 +204,18 @@ export function DictionaryPage() {
       } catch (error) {
         const message =
           error instanceof Error ? error.message : String(error ?? "未知错误")
-        toast.error(`操作失败：${message}`, {
-          id: "dictionary-action",
-          duration: 6_000,
-        })
+        if (inAddPanel) {
+          setStatusTone("error")
+          setAddFeedback(`添加失败：${message}。输入内容已保留，可重试。`)
+        }
+        if (!inAddPanel) {
+          toast.error(`操作失败：${message}`, {
+            id: "dictionary-action",
+            duration: 6_000,
+          })
+        }
       } finally {
         setStatus("")
-        setAddFeedback("")
         operationBusy.current = false
         setIsBusy(false)
       }
@@ -307,11 +312,10 @@ export function DictionaryPage() {
       feedback += " 列表刷新失败，请刷新列表查看已添加的候选。"
       tone = "error"
     }
-    if (tone === "error") {
-      toast.warning(feedback, { id: "dictionary-action", duration: 6_000 })
-    } else {
-      toast.success(feedback, { id: "dictionary-action", duration: 4_000 })
-    }
+    // Keep the result in the fixed drawer footer so the next focused field stays clear.
+    toast.dismiss("dictionary-action")
+    setStatusTone(tone)
+    setAddFeedback(feedback)
   }
 
   const handleDeleteConfirm = () => {
@@ -319,10 +323,10 @@ export function DictionaryPage() {
       return
     }
     const count = selectedIds.size
-    setDeleteDialogOpen(false)
     void runBusy("正在删除候选…", async () => {
       const ids = [...selectedIds]
       await deleteDictionaryCandidates(ids)
+      setDeleteDialogOpen(false)
       setSelectedIds(new Set())
       const result = await loadEntries(appliedSearch, pageIndex)
       toast.success(
@@ -417,7 +421,7 @@ export function DictionaryPage() {
       return
     }
     void runBusy(
-      "正在添加候选…",
+      "正在批量添加候选…",
       async () => {
         const candidates = splitLines(pastedCandidates)
         const summary = await addDictionaryCandidates(candidates)
@@ -510,7 +514,16 @@ export function DictionaryPage() {
             <>
               <Button size="sm" disabled={isBusy} onClick={openAddPanel}>
                 <Plus data-icon="inline-start" />
-                添加
+                添加密码
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isBusy}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <FileUp />
+                导入字典
               </Button>
               <Button
                 size="sm"
@@ -570,7 +583,7 @@ export function DictionaryPage() {
           size="sm"
           className="shrink-0 gap-0 py-0 shadow-sm ring-border/60"
         >
-          <CardContent className="flex items-center gap-2 py-2.5">
+          <CardContent className="flex items-center gap-2 px-0 py-2.5">
             {selectedIds.size > 0 ? (
               <div
                 role="group"
@@ -861,28 +874,48 @@ export function DictionaryPage() {
               ) : null}
             </div>
           ) : null}
-          <TablePagination
-            label="字典分页"
-            pageIndex={pageIndex}
-            pageSize={pageSize}
-            totalCount={matchedCount}
-            busy={isBusy}
-            onPageChange={handlePageChange}
-            onPageSizeChange={handlePageSizeChange}
-          />
+          {matchedCount > 0 ? (
+            <TablePagination
+              label="字典分页"
+              pageIndex={pageIndex}
+              pageSize={pageSize}
+              totalCount={matchedCount}
+              busy={isBusy}
+              onPageChange={handlePageChange}
+              onPageSizeChange={handlePageSizeChange}
+            />
+          ) : null}
         </Card>
       </WorkbenchPageContent>
 
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".txt,.dic,.lst,text/plain"
+        className="sr-only"
+        tabIndex={-1}
+        aria-label="导入候选字典文件"
+        disabled={isBusy}
+        onChange={(event) => {
+          const file = event.target.files?.[0] ?? null
+          event.target.value = ""
+          handleImportFile(file)
+        }}
+      />
       {/* 添加候选：右侧抽屉，保留字典列表上下文 */}
       <Sheet open={addPanelOpen} onOpenChange={setAddPanelOpen}>
-        <SheetContent side="right" showCloseButton className="gap-0 p-0">
-          <SheetHeader className="shrink-0 border-b border-border/80 pr-12">
-            <SheetTitle>添加候选</SheetTitle>
+        <SheetContent
+          side="right"
+          showCloseButton
+          className="workbench-details-panel gap-0 p-0"
+        >
+          <SheetHeader className="shrink-0 border-b border-border/80 p-4 pr-12">
+            <SheetTitle>添加密码</SheetTitle>
             <SheetDescription>每行一个密码，重复项自动跳过。</SheetDescription>
           </SheetHeader>
 
-          <div className="flex min-h-0 flex-1 scroll-fade flex-col gap-4 overflow-y-auto px-6 py-4 pb-24">
-            <Card size="sm" className="gap-0 py-0 shadow-none ring-border/60">
+          <div className="workbench-details-body dictionary-add-body flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 [&>*]:shrink-0">
+            <Card size="sm" className="drawer-section gap-0">
               <CardHeader className="flex flex-row items-center justify-between gap-3 py-3">
                 <div className="min-w-0">
                   <CardTitle className="text-sm">批量导入</CardTitle>
@@ -899,20 +932,6 @@ export function DictionaryPage() {
                   <FileUp data-icon="inline-start" />
                   选择文件
                 </Button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".txt,.dic,.lst,text/plain"
-                  className="sr-only"
-                  tabIndex={-1}
-                  aria-label="导入候选字典文件"
-                  disabled={isBusy}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0] ?? null
-                    event.target.value = ""
-                    handleImportFile(file)
-                  }}
-                />
               </CardHeader>
             </Card>
 
@@ -952,7 +971,7 @@ export function DictionaryPage() {
               </InputGroup>
             </Field>
 
-            <Field>
+            <Field className="dictionary-paste-field">
               <FieldLabel
                 htmlFor="dict-paste"
                 className="text-xs text-muted-foreground"
@@ -966,47 +985,61 @@ export function DictionaryPage() {
                 disabled={isBusy}
                 rows={6}
                 placeholder={"每行一条\n例如：\npassword1\npassword2"}
-                className="min-h-28 resize-y rounded-xl font-mono text-xs"
+                className="rounded-xl font-mono text-xs"
               />
+            </Field>
+          </div>
+          <div
+            data-slot="dictionary-add-footer"
+            className="shrink-0 border-t bg-background p-4"
+          >
+            {addFeedback ? (
+              <div className="mb-3 max-h-20 overflow-y-auto">
+                <p
+                  role="status"
+                  className={`text-sm break-all whitespace-pre-wrap ${statusTone === "error" ? "text-destructive" : "text-muted-foreground"}`}
+                >
+                  {addFeedback}
+                </p>
+                {loadState === "error" ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-2"
+                    disabled={isBusy}
+                    onClick={() => {
+                      setAddPanelOpen(false)
+                      handleRefresh()
+                    }}
+                  >
+                    刷新列表
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="flex justify-end">
               <Button
-                variant="outline"
                 size="sm"
                 disabled={isBusy || pastedCandidates.length === 0}
                 onClick={handleAddPasted}
+                aria-busy={isBusy && addFeedback.startsWith("正在批量")}
               >
-                添加多行
+                {isBusy && addFeedback.startsWith("正在批量")
+                  ? "添加中…"
+                  : "添加多行"}
               </Button>
-            </Field>
-          </div>
-          {addFeedback ? (
-            <div className="max-h-40 shrink-0 overflow-y-auto border-t px-6 py-4">
-              <p
-                role="status"
-                className={`text-sm break-all whitespace-pre-wrap ${statusTone === "error" ? "text-destructive" : "text-muted-foreground"}`}
-              >
-                {addFeedback}
-              </p>
-              {loadState === "error" ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="mt-2"
-                  disabled={isBusy}
-                  onClick={() => {
-                    setAddPanelOpen(false)
-                    handleRefresh()
-                  }}
-                >
-                  刷新列表
-                </Button>
-              ) : null}
             </div>
-          ) : null}
+          </div>
         </SheetContent>
       </Sheet>
 
       {/* 删除确认 */}
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+      <AlertDialog
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          if (!operationBusy.current) setDeleteDialogOpen(open)
+        }}
+      >
         <AlertDialogContent size="default">
           <AlertDialogHeader>
             <AlertDialogTitle>删除候选</AlertDialogTitle>
@@ -1015,13 +1048,13 @@ export function DictionaryPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={isBusy}>取消</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               disabled={isBusy || selectedIds.size === 0}
               onClick={handleDeleteConfirm}
             >
-              删除
+              {isBusy ? "删除中…" : "删除"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

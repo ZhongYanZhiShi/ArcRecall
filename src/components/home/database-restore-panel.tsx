@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { invoke } from "@tauri-apps/api/core"
 import { openRememberingDirectory } from "@/lib/file-dialog"
 import { Button } from "@/components/ui/button"
+import { Spinner } from "@/components/ui/spinner"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,13 +34,19 @@ export function DatabaseRestorePanel({
   onRestored: () => void
 }) {
   const [preview, setPreview] = React.useState<RestorePreview | null>(null)
-  const [busy, setBusy] = React.useState(false)
+  const [pendingAction, setPendingAction] = React.useState<
+    "backup" | "preview" | "restore" | null
+  >(null)
+  const busy = pendingAction !== null
   const [message, setMessage] = React.useState<string | null>(null)
   const operation = React.useRef(false)
-  const run = async (action: () => Promise<void>) => {
+  const run = async (
+    kind: "backup" | "preview" | "restore",
+    action: () => Promise<void>
+  ) => {
     if (operation.current) return
     operation.current = true
-    setBusy(true)
+    setPendingAction(kind)
     setMessage(null)
     try {
       await action()
@@ -50,7 +57,7 @@ export function DatabaseRestorePanel({
       })
     } finally {
       operation.current = false
-      setBusy(false)
+      setPendingAction(null)
     }
   }
   const dismiss = () => {
@@ -74,21 +81,24 @@ export function DatabaseRestorePanel({
           size="sm"
           disabled={busy || !isDesktopRuntime()}
           onClick={() =>
-            void run(async () => {
+            void run("backup", async () => {
               const result = await backupDatabase()
               setMessage(`备份位置：${result.path}`)
               toast.success("数据库备份已创建", { id: "database-action" })
             })
           }
         >
-          创建备份
+          {pendingAction === "backup" ? (
+            <Spinner aria-hidden="true" data-icon="inline-start" />
+          ) : null}
+          {pendingAction === "backup" ? "正在备份…" : "创建备份"}
         </Button>
         <Button
           variant="outline"
           size="sm"
           disabled={busy || !isDesktopRuntime()}
           onClick={() =>
-            void run(async () => {
+            void run("preview", async () => {
               const path = await openRememberingDirectory("database-backup", {
                 multiple: false,
                 directory: false,
@@ -109,7 +119,10 @@ export function DatabaseRestorePanel({
             })
           }
         >
-          {busy ? "正在处理…" : "从备份恢复"}
+          {pendingAction === "preview" ? (
+            <Spinner aria-hidden="true" data-icon="inline-start" />
+          ) : null}
+          {pendingAction === "preview" ? "正在读取备份…" : "从备份恢复"}
         </Button>
       </div>
       {message ? (
@@ -144,7 +157,7 @@ export function DatabaseRestorePanel({
             <AlertDialogAction
               disabled={busy || !preview || preview.unreadablePasswordCount > 0}
               onClick={() =>
-                void run(async () => {
+                void run("restore", async () => {
                   if (!preview) return
                   if (
                     isDictionaryImportRunning() ||

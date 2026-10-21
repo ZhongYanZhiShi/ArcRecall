@@ -11,23 +11,24 @@ for (const width of [1280, 390, 320]) {
     await page.getByRole("button", { name: "字典", exact: true }).click()
     await expect(page.getByText(/解压时自动尝试这些候选密码。/)).toBeVisible()
     await expect(page.getByText("字典还是空的")).toBeVisible()
-    await page.getByRole("button", { name: "添加", exact: true }).click()
+    await page.getByRole("button", { name: "添加密码", exact: true }).click()
     const sheet = page.getByRole("dialog")
     const notifications = page.locator("[data-sonner-toaster]")
+    const addFeedback = sheet.getByRole("status")
     const candidate = "long-password-".repeat(12) + "独特后缀"
     await sheet.getByLabel("新增单条", { exact: true }).fill(candidate)
     await sheet.getByRole("button", { name: "添加", exact: true }).click()
-    await expect(notifications).toContainText("新增 1")
+    await expect(addFeedback).toContainText("新增 1")
     await sheet.getByLabel("新增单条", { exact: true }).fill(candidate)
     await sheet.getByRole("button", { name: "添加", exact: true }).click()
-    await expect(notifications).toContainText("重复 1")
-    await expect(notifications).toBeInViewport()
+    await expect(addFeedback).toContainText("重复 1")
+    await expect(addFeedback).toBeInViewport()
     await sheet
       .getByLabel("粘贴多行", { exact: true })
       .fill(`${candidate}\nsecond-password`)
     await sheet.getByRole("button", { name: "添加多行", exact: true }).click()
-    await expect(notifications).toContainText("新增 1")
-    await expect(notifications).toContainText("重复 1")
+    await expect(addFeedback).toContainText("新增 1")
+    await expect(addFeedback).toContainText("重复 1")
     await page.screenshot({
       path: test.info().outputPath("dictionary-add.png"),
       animations: "disabled",
@@ -109,7 +110,7 @@ for (const width of [1280, 390, 320]) {
       )
     ).toBe(true)
 
-    await page.getByRole("button", { name: "添加", exact: true }).click()
+    await page.getByRole("button", { name: "添加密码", exact: true }).click()
     await sheet
       .getByLabel("粘贴多行", { exact: true })
       .fill(
@@ -119,7 +120,7 @@ for (const width of [1280, 390, 320]) {
         ).join("\n")
       )
     await sheet.getByRole("button", { name: "添加多行", exact: true }).click()
-    await expect(notifications).toContainText("新增 40")
+    await expect(addFeedback).toContainText("新增 40")
     await sheet.getByRole("button", { name: "关闭", exact: true }).click()
     const viewport = page.locator(
       '.table-scroll-fade [data-slot="scroll-area-viewport"]'

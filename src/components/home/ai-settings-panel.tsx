@@ -1,5 +1,8 @@
 "use client"
 
+import { FullText } from "@/components/home/full-text"
+import { WorkbenchDetails } from "./workbench-details"
+
 import {
   Bot,
   Check,
@@ -54,7 +57,6 @@ import {
 } from "@/components/ui/empty"
 import {
   Field,
-  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
@@ -85,6 +87,7 @@ import {
 } from "@/lib/ai"
 
 export type AiSettingsPanelHandle = {
+  isSubmitting: () => boolean
   saveUnsavedChanges: () => Promise<boolean>
   discardUnsavedChanges: () => void
 }
@@ -135,6 +138,7 @@ export const AiSettingsPanel = React.forwardRef<
     setPrompt,
     busy,
     profileBusy,
+    profileAction,
     promptBusy,
     profileFeedback,
     setProfileFeedback,
@@ -166,12 +170,131 @@ export const AiSettingsPanel = React.forwardRef<
 
   React.useImperativeHandle(
     ref,
-    () => ({ saveUnsavedChanges, discardUnsavedChanges }),
-    [saveUnsavedChanges, discardUnsavedChanges]
+    () => ({
+      saveUnsavedChanges,
+      discardUnsavedChanges,
+      isSubmitting: controller.isSubmitting,
+    }),
+    [saveUnsavedChanges, discardUnsavedChanges, controller.isSubmitting]
   )
 
+  const renamePromptControl = (
+    <WorkbenchDetails
+      title="归档重命名提示词"
+      label={promptDirty ? "重命名提示词 · 未保存" : "重命名提示词"}
+      description="定义 AI 生成归档名称的规则，保存后用于后续压缩任务。"
+      bodyClassName="ai-prompt-body"
+      footer={
+        <div className="flex flex-col gap-3">
+          {promptFeedback && !renamePromptError ? (
+            <Alert
+              aria-live="polite"
+              variant={promptFeedback.error ? "destructive" : "default"}
+              className="max-h-28 overflow-y-auto py-2.5"
+            >
+              {promptBusy ? (
+                <Spinner />
+              ) : promptFeedback.error ? (
+                <CircleAlert />
+              ) : (
+                <Check />
+              )}
+              <AlertDescription>{promptFeedback.message}</AlertDescription>
+            </Alert>
+          ) : null}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>{prompt.length} 字符</span>
+              {promptDirty ? (
+                <Badge variant="warning">有未保存更改</Badge>
+              ) : null}
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              disabled={
+                busy ||
+                settings === null ||
+                Boolean(renamePromptError) ||
+                !promptDirty
+              }
+              onClick={() => void handleSaveRenameSettings()}
+              aria-busy={promptBusy}
+            >
+              {promptBusy ? (
+                <Spinner aria-hidden="true" data-icon="inline-start" />
+              ) : (
+                <Save data-icon="inline-start" />
+              )}
+              {promptBusy ? "保存中…" : "保存提示词"}
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <p
+        id="ai-rename-prompt-help"
+        className="text-xs leading-relaxed text-muted-foreground"
+      >
+        默认发送提示词和基础名称；在压缩页开启文件内容参考后，还会发送匹配文本的内容摘录和文件名。
+      </p>
+      <Field data-invalid={Boolean(renamePromptError)}>
+        <FieldLabel htmlFor="ai-rename-prompt" className="sr-only">
+          AI 重命名提示词
+        </FieldLabel>
+        <Textarea
+          id="ai-rename-prompt"
+          value={prompt}
+          disabled={busy || settings === null}
+          aria-invalid={Boolean(renamePromptError)}
+          aria-describedby={
+            renamePromptError
+              ? "ai-rename-prompt-help ai-rename-prompt-error"
+              : "ai-rename-prompt-help"
+          }
+          onChange={(event) => {
+            setPrompt(event.target.value)
+            setPromptFeedback(null)
+          }}
+        />
+        {renamePromptError ? (
+          <FieldError id="ai-rename-prompt-error">
+            {renamePromptError}
+          </FieldError>
+        ) : null}
+      </Field>
+    </WorkbenchDetails>
+  )
+
+  if (settings === null) {
+    return (
+      <Empty
+        role="status"
+        aria-busy={controller.loading}
+        className="border-0 p-4"
+      >
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            {controller.loading ? <Spinner /> : <CircleAlert />}
+          </EmptyMedia>
+          <EmptyTitle>
+            {controller.loading ? "正在读取 AI 配置" : "AI 配置读取失败"}
+          </EmptyTitle>
+          <EmptyDescription className="[overflow-wrap:anywhere] break-words">
+            {controller.loading
+              ? "正在读取已保存的模型服务和提示词。"
+              : controller.loadError}
+          </EmptyDescription>
+        </EmptyHeader>
+        {!controller.loading ? (
+          <Button onClick={controller.retryLoad}>重试读取配置</Button>
+        ) : null}
+      </Empty>
+    )
+  }
+
   return (
-    <div className="flex flex-col gap-2">
+    <div className="byte-ai-panel flex flex-col gap-2">
       <Card size="sm">
         <CardHeader className="border-b border-border/80">
           <CardTitle>AI 模型配置</CardTitle>
@@ -191,8 +314,70 @@ export const AiSettingsPanel = React.forwardRef<
             </Button>
           </CardAction>
         </CardHeader>
-        <CardContent className="grid gap-3 lg:grid-cols-[190px_minmax(0,1fr)]">
-          <aside className="flex flex-col gap-1.5" aria-label="已保存 AI 配置">
+        <CardContent
+          className={
+            settings?.profiles.length === 0
+              ? "grid min-w-0 grid-cols-1 gap-4"
+              : "grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[190px_minmax(0,1fr)]"
+          }
+        >
+          {settings && settings.profiles.length > 0 ? (
+            <div className="min-w-0 lg:hidden">
+              <Select
+                items={settings.profiles.map((profile) => ({
+                  value: profile.id,
+                  label: profile.name,
+                }))}
+                value={draft.id}
+                disabled={busy}
+                onValueChange={(value) => {
+                  const profile = settings.profiles.find(
+                    (profile) => profile.id === value
+                  )
+                  if (profile) requestDraftAction({ type: "select", profile })
+                }}
+              >
+                <SelectTrigger
+                  aria-label="已保存 AI 配置"
+                  className="w-full min-w-0"
+                >
+                  <SelectValue placeholder="选择已有配置">
+                    {settings.profiles.find(
+                      (profile) => profile.id === draft.id
+                    )?.name ? (
+                      <FullText
+                        text={
+                          settings.profiles.find(
+                            (profile) => profile.id === draft.id
+                          )!.name
+                        }
+                        focusable={false}
+                      />
+                    ) : (
+                      "选择已有配置"
+                    )}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    {settings.profiles.map((profile) => (
+                      <SelectItem key={profile.id} value={profile.id}>
+                        <FullText text={profile.name} focusable={false} />
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
+          <aside
+            className={
+              settings?.profiles.length === 0
+                ? "hidden"
+                : "hidden min-w-0 flex-col gap-1.5 lg:flex"
+            }
+            aria-label="已保存 AI 配置"
+          >
             {settings === null ? (
               <div
                 className="flex flex-col gap-2 p-1"
@@ -230,17 +415,20 @@ export const AiSettingsPanel = React.forwardRef<
                   onClick={() =>
                     requestDraftAction({ type: "select", profile })
                   }
-                  className="h-auto w-full justify-start text-left"
+                  className="h-auto w-full min-w-0 justify-start text-left"
                 >
                   <Server data-icon="inline-start" />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">
-                      {profile.name}
-                    </span>
-                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                      {AI_PROVIDER_DEFAULTS[profile.provider].label}
-                      {profile.model ? ` · ${profile.model}` : ""}
-                    </span>
+                    <FullText
+                      text={profile.name}
+                      focusable={false}
+                      className="text-sm font-medium"
+                    />
+                    <FullText
+                      text={`${AI_PROVIDER_DEFAULTS[profile.provider].label}${profile.model ? ` · ${profile.model}` : ""}`}
+                      focusable={false}
+                      className="mt-0.5 text-xs text-muted-foreground"
+                    />
                   </span>
                   {settings.activeProfileId === profile.id ? (
                     <Check aria-label="当前配置" data-icon="inline-end" />
@@ -250,7 +438,14 @@ export const AiSettingsPanel = React.forwardRef<
             )}
           </aside>
 
-          <FieldGroup className="min-w-0 gap-4 lg:border-l lg:border-border/80 lg:pl-4">
+          <FieldGroup
+            data-ai-profile-fields
+            className={
+              settings?.profiles.length === 0
+                ? "min-w-0 gap-4"
+                : "min-w-0 gap-4 lg:border-l lg:border-border/80 lg:pl-4"
+            }
+          >
             <FieldGroup className="grid gap-3 sm:grid-cols-2">
               <Field className="gap-1.5" data-invalid={invalidField === "name"}>
                 <FieldLabel htmlFor="ai-profile-name">配置名称</FieldLabel>
@@ -382,8 +577,16 @@ export const AiSettingsPanel = React.forwardRef<
                         onClick={handleLoadModels}
                         aria-label="获取模型"
                         title="获取模型"
+                        aria-busy={profileAction === "models"}
                       >
-                        <RefreshCw data-icon="inline-start" />
+                        {profileAction === "models" ? (
+                          <Spinner
+                            aria-hidden="true"
+                            data-icon="inline-start"
+                          />
+                        ) : (
+                          <RefreshCw data-icon="inline-start" />
+                        )}
                         <span className="hidden sm:inline">获取模型</span>
                       </InputGroupButton>
                       <InputGroupButton
@@ -392,8 +595,16 @@ export const AiSettingsPanel = React.forwardRef<
                         onClick={handleTest}
                         aria-label="测试"
                         title="测试"
+                        aria-busy={profileAction === "test"}
                       >
-                        <Unplug data-icon="inline-start" />
+                        {profileAction === "test" ? (
+                          <Spinner
+                            aria-hidden="true"
+                            data-icon="inline-start"
+                          />
+                        ) : (
+                          <Unplug data-icon="inline-start" />
+                        )}
                         <span className="hidden sm:inline">测试</span>
                       </InputGroupButton>
                     </InputGroupAddon>
@@ -494,56 +705,6 @@ export const AiSettingsPanel = React.forwardRef<
             </Field>
 
             <FieldSeparator />
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5">
-                {isActive ? <Badge variant="default">当前使用</Badge> : null}
-                {draft.id === null || profileDirty ? (
-                  <Badge variant="warning">
-                    {draft.id ? "有未保存更改" : "新配置未保存"}
-                  </Badge>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2">
-                {draft.id ? (
-                  <>
-                    {!isActive ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => void handleSaveProfile(true)}
-                      >
-                        设为当前
-                      </Button>
-                    ) : null}
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => setDeleteOpen(true)}
-                    >
-                      <Trash2 data-icon="inline-start" />
-                      删除
-                    </Button>
-                  </>
-                ) : null}
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={busy || (draft.id !== null && !profileDirty)}
-                  onClick={() => void handleSaveProfile(false)}
-                >
-                  {profileBusy ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : (
-                    <Save data-icon="inline-start" />
-                  )}
-                  保存配置
-                </Button>
-              </div>
-            </div>
             {profileFeedback && !invalidField ? (
               <Alert
                 aria-live="polite"
@@ -562,77 +723,59 @@ export const AiSettingsPanel = React.forwardRef<
             ) : null}
           </FieldGroup>
         </CardContent>
-      </Card>
-
-      <Card size="sm">
-        <CardHeader className="border-b border-border/80">
-          <div className="flex items-center gap-2">
-            <CardTitle>归档重命名提示词</CardTitle>
-            {promptDirty ? <Badge variant="warning">有未保存更改</Badge> : null}
-          </div>
-          <CardDescription>
-            默认发送提示词和基础名称；在压缩页开启文件内容参考后，还会发送匹配文本的内容摘录和文件名。
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <Field data-invalid={Boolean(renamePromptError)}>
-            <FieldLabel htmlFor="ai-rename-prompt" className="sr-only">
-              AI 重命名提示词
-            </FieldLabel>
-            <Textarea
-              id="ai-rename-prompt"
-              value={prompt}
-              disabled={busy || settings === null}
-              aria-invalid={Boolean(renamePromptError)}
-              onChange={(event) => {
-                setPrompt(event.target.value)
-                setPromptFeedback(null)
-              }}
-              rows={4}
-            />
-            {renamePromptError ? (
-              <FieldError>{renamePromptError}</FieldError>
+        <div className="byte-ai-actions flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {renamePromptControl}
+            {isActive ? <Badge variant="default">当前使用</Badge> : null}
+            {draft.id === null || profileDirty ? (
+              <Badge variant="warning">
+                {draft.id ? "有未保存更改" : "新配置未保存"}
+              </Badge>
             ) : null}
-            <FieldDescription>{prompt.length} 字符</FieldDescription>
-          </Field>
-          <div className="flex justify-end">
+          </div>
+          <div className="flex items-center gap-2">
+            {draft.id ? (
+              <>
+                {!isActive ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void handleSaveProfile(true)}
+                    aria-busy={profileAction === "activate"}
+                  >
+                    {profileAction === "activate" ? "设置中…" : "设为当前"}
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  <Trash2 data-icon="inline-start" />
+                  删除
+                </Button>
+              </>
+            ) : null}
             <Button
               type="button"
               size="sm"
-              variant="outline"
-              disabled={
-                busy ||
-                settings === null ||
-                Boolean(renamePromptError) ||
-                !promptDirty
-              }
-              onClick={() => void handleSaveRenameSettings()}
+              disabled={busy || (draft.id !== null && !profileDirty)}
+              onClick={() => void handleSaveProfile(false)}
+              aria-busy={profileAction === "save"}
             >
-              {promptBusy ? (
-                <Spinner data-icon="inline-start" />
+              {profileAction === "save" ? (
+                <Spinner aria-hidden="true" data-icon="inline-start" />
               ) : (
                 <Save data-icon="inline-start" />
               )}
-              保存提示词
+              {profileAction === "save" ? "保存中…" : "保存配置"}
             </Button>
           </div>
-          {promptFeedback && !renamePromptError ? (
-            <Alert
-              aria-live="polite"
-              variant={promptFeedback.error ? "destructive" : "default"}
-              className="py-2.5"
-            >
-              {promptBusy ? (
-                <Spinner />
-              ) : promptFeedback.error ? (
-                <CircleAlert />
-              ) : (
-                <Check />
-              )}
-              <AlertDescription>{promptFeedback.message}</AlertDescription>
-            </Alert>
-          ) : null}
-        </CardContent>
+        </div>
       </Card>
 
       <AlertDialog
@@ -671,14 +814,21 @@ export const AiSettingsPanel = React.forwardRef<
                 void handleSavePendingDraft()
               }}
             >
-              {profileBusy ? <Spinner data-icon="inline-start" /> : null}
+              {profileBusy ? (
+                <Spinner aria-hidden="true" data-icon="inline-start" />
+              ) : null}
               保存并继续
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+      <AlertDialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          if (!busy) setDeleteOpen(open)
+        }}
+      >
         <AlertDialogContent size="sm">
           <AlertDialogHeader>
             <AlertDialogTitle>删除 AI 配置？</AlertDialogTitle>
@@ -694,7 +844,7 @@ export const AiSettingsPanel = React.forwardRef<
               onClick={handleDelete}
             >
               {profileBusy ? (
-                <Spinner data-icon="inline-start" />
+                <Spinner aria-hidden="true" data-icon="inline-start" />
               ) : (
                 <Trash2 data-icon="inline-start" />
               )}

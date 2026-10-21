@@ -197,9 +197,15 @@ export default function Page() {
         return
       }
       if (activeNav === "settings" && settingsAiDirty) {
+        if (settingsPageRef.current?.canLeave() === false) return
         setPendingNav(next)
         return
       }
+      if (
+        activeNav === "settings" &&
+        settingsPageRef.current?.canLeave() === false
+      )
+        return
       completeDockNavChange(next)
     },
     [activeNav, completeDockNavChange, settingsAiDirty]

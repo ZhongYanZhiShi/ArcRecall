@@ -73,6 +73,8 @@
 }
 
 :root {
+  --selection-background: #b7e8de;
+  --selection-foreground: #103b34;
   --font-app-sans:
     "Bahnschrift", "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC",
     sans-serif;
@@ -117,6 +119,8 @@
 }
 
 .dark {
+  --selection-background: #25695e;
+  --selection-foreground: #edfffa;
   --background: oklch(0.15 0.015 255);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.225 0.018 255);
@@ -155,6 +159,13 @@
 }
 
 @layer base {
+  /* Use the same selection treatment in text, form fields and portal content. */
+  ::selection {
+    background-color: var(--selection-background);
+    color: var(--selection-foreground);
+    text-shadow: none;
+  }
+
   * {
     @apply border-border outline-ring/50;
   }
@@ -345,5 +356,141 @@
   .animate-success-pop,
   .progress-live {
     animation: none !important;
+  }
+}
+
+/* Keep keyboard focus inside clipped rows, scroll surfaces and fixed footers. */
+:root
+  :is(
+    button,
+    a[href],
+    input,
+    textarea,
+    select,
+    summary,
+    [tabindex],
+    [contenteditable="true"]
+  ):focus-visible {
+  outline: 2px solid var(--keyboard-focus-color, var(--ring));
+  outline-offset: -3px;
+  --tw-ring-shadow: 0 0 #0000;
+  scroll-margin: 6px;
+}
+
+[data-slot="button"][data-variant="default"],
+:is(button, [role="button"]).bg-primary,
+:is(
+  [data-slot="switch"],
+  [data-slot="checkbox"],
+  [data-slot="radio-group-item"]
+)[data-checked] {
+  --keyboard-focus-color: var(--primary-foreground);
+}
+
+[data-slot="input-group"]:has(:focus-visible) {
+  --tw-ring-shadow: 0 0 #0000;
+}
+
+@media (forced-colors: active) {
+  :root :focus-visible {
+    outline-color: Highlight;
+  }
+}
+
+/* Shared native and Base UI scrollbars, including portalled sheets and dialogs. */
+:root {
+  --scrollbar-thumb: color-mix(
+    in oklab,
+    var(--muted-foreground) 42%,
+    var(--background)
+  );
+  --scrollbar-hover: color-mix(
+    in oklab,
+    var(--primary) 48%,
+    var(--muted-foreground)
+  );
+  --scrollbar-active: color-mix(
+    in oklab,
+    var(--primary) 72%,
+    var(--muted-foreground)
+  );
+}
+:root,
+*:not([data-slot="scroll-area-viewport"]):not(.no-scrollbar) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+/* Chromium/WebView2 gets a 6px visible rail inside a 10px drag target. */
+@supports selector(::-webkit-scrollbar) {
+  :root,
+  *:not([data-slot="scroll-area-viewport"]):not(.no-scrollbar) {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+  :root::-webkit-scrollbar,
+  *:not([data-slot="scroll-area-viewport"]):not(
+      .no-scrollbar
+    )::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  :root::-webkit-scrollbar-track,
+  *::-webkit-scrollbar-track,
+  :root::-webkit-scrollbar-corner,
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  :root::-webkit-scrollbar-thumb,
+  *::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 0;
+    background: var(--scrollbar-thumb);
+    background-clip: padding-box;
+  }
+  :root::-webkit-scrollbar-thumb:hover,
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-hover);
+  }
+  :root::-webkit-scrollbar-thumb:active,
+  *::-webkit-scrollbar-thumb:active {
+    background-color: var(--scrollbar-active);
+  }
+  :root::-webkit-scrollbar-button,
+  *::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+[data-slot="scroll-area-scrollbar"] {
+  border: 0;
+  padding: 2px;
+  background: transparent;
+}
+[data-slot="scroll-area-scrollbar"][data-orientation="vertical"] {
+  width: 10px;
+}
+[data-slot="scroll-area-scrollbar"][data-orientation="horizontal"] {
+  height: 10px;
+}
+[data-slot="scroll-area-thumb"] {
+  border-radius: 0;
+  background: var(--scrollbar-thumb);
+}
+[data-slot="scroll-area-scrollbar"]:hover [data-slot="scroll-area-thumb"] {
+  background: var(--scrollbar-hover);
+}
+[data-slot="scroll-area-scrollbar"]:active [data-slot="scroll-area-thumb"] {
+  background: var(--scrollbar-active);
+}
+@media (forced-colors: active) {
+  :root {
+    --scrollbar-thumb: ButtonText;
+    --scrollbar-hover: Highlight;
+    --scrollbar-active: Highlight;
+  }
+  :root,
+  *:not([data-slot="scroll-area-viewport"]):not(.no-scrollbar) {
+    scrollbar-color: auto;
   }
 }
