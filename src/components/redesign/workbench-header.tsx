@@ -38,9 +38,21 @@ export function WorkbenchHeader({
         rel="noopener noreferrer"
         aria-label="打开 ArcRecall 的 GitHub 仓库"
         onClick={onRepositoryClick}
-        className="byte-brand shrink-0 font-mono text-sm font-bold outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="byte-brand inline-flex shrink-0 items-center gap-2.5 font-mono text-sm font-bold outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        ARCRECALL
+        <svg
+          aria-hidden="true"
+          focusable="false"
+          viewBox="96 32 320 448"
+          className="h-7 w-5 shrink-0"
+        >
+          <path
+            d="M178 464L126 464A14 14 0 0 1 112 450L112 192A144 144 0 0 1 400 192L400 450A14 14 0 0 1 386 464L334 464L286 329.6A74 74 0 1 0 226 329.6Z"
+            fill="currentColor"
+          />
+          <circle cx="256" cy="262" r="30" className="fill-primary" />
+        </svg>
+        <span>ARCRECALL</span>
       </a>
       <nav
         aria-label="功能切换"
