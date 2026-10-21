@@ -7,6 +7,7 @@ import type { ByteStreamActivity } from "@/lib/byte-stream-motion"
 import { toast } from "sonner"
 
 import { WorkbenchHeader } from "@/components/redesign/workbench-header"
+import { WindowTitlebar } from "@/components/window-titlebar"
 import { ByteStreamBackground } from "@/components/redesign/byte-stream-background"
 
 export type NavId =
@@ -65,6 +66,7 @@ export function AppShell({
       className="byte-app relative isolate flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground"
     >
       <ByteStreamBackground activity={streamActivity} />
+      <WindowTitlebar />
       <WorkbenchHeader
         active={activeNav}
         onSelect={onNavChange}

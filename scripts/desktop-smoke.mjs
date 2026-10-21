@@ -542,6 +542,19 @@ async function verifyAiFileReference() {
 }
 
 // A focused acceptance path uses the same isolated WebView and real IPC setup.
+if (process.argv.includes("--titlebar-only")) {
+  try {
+    await launch()
+    const { verifyTitlebar } = await import("./desktop-titlebar.mjs")
+    await verifyTitlebar({ page, invoke, evidence, child })
+    assert.deepEqual(errors, [])
+  } finally {
+    await close(false)
+    console.log(`Isolated test data: ${root}`)
+  }
+  process.exit(0)
+}
+
 if (process.argv.includes("--focus-only")) {
   try {
     await launch()
