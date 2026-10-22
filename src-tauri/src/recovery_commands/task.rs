@@ -339,6 +339,19 @@ pub(super) fn update_recovery_preparation(
     append_current_recovery_event(&mut status);
 }
 
+pub(super) fn persist_recovery_completion(
+    status: &Mutex<RecoveryTaskStatus>,
+    persist: impl FnOnce(bool, bool) -> Result<(), String>,
+) -> Result<(), String> {
+    let (success, cancelled) = {
+        let status = status.lock().map_err(|error| error.to_string())?;
+        (status.success, status.cancelled)
+    };
+    // A checkpoint may wait for another writer or fsync. Status polling and
+    // native window events must not wait for that I/O while holding this lock.
+    persist(success, cancelled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,6 +428,38 @@ mod tests {
         assert_eq!(status.message, "恢复完成。");
         assert_eq!(status.phase, RecoveryPhase::Completed);
         assert!(status.success);
+    }
+
+    #[test]
+    fn completion_checkpoint_does_not_block_status_reads_while_persisting() {
+        let mut completed = test_recovery_status();
+        completed.running = false;
+        completed.completed = true;
+        completed.success = true;
+        let status = Mutex::new(completed);
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let status = &status;
+            let worker = scope.spawn(move || {
+                persist_recovery_completion(status, |success, cancelled| {
+                    assert!(success && !cancelled);
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Err("checkpoint failed".into())
+                })
+            });
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            let readable = status.try_lock().is_ok();
+            release_tx.send(()).unwrap();
+            assert_eq!(worker.join().unwrap().unwrap_err(), "checkpoint failed");
+            assert!(
+                readable,
+                "status polling must remain available during disk I/O"
+            );
+        });
     }
 
     #[test]

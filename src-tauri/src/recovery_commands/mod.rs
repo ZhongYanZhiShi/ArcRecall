@@ -24,7 +24,7 @@ use crate::{AppState, current_time_ms, ensure_no_active_archive_task, write_log}
 use task::{
     RecoveryResumeContext, RecoveryTaskCompletionGuard, RecoveryTaskEvent, accumulate_timing,
     append_current_recovery_event, append_recovery_update_event, catch_recovery_panic,
-    recovery_failure_kind, update_recovery_preparation,
+    persist_recovery_completion, recovery_failure_kind, update_recovery_preparation,
 };
 
 pub(crate) use task::{RecoveryTaskHandle, RecoveryTaskStatus};
@@ -710,16 +710,12 @@ pub(crate) async fn recovery_start(
             }
         }
         if let Some(id) = queue_entry_id {
-            let result = status_for_worker
-                .lock()
-                .map_err(|e| e.to_string())
-                .and_then(|status| {
-                    queue_journal.lock().map_err(|e| e.to_string())?.finish(
-                        id,
-                        status.success,
-                        status.cancelled,
-                    )
-                });
+            let result = persist_recovery_completion(&status_for_worker, |success, cancelled| {
+                queue_journal
+                    .lock()
+                    .map_err(|e| e.to_string())?
+                    .finish(id, success, cancelled)
+            });
             if result.is_err() {
                 write_log(
                     &logger_for_worker,
