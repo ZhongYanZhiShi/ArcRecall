@@ -5,9 +5,11 @@ for (const theme of ["light", "dark"]) {
     [900, 650],
     [320, 400],
   ]) {
-    test(`弹出层保持在窗口内且通知不遮住底栏（${theme} ${width}px）`, async ({
+    test(`弹出层与反馈保持在窗口内，抽屉清除旧通知（${theme} ${width}px）`, async ({
       page,
+      context,
     }) => {
+      await context.grantPermissions(["clipboard-read", "clipboard-write"])
       await page.setViewportSize({ width, height })
       await page.goto("/")
       if (theme === "light")
@@ -56,14 +58,31 @@ for (const theme of ["light", "dark"]) {
         .getByRole("textbox", { name: "新增单条", exact: true })
         .fill("overlay-test-password")
       await page.getByRole("button", { name: "添加", exact: true }).click()
+      const addSheet = page.getByRole("dialog")
+      await expect(addSheet.getByRole("status")).toContainText("新增 1")
+      await expect(addSheet.getByRole("status")).toBeInViewport({ ratio: 1 })
+      await expect(
+        addSheet.getByRole("button", { name: "添加多行", exact: true })
+      ).toBeInViewport({ ratio: 1 })
+      await expect(page.locator("[data-sonner-toast]")).toHaveCount(0)
+      await addSheet.getByRole("button", { name: "关闭", exact: true }).click()
+      await expect(addSheet).toHaveCount(0)
+      const copy = page.getByRole("button", {
+        name: "复制候选 #1 的完整密码",
+        exact: true,
+      })
+      await copy.focus()
+      await page.keyboard.press("Enter")
       const toast = page.locator("[data-sonner-toast]").first()
+      await expect(toast).toContainText("密码已复制")
       await expect(toast).toBeInViewport({ ratio: 1 })
-      const notification = await toast.boundingBox()
-      const footer = await page
-        .locator('[data-slot="dictionary-add-footer"]')
-        .boundingBox()
-      expect(notification.y + notification.height).toBeLessThanOrEqual(footer.y)
       await toast.getByRole("button", { name: "关闭通知", exact: true }).click()
+      await expect(toast).toHaveCount(0)
+      await copy.focus()
+      await page.keyboard.press("Enter")
+      await expect(toast).toContainText("密码已复制")
+      await page.getByRole("button", { name: "添加密码", exact: true }).click()
+      await expect(addSheet).toBeVisible()
       await expect(toast).toHaveCount(0)
     })
   }

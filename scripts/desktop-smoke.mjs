@@ -197,6 +197,17 @@ async function pastePaths(paths) {
 }
 
 async function verifyAiFileReference() {
+  // Recreate locators against the current WebView after each native restart.
+  const aiOptions = () =>
+    page.getByRole("dialog", { name: "AI 命名选项", exact: true })
+  const openAiOptions = async () => {
+    await page.getByRole("button", { name: /^AI 命名 · / }).click()
+    await expect(aiOptions()).toBeVisible()
+  }
+  const closeAiOptions = async () => {
+    await aiOptions().getByRole("button", { name: "关闭", exact: true }).click()
+    await expect(aiOptions()).not.toBeVisible()
+  }
   const requests = []
   const server = createHttpServer(async (request, response) => {
     const chunks = []
@@ -281,6 +292,7 @@ async function verifyAiFileReference() {
     await page
       .getByRole("switch", { name: "完成后打开", exact: true })
       .uncheck()
+    await openAiOptions()
     await page
       .getByRole("switch", { name: "使用 AI 优化名称", exact: true })
       .check()
@@ -414,6 +426,7 @@ async function verifyAiFileReference() {
     await page
       .getByRole("switch", { name: "完成后打开", exact: true })
       .uncheck()
+    await openAiOptions()
     await expect(
       page.getByRole("switch", { name: "使用 AI 优化名称", exact: true })
     ).toBeChecked()
@@ -459,6 +472,7 @@ async function verifyAiFileReference() {
     await page
       .getByRole("switch", { name: "完成后打开", exact: true })
       .uncheck()
+    await openAiOptions()
     await expect(
       page.getByRole("switch", { name: "使用 AI 优化名称", exact: true })
     ).not.toBeChecked()
@@ -508,10 +522,13 @@ async function verifyAiFileReference() {
     await expect(currentReadme).toBeChecked()
     await expect(currentCustom).toBeChecked()
     await currentReadme.uncheck()
+    await closeAiOptions()
     await page.getByRole("button", { name: "解压", exact: true }).click()
     await page.getByRole("button", { name: "压缩", exact: true }).click()
+    await openAiOptions()
     await expect(currentReadme).not.toBeChecked()
     await expect(currentCustom).toBeChecked()
+    await closeAiOptions()
     await page.locator("#archive-name").fill("原始名称")
     const requestCount = requests.length
     await page.getByRole("button", { name: "开始压缩", exact: true }).click()
@@ -615,6 +632,26 @@ if (process.argv.includes("--completion-layout-only")) {
   } finally {
     await close(false)
     console.log(`Isolated test data: ${root}`)
+  }
+  process.exit(0)
+}
+
+if (process.argv.includes("--performance-only")) {
+  try {
+    await launch()
+    const { verifyNativePerformance } =
+      await import("./desktop-performance.mjs")
+    await verifyNativePerformance({
+      page,
+      invoke,
+      root,
+      evidence,
+      sevenZip,
+      errors,
+    })
+  } finally {
+    await close()
+    console.log(`Isolated performance test data: ${root}`)
   }
   process.exit(0)
 }
@@ -750,10 +787,17 @@ if (process.argv.includes("--history-only")) {
     await unlink(outer)
     // The archive may have been removed; its containing directory still opens.
     await rootEntry
+      .getByRole("button", { name: "记录详情", exact: true })
+      .click()
+    const historyDetails = page.getByRole("dialog", {
+      name: "记录详情",
+      exact: true,
+    })
+    await historyDetails
       .getByRole("button", { name: "打开压缩包所在文件夹", exact: true })
       .click()
     await expect(
-      rootEntry.getByRole("button", {
+      historyDetails.getByRole("button", {
         name: "打开压缩包所在文件夹",
         exact: true,
       })
@@ -769,6 +813,9 @@ if (process.argv.includes("--history-only")) {
         { timeout: 15_000 }
       )
       .toBe(true)
+    await historyDetails
+      .getByRole("button", { name: "关闭", exact: true })
+      .click()
     const output = history.entries[0].children[0].outputDirectory
     await nestedEntry
       .getByRole("button", { name: "打开解压目录", exact: true })
@@ -947,12 +994,22 @@ try {
   await expect(
     historyEntries.getByText("literal-password.7z", { exact: true })
   ).toBeVisible()
+  const historyDetails = page.getByRole("dialog", {
+    name: "记录详情",
+    exact: true,
+  })
+  await historyEntries
+    .getByRole("button", { name: "记录详情", exact: true })
+    .click()
   await expect(
-    historyEntries.getByText(savedArchive.archivePath, { exact: true })
+    historyDetails.getByText(savedArchive.archivePath, { exact: true })
   ).toBeVisible()
   await expect(
-    historyEntries.getByText(savedArchive.outputDirectory, { exact: true })
+    historyDetails.getByText(savedArchive.outputDirectory, { exact: true })
   ).toBeVisible()
+  await historyDetails
+    .getByRole("button", { name: "关闭", exact: true })
+    .click()
   await page.getByRole("button", { name: "查看密码", exact: true }).click()
   await expect(
     historyEntries.locator("code").filter({ hasText: password })
@@ -968,7 +1025,10 @@ try {
   await expect(
     page.getByRole("button", { name: "查看密码", exact: true })
   ).toBeVisible()
-  await page
+  await historyEntries
+    .getByRole("button", { name: "记录详情", exact: true })
+    .click()
+  await historyDetails
     .getByRole("button", { name: "复制压缩包路径", exact: true })
     .click()
   await expect(
@@ -977,6 +1037,9 @@ try {
       .getByText("路径已复制", { exact: true })
   ).toBeVisible()
   await page.screenshot({ path: join(evidence, "native-history.png") })
+  await historyDetails
+    .getByRole("button", { name: "关闭", exact: true })
+    .click()
   await page.getByRole("button", { name: "解压", exact: true }).click()
   await expect(
     page.getByRole("button", { name: "暂无待处理任务", exact: true })
@@ -1015,10 +1078,19 @@ try {
     assert.equal(packed.status, 0, packed.stderr)
   }
   await page.getByRole("button", { name: "设置", exact: true }).click()
-  const cleanupSwitch = page.getByRole("switch", { name: "智能清理空文件夹" })
+  await page.getByRole("button", { name: "解压行为", exact: true }).click()
+  const extractionOptions = page.getByRole("dialog", {
+    name: "解压行为",
+    exact: true,
+  })
+  const cleanupSwitch = extractionOptions.getByRole("switch", {
+    name: "智能清理空文件夹",
+  })
   await expect(cleanupSwitch).toBeEnabled()
   await expect(cleanupSwitch).toBeChecked()
-  const flattenSwitch = page.getByRole("switch", { name: "去除多层无效嵌套" })
+  const flattenSwitch = extractionOptions.getByRole("switch", {
+    name: "去除多层无效嵌套",
+  })
   await expect(flattenSwitch).toBeChecked()
   // Exercise explicit opt-out while verifying empty-folder cleanup separately.
   await flattenSwitch.click()
