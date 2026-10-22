@@ -12,8 +12,15 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Rust workspace build output (sibling of src-tauri at the repo root):
-    "target/**",
+    // Generated exports, packaging output, and test evidence:
+    "artifacts/**",
+    "dist/**",
+    "coverage/**",
+    "playwright-report/**",
+    "test-results/**",
+    // Cargo may build at the workspace root or inside src-tauri:
+    "**/target/**",
+    "src-tauri/gen/**",
     // Local agent tooling, not part of the shipped app:
     ".codex/**",
     ".agents/**",
