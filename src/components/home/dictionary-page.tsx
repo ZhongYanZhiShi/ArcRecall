@@ -53,6 +53,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group"
+import { DictionaryTableBody } from "@/components/home/dictionary-table-body"
 import { TablePagination } from "@/components/ui/table-pagination"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Progress } from "@/components/ui/progress"
@@ -680,7 +681,10 @@ export function DictionaryPage() {
               ref={scrollAreaRef}
               className="table-scroll-fade h-full max-h-full [&_[data-slot=table-container]]:overflow-visible"
             >
-              <Table className="byte-dictionary-table">
+              <Table
+                className="byte-dictionary-table"
+                aria-rowcount={entries.length + 1}
+              >
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="h-9 w-10 px-3">
@@ -706,8 +710,8 @@ export function DictionaryPage() {
                     </TableHead>
                   </TableRow>
                 </TableHeader>
-                <TableBody>
-                  {isEmpty ? (
+                {isEmpty ? (
+                  <TableBody>
                     <TableRow className="hover:bg-transparent">
                       <TableCell colSpan={4} className="p-0">
                         <Empty className="min-h-[220px] border-0 px-6 py-10">
@@ -762,12 +766,20 @@ export function DictionaryPage() {
                         </Empty>
                       </TableCell>
                     </TableRow>
-                  ) : (
-                    entries.map((entry) => {
+                  </TableBody>
+                ) : (
+                  <DictionaryTableBody
+                    count={entries.length}
+                    scrollAreaRef={scrollAreaRef}
+                  >
+                    {(index) => {
+                      const entry = entries[index]
                       const selected = selectedIds.has(entry.id)
                       return (
                         <TableRow
                           key={entry.id}
+                          data-dictionary-index={index}
+                          aria-rowindex={index + 2}
                           data-state={selected ? "selected" : undefined}
                           aria-disabled={isBusy || undefined}
                           className={isBusy ? undefined : "cursor-pointer"}
@@ -842,9 +854,9 @@ export function DictionaryPage() {
                           </TableCell>
                         </TableRow>
                       )
-                    })
-                  )}
-                </TableBody>
+                    }}
+                  </DictionaryTableBody>
+                )}
               </Table>
             </ScrollArea>
           </CardContent>
