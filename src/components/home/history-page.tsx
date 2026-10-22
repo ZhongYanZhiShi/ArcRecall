@@ -105,6 +105,14 @@ export function HistoryPage() {
   const busy = loading || working
   const [loadFailed, setLoadFailed] = React.useState(false)
   const [revealed, setRevealed] = React.useState<RevealedPassword | null>(null)
+  const [passwordBusyId, setPasswordBusyId] = React.useState<number | null>(
+    null
+  )
+  const passwordBusy = React.useRef(false)
+  const revealedRef = React.useRef<RevealedPassword | null>(null)
+  React.useLayoutEffect(() => {
+    revealedRef.current = revealed
+  }, [revealed])
   const [copiedId, setCopiedId] = React.useState<number | null>(null)
   const [copiedPath, setCopiedPath] = React.useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] =
@@ -118,6 +126,7 @@ export function HistoryPage() {
     return () => {
       // Activity preserves state, so explicitly discard secrets when hidden.
       revealVersion.current += 1
+      revealedRef.current = null
       setRevealed(null)
     }
   }, [])
@@ -128,6 +137,9 @@ export function HistoryPage() {
       requestedPage = pageIndex,
       requestedPageSize = pageSize
     ) => {
+      revealVersion.current += 1
+      revealedRef.current = null
+      setRevealed(null)
       const requestId = ++requestSequence.current
       setLoading(true)
       setLoadFailed(false)
@@ -254,14 +266,33 @@ export function HistoryPage() {
     return password
   }, [])
 
+  const runPasswordAction = React.useCallback(
+    async (id: number, action: (version: number) => Promise<void>) => {
+      if (busy || passwordBusy.current) return
+      passwordBusy.current = true
+      setPasswordBusyId(id)
+      try {
+        await action(revealVersion.current)
+      } catch (reason) {
+        toast.error(toErrorMessage(reason), {
+          id: "history-feedback",
+          duration: 6_000,
+        })
+      } finally {
+        passwordBusy.current = false
+        setPasswordBusyId(null)
+      }
+    },
+    [busy]
+  )
+
   const handleReveal = React.useCallback(
     (entry: RecoveryHistoryEntry) => {
-      if (revealed?.id === entry.id) {
+      if (revealedRef.current?.id === entry.id) {
         setRevealed(null)
         return
       }
-      void runBusy(async () => {
-        const version = revealVersion.current
+      void runPasswordAction(entry.id, async (version) => {
         const password = await fetchPassword(entry.id)
         if (version !== revealVersion.current) return
         setRevealed({
@@ -271,22 +302,25 @@ export function HistoryPage() {
         })
       })
     },
-    [fetchPassword, revealed?.id, runBusy]
+    [fetchPassword, runPasswordAction]
   )
 
   const handleCopy = React.useCallback(
     (entry: RecoveryHistoryEntry) => {
-      void runBusy(async () => {
+      void runPasswordAction(entry.id, async (version) => {
+        const current = revealedRef.current
         const password =
-          revealed?.id === entry.id
-            ? revealed.value
+          current?.id === entry.id
+            ? current.value
             : await fetchPassword(entry.id)
+        if (version !== revealVersion.current) return
         await copySensitiveText(password)
+        if (version !== revealVersion.current) return
         setCopiedId(entry.id)
         toast.success("密码已复制", { id: "history-feedback" })
       })
     },
-    [fetchPassword, revealed, runBusy]
+    [fetchPassword, runPasswordAction]
   )
 
   const handleDelete = React.useCallback(() => {
@@ -315,14 +349,20 @@ export function HistoryPage() {
   }, [deleteTarget, load, runBusy])
 
   const handleCopyPath = React.useCallback(
-    (path: string) => {
-      void runBusy(async () => {
+    async (path: string) => {
+      if (busy) return
+      try {
         await navigator.clipboard.writeText(path)
         setCopiedPath(path)
         toast.success("路径已复制", { id: "history-feedback" })
-      })
+      } catch (reason) {
+        toast.error(toErrorMessage(reason), {
+          id: "history-feedback",
+          duration: 6_000,
+        })
+      }
     },
-    [runBusy]
+    [busy]
   )
 
   const handleOpenPath = React.useCallback(
@@ -445,11 +485,17 @@ export function HistoryPage() {
                     entry={entry}
                     revealed={revealed?.id === entry.id ? revealed.value : null}
                     copied={copiedId === entry.id}
+                    passwordBusy={passwordBusyId === entry.id}
                     busy={busy}
-                    onReveal={() => handleReveal(entry)}
-                    onCopy={() => handleCopy(entry)}
-                    onDelete={() => setDeleteTarget(entry)}
-                    copiedPath={copiedPath}
+                    onReveal={handleReveal}
+                    onCopy={handleCopy}
+                    onDelete={setDeleteTarget}
+                    copiedPath={
+                      copiedPath === entry.archivePath ||
+                      copiedPath === entry.outputDirectory
+                        ? copiedPath
+                        : null
+                    }
                     onCopyPath={handleCopyPath}
                     onOpenPath={handleOpenPath}
                   />
@@ -499,11 +545,17 @@ export function HistoryPage() {
                                     : null
                                 }
                                 copied={copiedId === child.id}
+                                passwordBusy={passwordBusyId === child.id}
                                 busy={busy}
-                                onReveal={() => handleReveal(child)}
-                                onCopy={() => handleCopy(child)}
-                                onDelete={() => setDeleteTarget(child)}
-                                copiedPath={copiedPath}
+                                onReveal={handleReveal}
+                                onCopy={handleCopy}
+                                onDelete={setDeleteTarget}
+                                copiedPath={
+                                  copiedPath === child.archivePath ||
+                                  copiedPath === child.outputDirectory
+                                    ? copiedPath
+                                    : null
+                                }
                                 onCopyPath={handleCopyPath}
                                 onOpenPath={handleOpenPath}
                               />
@@ -734,11 +786,12 @@ function HistoryLocations({
   )
 }
 
-function HistoryEntry({
+const HistoryEntry = React.memo(function HistoryEntry({
   entry,
   revealed,
   copied,
   busy,
+  passwordBusy,
   onReveal,
   onCopy,
   onDelete,
@@ -750,9 +803,10 @@ function HistoryEntry({
   revealed: string | null
   copied: boolean
   busy: boolean
-  onReveal: () => void
-  onCopy: () => void
-  onDelete: () => void
+  passwordBusy: boolean
+  onReveal: (entry: RecoveryHistoryEntry) => void
+  onCopy: (entry: RecoveryHistoryEntry) => void
+  onDelete: (entry: RecoveryHistoryEntry) => void
   copiedPath: string | null
   onCopyPath: (path: string) => void
   onOpenPath: (path: string, kind: "archive" | "output") => void
@@ -830,7 +884,7 @@ function HistoryEntry({
                 variant="ghost"
                 className="self-start text-destructive"
                 disabled={busy}
-                onClick={onDelete}
+                onClick={() => onDelete(entry)}
                 aria-label={
                   entry.archiveName
                     ? `删除 ${entry.archiveName} 的记录`
@@ -850,15 +904,15 @@ function HistoryEntry({
             entry={entry}
             revealed={revealed}
             copied={copied}
-            busy={busy}
-            onReveal={onReveal}
-            onCopy={onCopy}
+            busy={busy || passwordBusy}
+            onReveal={() => onReveal(entry)}
+            onCopy={() => onCopy(entry)}
           />
         </div>
       </div>
     </article>
   )
-}
+})
 
 function HistoryState({
   icon,
@@ -920,28 +974,26 @@ function HistoryPassword({
         {revealed ?? "••••••••"}
       </code>
       <Button
-        size="sm"
+        size="icon-sm"
         variant="ghost"
-        className="h-9 px-2 text-xs"
+        className="size-9 shrink-0"
         disabled={busy}
         onClick={onReveal}
         aria-label={revealed ? "隐藏密码" : "查看密码"}
         title={revealed ? "隐藏密码" : "查看密码"}
       >
         {revealed ? <EyeOff /> : <Eye />}
-        {revealed ? "隐藏" : "查看"}
       </Button>
       <Button
-        size="sm"
+        size="icon-sm"
         variant="ghost"
-        className="h-9 px-2 text-xs"
+        className="size-9 shrink-0"
         disabled={busy}
         onClick={onCopy}
         aria-label="复制密码"
-        title="复制密码"
+        title={copied ? "已复制密码" : "复制密码"}
       >
         {copied ? <Check /> : <Clipboard />}
-        {copied ? "已复制" : "复制"}
       </Button>
     </div>
   )

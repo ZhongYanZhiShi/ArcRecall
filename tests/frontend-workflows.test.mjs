@@ -43,6 +43,10 @@ function sourceHarness(overrides) {
     return slots[index].value
   }
   const React = {
+    // This harness tests handlers, not React's render scheduling.
+    memo(component) {
+      return component
+    },
     createContext() {
       return { Provider: "ContextProvider" }
     },
@@ -1722,7 +1726,7 @@ test("历史加载失败使用通知并可刷新恢复，查看密码失败不�
   tree = harness.render(HistoryPage)
   const cell = find(tree, (node) => node.type?.name === "HistoryEntry")
   assert.ok(cell)
-  cell.props.onReveal()
+  cell.props.onReveal(cell.props.entry)
   await settle()
   tree = harness.render(HistoryPage)
   assert.deepEqual(harness.notifications.at(-1), {
@@ -1734,7 +1738,8 @@ test("历史加载失败使用通知并可刷新恢复，查看密码失败不�
     null
   )
   fails = true
-  find(tree, (node) => node.type?.name === "HistoryEntry").props.onDelete()
+  const entryToDelete = find(tree, (node) => node.type?.name === "HistoryEntry")
+  entryToDelete.props.onDelete(entryToDelete.props.entry)
   tree = harness.render(HistoryPage)
   find(
     tree,
@@ -1791,14 +1796,14 @@ test("历史明文按绝对期限隐藏，Activity 清理后异步结果不能�
   harness.render(HistoryPage)
   await settle()
   let tree = harness.render(HistoryPage)
-  passwordCell(tree).props.onReveal()
+  passwordCell(tree).props.onReveal(passwordCell(tree).props.entry)
   await settle()
   tree = harness.render(HistoryPage)
   assert.equal(passwordCell(tree).props.revealed, "test-secret")
   t.mock.timers.tick(30_000)
   tree = harness.render(HistoryPage)
   assert.equal(passwordCell(tree).props.revealed, null)
-  passwordCell(tree).props.onReveal()
+  passwordCell(tree).props.onReveal(passwordCell(tree).props.entry)
   await settle()
   tree = harness.render(HistoryPage)
   harness.hide()
@@ -1807,7 +1812,7 @@ test("历史明文按绝对期限隐藏，Activity 清理后异步结果不能�
   await settle()
   tree = harness.render(HistoryPage)
   pendingReveal = deferred()
-  passwordCell(tree).props.onReveal()
+  passwordCell(tree).props.onReveal(passwordCell(tree).props.entry)
   harness.hide()
   pendingReveal.resolve("late-secret")
   await settle()

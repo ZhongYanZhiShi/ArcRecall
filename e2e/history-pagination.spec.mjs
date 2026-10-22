@@ -466,3 +466,106 @@ for (const width of [1280, 390]) {
     ).toBe(true)
   })
 }
+
+test("查看和复制密码仅更新当前记录，刷新后丢弃迟到的密码", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"])
+  const errors = []
+  page.on("pageerror", (error) => errors.push(error.message))
+  await page.goto("/")
+  await page.getByRole("button", { name: "历史", exact: true }).click()
+  await expect(page.getByRole("combobox", { name: "每页条数" })).toBeEnabled()
+  await page.evaluate(() => {
+    window.__TAURI_INTERNALS__ = {
+      async invoke(command) {
+        if (command === "history_list") {
+          window.__HISTORY_LIST_CALLS__ =
+            (window.__HISTORY_LIST_CALLS__ ?? 0) + 1
+          return {
+            entries: [1, 2].map((id) => ({
+              id,
+              archiveName: `测试归档${id}.zip`,
+              archiveFormat: "ZIP",
+              fileSize: 1024,
+              volumeCount: 1,
+              lastVerifiedAtMs: 1_792_324_800_000,
+              hasPassword: true,
+            })),
+            totalCount: 2,
+            matchedCount: 2,
+            passwordCount: 2,
+          }
+        }
+        if (command === "history_reveal_password") {
+          return new Promise((resolve) => {
+            window.__HISTORY_REVEAL_RESOLVE__ = resolve
+          })
+        }
+        return null
+      },
+    }
+  })
+  const refresh = page.getByRole("button", { name: "刷新", exact: true })
+  await refresh.click()
+  const first = page.getByRole("article", {
+    name: "测试归档1.zip",
+    exact: true,
+  })
+  const second = page.getByRole("article", {
+    name: "测试归档2.zip",
+    exact: true,
+  })
+  await expect(first).toBeVisible()
+  await second.evaluate((element) => {
+    window.__OTHER_ROW_MUTATIONS__ = 0
+    new MutationObserver((records) => {
+      window.__OTHER_ROW_MUTATIONS__ += records.length
+    }).observe(element, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+      characterData: true,
+    })
+  })
+  for (const action of ["查看密码", "复制密码"]) {
+    const button = first.getByRole("button", { name: action, exact: true })
+    await expect(button).toHaveText("")
+    await button.click()
+    await expect(button).toBeDisabled()
+    await expect(refresh).toBeEnabled()
+    await expect(refresh.locator("svg")).not.toHaveClass(/animate-spin/)
+    await expect(page.getByRole("searchbox")).toBeEnabled()
+    await expect(page.getByRole("combobox", { name: "每页条数" })).toBeEnabled()
+    await expect(
+      second.getByRole("button", { name: "查看密码", exact: true })
+    ).toBeEnabled()
+    await page.evaluate(() => window.__HISTORY_REVEAL_RESOLVE__("test-secret"))
+    if (action === "查看密码") {
+      await expect(first.locator("code")).toHaveText("test-secret")
+      await first.getByRole("button", { name: "隐藏密码", exact: true }).click()
+      await expect(first.locator("code")).toHaveText("••••••••")
+    } else {
+      await expect(button).toBeEnabled()
+      await expect(button).toHaveAttribute("title", "已复制密码")
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe("test-secret")
+    }
+  }
+  expect(await page.evaluate(() => window.__HISTORY_LIST_CALLS__)).toBe(1)
+  expect(await page.evaluate(() => window.__OTHER_ROW_MUTATIONS__)).toBe(0)
+  await first.getByRole("button", { name: "查看密码", exact: true }).click()
+  await expect(
+    first.getByRole("button", { name: "查看密码", exact: true })
+  ).toBeDisabled()
+  await refresh.click()
+  await expect(refresh).toBeEnabled()
+  await page.evaluate(() => window.__HISTORY_REVEAL_RESOLVE__("stale-secret"))
+  await expect(
+    first.getByRole("button", { name: "查看密码", exact: true })
+  ).toBeEnabled()
+  await expect(first.locator("code")).toHaveText("••••••••")
+  expect(errors).toEqual([])
+})
