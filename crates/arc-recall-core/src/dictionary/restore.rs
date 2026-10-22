@@ -168,6 +168,7 @@ mod tests {
         let target = dir.path().join("target.db");
         let dictionary = DictionaryCandidateStore::open(&target).unwrap();
         let history = RecoveryHistoryStore::open(&target).unwrap();
+        assert_eq!(history.list(&Default::default()).unwrap().total_count, 0);
         dictionary
             .restore_snapshot(&snapshot, &dir.path().join("safety.db"))
             .unwrap();

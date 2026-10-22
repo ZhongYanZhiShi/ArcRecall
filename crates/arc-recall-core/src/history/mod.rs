@@ -126,6 +126,7 @@ pub struct RecoveryHistoryListResult {
 pub struct RecoveryHistoryStore {
     path: PathBuf,
     write_lock: Mutex<()>,
+    list_cache: Mutex<Option<grouped::ListCache>>,
 }
 
 impl RecoveryHistoryStore {
@@ -137,6 +138,7 @@ impl RecoveryHistoryStore {
         let store = Self {
             path,
             write_lock: Mutex::new(()),
+            list_cache: Mutex::new(None),
         };
         store.with_connection(|conn| {
             conn.execute_batch(SCHEMA_SQL)?;
@@ -266,7 +268,14 @@ impl RecoveryHistoryStore {
         &self,
         query: &RecoveryHistoryQuery,
     ) -> Result<RecoveryHistoryListResult, RecoveryHistoryError> {
-        self.with_connection(|conn| grouped::list(conn, query))
+        let mut cache = self.list_cache.lock().expect("history list cache lock");
+        if cache.is_none() {
+            *cache = Some(grouped::ListCache::new(self.open_connection()?)?);
+        }
+        cache
+            .as_mut()
+            .expect("initialized history list cache")
+            .list(query)
     }
 
     pub fn protected_password_by_fingerprint(
@@ -377,12 +386,16 @@ impl RecoveryHistoryStore {
         &self,
         f: impl FnOnce(&Connection) -> Result<T, RecoveryHistoryError>,
     ) -> Result<T, RecoveryHistoryError> {
+        f(&self.open_connection()?)
+    }
+
+    fn open_connection(&self) -> Result<Connection, RecoveryHistoryError> {
         let conn = Connection::open(&self.path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(
             "PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON; PRAGMA journal_mode = WAL;",
         )?;
-        f(&conn)
+        Ok(conn)
     }
 }
 
