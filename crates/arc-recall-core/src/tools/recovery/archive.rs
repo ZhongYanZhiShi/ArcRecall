@@ -74,8 +74,10 @@ pub fn analyze_archive(path: impl AsRef<Path>) -> Result<ArchiveAnalysis, Recove
     })
 }
 
-pub(super) fn resolve_zip_archive_path(path: &Path) -> Result<Option<PathBuf>, RecoveryError> {
-    Ok(zip_volumes::resolve(path)?.map(|zip| zip.primary))
+pub(super) fn resolve_zip_archive_paths(
+    path: &Path,
+) -> Result<Option<(PathBuf, Vec<PathBuf>)>, RecoveryError> {
+    Ok(zip_volumes::resolve(path)?.map(|zip| (zip.primary, zip.paths)))
 }
 
 pub fn fingerprint_file_sha256(path: impl AsRef<Path>) -> Result<String, RecoveryError> {

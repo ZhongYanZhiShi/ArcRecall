@@ -876,6 +876,7 @@ fn find_new_or_changed_archives(
     }
     let mut archives = Vec::with_capacity(max_archives.min(16));
     let mut zip_archives = HashSet::new();
+    let mut zip_members = HashSet::new();
     let mut scanned_files = 0u64;
     let mut last_reported = 0u64;
     let mut last_report_at = Instant::now();
@@ -889,16 +890,26 @@ fn find_new_or_changed_archives(
                 }
             };
             scanned_files = scanned_files.saturating_add(1);
-            if let Some(current) = capture_file_state(&path)
+            if !zip_members.contains(&path)
+                && let Some(current) = capture_file_state(&path)
                 && before
                     .get(&path)
                     .is_none_or(|previous| current.has_changed_since(previous))
             {
-                match super::archive::resolve_zip_archive_path(&path) {
-                    Ok(Some(primary))
-                        if !excluded.contains(&primary) && zip_archives.insert(primary.clone()) =>
-                    {
-                        archives.push(primary)
+                match super::archive::resolve_zip_archive_paths(&path) {
+                    Ok(Some((primary, members))) => {
+                        // Cache only members of a successfully validated set, for
+                        // this scan. Keep ReadDir's parent spelling (canonical
+                        // Windows paths may otherwise have a different prefix).
+                        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+                        zip_members.extend(
+                            members.iter().filter_map(|member| {
+                                member.file_name().map(|name| parent.join(name))
+                            }),
+                        );
+                        if !excluded.contains(&primary) && zip_archives.insert(primary.clone()) {
+                            archives.push(primary);
+                        }
                     }
                     Ok(None)
                         if !excluded.contains(&path)

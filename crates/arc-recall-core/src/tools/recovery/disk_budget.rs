@@ -132,8 +132,16 @@ fn directory_usage_checked(
         for entry in fs::read_dir(directory)? {
             check_cancelled()?;
             let entry = entry?;
-            let meta = fs::symlink_metadata(entry.path())?;
+            // ReadDir already supplies this metadata on Windows. Reopening every
+            // path makes each 500 ms budget check contend with extraction I/O.
+            // DirEntry::metadata, like symlink_metadata, does not follow links.
+            let meta = entry.metadata()?;
             entries = entries.saturating_add(1);
+            if entries > max_entries {
+                return Err(RecoveryError::BudgetExceeded(
+                    "实时展开量已超过任务磁盘预算".into(),
+                ));
+            }
             #[cfg(windows)]
             {
                 use std::os::windows::fs::MetadataExt;
@@ -146,7 +154,7 @@ fn directory_usage_checked(
             } else if meta.is_dir() {
                 pending.push(entry.path());
             }
-            if bytes > max_bytes || entries > max_entries {
+            if bytes > max_bytes {
                 return Err(RecoveryError::BudgetExceeded(
                     "实时展开量已超过任务磁盘预算".into(),
                 ));
@@ -212,5 +220,53 @@ mod tests {
             directory_usage(&directory.path().join("missing"), 0, 0, &cancellation),
             Err(RecoveryError::Cancelled)
         ));
+    }
+
+    #[test]
+    fn repeated_scans_observe_growing_files_and_new_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let cancellation = CancellationToken::default();
+        let file = directory.path().join("growing.bin");
+        fs::write(&file, [0; 4]).unwrap();
+        assert_eq!(
+            directory_usage(directory.path(), 8, 2, &cancellation).unwrap(),
+            (4, 1)
+        );
+        fs::write(&file, [0; 9]).unwrap();
+        assert!(matches!(
+            directory_usage(directory.path(), 8, 2, &cancellation),
+            Err(RecoveryError::BudgetExceeded(_))
+        ));
+        fs::write(&file, [0; 4]).unwrap();
+        fs::write(directory.path().join("new.bin"), [0; 1]).unwrap();
+        assert!(matches!(
+            directory_usage(directory.path(), 8, 1, &cancellation),
+            Err(RecoveryError::BudgetExceeded(_))
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junctions_are_counted_but_their_targets_are_not_traversed() {
+        use std::os::windows::process::CommandExt;
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("outside.bin"), [0; 100]).unwrap();
+        let junction = directory.path().join("junction");
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(outside.path())
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let cancellation = CancellationToken::default();
+        let usage = directory_usage(directory.path(), 0, 1, &cancellation);
+        let exceeded = directory_usage(directory.path(), 0, 0, &cancellation);
+        fs::remove_dir(&junction).unwrap();
+        assert_eq!(usage.unwrap(), (0, 1));
+        assert!(matches!(exceeded, Err(RecoveryError::BudgetExceeded(_))));
+        assert!(outside.path().join("outside.bin").exists());
     }
 }
