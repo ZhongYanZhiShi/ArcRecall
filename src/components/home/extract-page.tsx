@@ -47,9 +47,11 @@ import {
 import { useDesktopTask } from "@/hooks/use-desktop-task"
 
 export function ExtractPage({
+  dataRevision = 0,
   onOpenEngineSettings,
   onStreamActivityChange,
 }: {
+  dataRevision?: number
   onOpenEngineSettings: () => void
   onStreamActivityChange?: (activity: ByteStreamActivity) => void
 }) {
@@ -169,7 +171,10 @@ export function ExtractPage({
   const taskResultRef = React.useRef<HTMLDivElement>(null)
   const revealedTaskId = React.useRef<string | null>(null)
 
-  React.useEffect(refreshDictionaryCount, [refreshDictionaryCount])
+  React.useEffect(refreshDictionaryCount, [
+    refreshDictionaryCount,
+    dataRevision,
+  ])
 
   React.useEffect(() => {
     let disposed = false
@@ -195,7 +200,7 @@ export function ExtractPage({
     return () => {
       disposed = true
     }
-  }, [])
+  }, [dataRevision])
 
   const selectArchivePath = React.useCallback(
     async (path: string) => {

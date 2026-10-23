@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { invoke } from "@tauri-apps/api/core"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,6 +17,9 @@ import {
   listTaskRecords,
   deleteTaskRecord,
   type TaskRecord,
+  type TaskOperation,
+  runArchiveAction,
+  cancelArchiveAction,
 } from "@/lib/workflows"
 import {
   recoveryQueue,
@@ -24,7 +28,17 @@ import {
 import { openOutputDirectory, pickOutputDirectory } from "@/lib/recovery"
 import { DictionaryGroupSelect } from "./dictionary-group-select"
 
+const operations: Record<TaskOperation, string> = {
+  recovery: "解压恢复",
+  compression: "压缩",
+  selectiveExtraction: "选择性解压",
+  integrityCheck: "完整性检查",
+  batchIntegrityCheck: "批量完整性检查",
+}
 const labels: Record<string, string> = {
+  passed: "检查通过",
+  waiting: "未检查",
+  checking: "检查中",
   running: "运行中",
   success: "完成",
   partial: "部分完成",
@@ -47,6 +61,9 @@ const failures: Record<string, string> = {
 export function TaskRecordsPanel() {
   const [open, setOpen] = React.useState(false)
   const [rows, setRows] = React.useState<TaskRecord[]>([])
+  const [operationFilter, setOperationFilter] = React.useState<
+    TaskOperation | ""
+  >("")
   const [failedOnly, setFailedOnly] = React.useState(false)
   const [page, setPage] = React.useState(0)
   const [busy, setBusy] = React.useState(false)
@@ -57,6 +74,7 @@ export function TaskRecordsPanel() {
   const [group, setGroup] = React.useState<string | null>(null)
   const [revision, setRevision] = React.useState(0)
   const operation = React.useRef(false)
+  const [activeAction, setActiveAction] = React.useState<string | null>(null)
   React.useEffect(() => {
     if (!open) return
     let disposed = false
@@ -65,7 +83,7 @@ export function TaskRecordsPanel() {
         if (disposed) return []
         setBusy(true)
         setError(null)
-        return listTaskRecords(page * 100, failedOnly)
+        return listTaskRecords(page * 100, failedOnly, operationFilter || null)
       })
       .then((next) => {
         if (!disposed) setRows(next)
@@ -79,12 +97,39 @@ export function TaskRecordsPanel() {
     return () => {
       disposed = true
     }
-  }, [open, page, failedOnly, revision])
+  }, [open, page, failedOnly, revision, operationFilter])
   async function retry(paths: string[], root: boolean) {
     if (!selected || operation.current) return
     operation.current = true
     setBusy(true)
     try {
+      if (selected.operation && selected.operation !== "recovery") {
+        const id = crypto.randomUUID()
+        setActiveAction(id)
+        if (selected.operation === "batchIntegrityCheck") {
+          await invoke("archive_batch_check_run", {
+            id,
+            paths,
+            password: password || null,
+            retryFailed: false,
+          })
+        } else {
+          await runArchiveAction(
+            id,
+            selected.archivePath,
+            password,
+            selected.operation === "selectiveExtraction"
+              ? (selected.selectedPaths ?? [])
+              : null,
+            output
+          )
+        }
+        setPassword("")
+        setSelected(null)
+        setRevision((v) => v + 1)
+        toast.success("操作已结束，请查看最新任务记录。")
+        return
+      }
       await recoveryQueueJournal.initialize()
       if (!recoveryQueueJournal.getSnapshot().ready)
         throw new Error("队列设置正在保存，请稍后重试。")
@@ -105,6 +150,8 @@ export function TaskRecordsPanel() {
       setError(String(reason))
     } finally {
       operation.current = false
+      setActiveAction(null)
+      setRevision((v) => v + 1)
       setBusy(false)
     }
   }
@@ -116,6 +163,7 @@ export function TaskRecordsPanel() {
       <Sheet
         open={open}
         onOpenChange={(next) => {
+          if (operation.current) return
           setOpen(next)
           if (!next) {
             setPassword("")
@@ -127,11 +175,28 @@ export function TaskRecordsPanel() {
           <SheetHeader>
             <SheetTitle>任务记录与重试</SheetTitle>
             <SheetDescription>
-              记录恢复任务的路径、选项与结果，不保存密码。重试会重新检查源文件并避免覆盖已有输出；不恢复引擎进度。
+              统一保存解压、压缩与检查结果，不保存密码。检查结论仅代表记录中的检查时间，未展开检查嵌套归档。重试会重新验证文件。
             </SheetDescription>
           </SheetHeader>
           <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 pb-4">
             <div className="flex flex-wrap gap-2">
+              <select
+                aria-label="任务类型"
+                className="h-9 rounded-md border bg-background px-2 text-sm"
+                value={operationFilter}
+                disabled={busy}
+                onChange={(e) => {
+                  setOperationFilter(e.target.value as TaskOperation | "")
+                  setPage(0)
+                }}
+              >
+                <option value="">全部类型</option>
+                {Object.entries(operations).map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
+              </select>
               <Button
                 variant="outline"
                 disabled={busy}
@@ -169,45 +234,94 @@ export function TaskRecordsPanel() {
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={busy}
                 />
-                <DictionaryGroupSelect
-                  value={group}
-                  onChange={setGroup}
-                  disabled={busy}
-                />
-                <p className="text-xs break-all text-muted-foreground">
-                  {output
-                    ? `输出父目录：${output}`
-                    : `原输出位置（冲突时新建）：${selected.outputDirectory}`}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() =>
-                      void pickOutputDirectory()
-                        .then((path) => {
-                          if (path) setOutput(path)
-                        })
-                        .catch((e) => setError(String(e)))
-                    }
-                  >
-                    更换输出位置
-                  </Button>
-                  <Button
-                    disabled={busy}
-                    onClick={() => void retry([selected.archivePath], true)}
-                  >
-                    整包加入队列
-                  </Button>
-                  {selected.pendingArchivePaths.length > 0 && (
+                {!selected.operation || selected.operation === "recovery" ? (
+                  <>
+                    <DictionaryGroupSelect
+                      value={group}
+                      onChange={setGroup}
+                      disabled={busy}
+                    />
+                    <p className="text-xs break-all text-muted-foreground">
+                      {output
+                        ? `输出父目录：${output}`
+                        : `原输出位置（冲突时新建）：${selected.outputDirectory}`}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() =>
+                          void pickOutputDirectory()
+                            .then((path) => {
+                              if (path) setOutput(path)
+                            })
+                            .catch((e) => setError(String(e)))
+                        }
+                      >
+                        更换输出位置
+                      </Button>
+                      <Button
+                        disabled={busy}
+                        onClick={() => void retry([selected.archivePath], true)}
+                      >
+                        整包加入队列
+                      </Button>
+                      {selected.pendingArchivePaths.length > 0 && (
+                        <Button
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() =>
+                            void retry(selected.pendingArchivePaths, false)
+                          }
+                        >
+                          仅重试未完成归档
+                        </Button>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {selected.operation === "selectiveExtraction" && (
+                      <Button
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() =>
+                          void pickOutputDirectory()
+                            .then((path) => {
+                              if (path) setOutput(path)
+                            })
+                            .catch((e) => setError(String(e)))
+                        }
+                      >
+                        {output ? "已选择新输出位置" : "选择输出位置"}
+                      </Button>
+                    )}
                     <Button
-                      variant="outline"
                       disabled={busy}
                       onClick={() =>
-                        void retry(selected.pendingArchivePaths, false)
+                        void retry(
+                          selected.sourcePaths?.length
+                            ? selected.sourcePaths
+                            : [selected.archivePath],
+                          true
+                        )
                       }
                     >
-                      仅重试未完成归档
+                      {busy ? "正在执行…" : "重新执行"}
+                    </Button>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  {activeAction && (
+                    <Button
+                      variant="outline"
+                      onClick={() =>
+                        void cancelArchiveAction(activeAction).catch((e) =>
+                          setError(String(e))
+                        )
+                      }
+                    >
+                      停止当前操作
                     </Button>
                   )}
                   <Button
@@ -232,6 +346,7 @@ export function TaskRecordsPanel() {
                   >
                     <p className="text-sm break-all">{row.archivePath}</p>
                     <p className="text-xs text-muted-foreground">
+                      {operations[row.operation ?? "recovery"]} ·{" "}
                       {labels[row.state] ?? row.state} ·{" "}
                       {new Date(row.startedAtMs).toLocaleString("zh-CN")} ·{" "}
                       {(row.elapsedMs / 1000).toFixed(1)} 秒
@@ -240,8 +355,60 @@ export function TaskRecordsPanel() {
                       <p className="text-sm">
                         {row.failureKind
                           ? (failures[row.failureKind] ?? "执行失败")
-                          : "当前候选未找到密码，请补充密码或字典后重试。"}
+                          : !row.operation || row.operation === "recovery"
+                            ? "当前候选未找到密码，请补充密码或字典后重试。"
+                            : "操作未完成，请检查源文件、密码和访问权限。"}
                       </p>
+                    )}
+                    {row.outputPath && (
+                      <p className="text-xs break-all">
+                        输出文件：{row.outputPath}
+                      </p>
+                    )}
+                    {!!row.sourcePaths?.length && (
+                      <details className="text-xs">
+                        <summary>{row.sourcePaths.length} 个来源</summary>
+                        {row.sourcePaths.map((path) => (
+                          <p key={path} className="break-all">
+                            {path}
+                          </p>
+                        ))}
+                      </details>
+                    )}
+                    {!!row.selectedPaths?.length && (
+                      <details className="text-xs">
+                        <summary>
+                          {row.selectedPaths.length} 个选择的条目
+                        </summary>
+                        {row.selectedPaths.map((path) => (
+                          <p key={path} className="break-all">
+                            {path}
+                          </p>
+                        ))}
+                      </details>
+                    )}
+                    {!!row.checkItems?.length && (
+                      <details className="text-xs">
+                        <summary>
+                          逐项检查结果（
+                          {
+                            row.checkItems.filter(
+                              (item) => item.state === "passed"
+                            ).length
+                          }{" "}
+                          / {row.checkItems.length} 通过）
+                        </summary>
+                        {row.checkItems.map((item, index) => (
+                          <p key={index} className="break-all">
+                            {item.path} · {labels[item.state] ?? item.state} ·{" "}
+                            {item.checkedAtMs
+                              ? new Date(item.checkedAtMs).toLocaleString(
+                                  "zh-CN"
+                                )
+                              : "未完成检查"}
+                          </p>
+                        ))}
+                      </details>
                     )}
                     {row.pendingArchivePaths.length > 0 && (
                       <details className="text-xs">
@@ -269,20 +436,22 @@ export function TaskRecordsPanel() {
                       </details>
                     )}
                     <div className="flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={busy || row.state === "running"}
-                        onClick={() => {
-                          setSelected(row)
-                          setPassword("")
-                          setOutput(null)
-                          setGroup(row.dictionaryGroup)
-                          setError(null)
-                        }}
-                      >
-                        准备重试
-                      </Button>
+                      {row.operation !== "compression" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy || row.state === "running"}
+                          onClick={() => {
+                            setSelected(row)
+                            setPassword("")
+                            setOutput(null)
+                            setGroup(row.dictionaryGroup)
+                            setError(null)
+                          }}
+                        >
+                          准备重试
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         variant="ghost"

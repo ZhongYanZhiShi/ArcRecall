@@ -5,7 +5,23 @@ import {
   type DictionaryListResult,
 } from "./dictionary"
 
+export type TaskOperation =
+  | "recovery"
+  | "compression"
+  | "selectiveExtraction"
+  | "integrityCheck"
+  | "batchIntegrityCheck"
 export type TaskRecord = {
+  operation?: TaskOperation
+  sourcePaths?: string[]
+  selectedPaths?: string[]
+  outputPath?: string | null
+  checkItems?: {
+    path: string
+    state: string
+    elapsedMs: number
+    checkedAtMs: number | null
+  }[]
   taskId: string
   archivePath: string
   outputDirectory: string
@@ -48,10 +64,11 @@ export function listGroup(
 }
 export function listTaskRecords(
   skip: number,
-  failedOnly: boolean
+  failedOnly: boolean,
+  operation: TaskOperation | null = null
 ): Promise<TaskRecord[]> {
   return isDesktopRuntime()
-    ? invoke("task_records_list", { skip, failedOnly })
+    ? invoke("task_records_list", { skip, failedOnly, operation })
     : Promise.resolve([])
 }
 export function deleteTaskRecord(id: string): Promise<void> {

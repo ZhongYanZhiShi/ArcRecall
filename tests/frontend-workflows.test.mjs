@@ -2310,3 +2310,128 @@ test("AI 配置重新加载的迟到结果不覆盖正在编辑的草稿和提�
   assert.equal(current.draft.name, "unsaved")
   assert.equal(current.prompt, "unsaved prompt")
 })
+
+test("统一记录按类型查询，检查重试防止重复提交并可取消", async () => {
+  const queries = []
+  const started = []
+  const cancelled = []
+  const pending = deferred()
+  const record = {
+    taskId: "batch-record",
+    operation: "batchIntegrityCheck",
+    state: "partial",
+    archivePath: "C:/测试归档.zip",
+    sourcePaths: ["C:/测试归档.zip"],
+    startedAtMs: 1,
+    elapsedMs: 1,
+    pendingArchivePaths: [],
+    skippedScanDirectories: [],
+    checkItems: [{ path: "C:/测试归档.zip", state: "failed", checkedAtMs: 1 }],
+  }
+  const harness = sourceHarness({
+    "@/lib/workflows": {
+      listTaskRecords: async (...args) => {
+        queries.push(args)
+        return [record]
+      },
+      cancelArchiveAction: async (id) => {
+        cancelled.push(id)
+        pending.resolve()
+      },
+    },
+    "@tauri-apps/api/core": {
+      invoke: (command, args) => {
+        started.push({ command, args })
+        return pending.promise
+      },
+    },
+    "@/lib/recovery-queue-session": {},
+    "@/lib/recovery": {},
+  })
+  const { TaskRecordsPanel } = harness.load(
+    "src/components/home/task-records-panel.tsx"
+  )
+  const render = () => harness.render(TaskRecordsPanel)
+  button(render(), "任务记录").props.onClick()
+  render()
+  await settle()
+  find(
+    render(),
+    (node) => node.props?.["aria-label"] === "任务类型"
+  ).props.onChange({ target: { value: "batchIntegrityCheck" } })
+  render()
+  await settle()
+  assert.deepEqual(queries.at(-1), [0, false, "batchIntegrityCheck"])
+  button(render(), "准备重试").props.onClick()
+  find(
+    render(),
+    (node) => node.props?.["aria-label"] === "重试已知密码"
+  ).props.onChange({ target: { value: "temporary-secret" } })
+  const start = button(render(), "重新执行")
+  start.props.onClick()
+  start.props.onClick()
+  await settle()
+  assert.equal(started.length, 1)
+  assert.equal(started[0].command, "archive_batch_check_run")
+  assert.equal(started[0].args.password, "temporary-secret")
+  const sheet = find(render(), (node) => node.type === "Sheet")
+  sheet.props.onOpenChange(false)
+  assert.equal(find(render(), (node) => node.type === "Sheet").props.open, true)
+  button(render(), "停止当前操作").props.onClick()
+  await settle()
+  assert.deepEqual(cancelled, [started[0].args.id])
+  assert.equal(button(render(), "停止当前操作"), null)
+  assert.equal(
+    find(render(), (node) => node.props?.["aria-label"] === "重试已知密码"),
+    null
+  )
+  harness.hide()
+})
+
+test("统一备份预览显示各类数据范围，取消不应用恢复", async () => {
+  const calls = []
+  const harness = sourceHarness({
+    "@/lib/file-dialog": {
+      openRememberingDirectory: async () => "C:/备份.arcrecall",
+    },
+    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/recovery-queue-session": {},
+    "@/lib/logging": {},
+    "@tauri-apps/api/core": {
+      invoke: async (command) => {
+        calls.push(command)
+        return {
+          token: "snapshot",
+          unified: true,
+          presetCount: 3,
+          taskRecordCount: 15,
+          candidateCount: 20,
+          historyCount: 4,
+          passwordCount: 1,
+          unreadablePasswordCount: 0,
+        }
+      },
+    },
+  })
+  const { DatabaseRestorePanel } = harness.load(
+    "src/components/home/database-restore-panel.tsx"
+  )
+  const render = () =>
+    harness.render(DatabaseRestorePanel, {
+      onRestored: () => {
+        throw new Error("must not restore")
+      },
+    })
+  button(render(), "从备份恢复").props.onClick()
+  await settle()
+  assert.match(JSON.stringify(render()), /3 个预设、15 条任务记录及通用设置/)
+  find(render(), (node) => node.type === "AlertDialog").props.onOpenChange(
+    false
+  )
+  await settle()
+  assert.deepEqual(calls, [
+    "database_restore_preview",
+    "database_restore_discard",
+  ])
+  harness.hide()
+})

@@ -73,6 +73,27 @@ impl ProcessingPresetStore {
         tx.execute("INSERT INTO processing_presets VALUES (?1,?2) ON CONFLICT(name) DO UPDATE SET payload=excluded.payload", params![preset.name, payload]).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())
     }
+    pub fn replace_all(&mut self, presets: &[ProcessingPreset]) -> Result<(), String> {
+        // Validate with exactly the same rules as normal saves before modifying this store.
+        let temp = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let mut validation = Self::open(&temp.path().join("presets.db"))?;
+        for preset in presets {
+            validation.save(preset, false)?;
+        }
+        let tx = self.0.transaction().map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM processing_presets", [])
+            .map_err(|e| e.to_string())?;
+        for preset in presets {
+            let json = serde_json::to_string(preset).map_err(|e| e.to_string())?;
+            tx.execute(
+                "INSERT INTO processing_presets VALUES (?1,?2)",
+                params![preset.name, json],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
     pub fn delete(&self, name: &str) -> Result<(), String> {
         self.0
             .execute("DELETE FROM processing_presets WHERE name=?1", [name])

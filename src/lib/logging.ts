@@ -196,7 +196,7 @@ export async function backupDatabase(): Promise<DatabaseBackupResult> {
       createdAtMs: Date.now(),
     }
   }
-  return invoke<DatabaseBackupResult>("database_backup")
+  return invoke<DatabaseBackupResult>("data_backup")
 }
 
 function listPreviewLogs(query: LogQuery): LogListResult {

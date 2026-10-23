@@ -1,5 +1,6 @@
 use crate::AppState;
 use arc_recall_core::processing_presets::{ProcessingPreset, ProcessingPresetStore};
+use std::sync::Arc;
 use tauri::State;
 
 #[tauri::command]
@@ -19,9 +20,11 @@ pub(crate) async fn processing_preset_save(
     overwrite: bool,
 ) -> Result<(), String> {
     let lease = state.lifecycle.begin()?;
+    let maintenance = Arc::clone(&state.data_maintenance);
     let path = state.paths.root.join("processing-presets.db");
     tauri::async_runtime::spawn_blocking(move || {
         let _lease = lease;
+        let _guard = maintenance.lock().map_err(|e| e.to_string())?;
         ProcessingPresetStore::open(&path)?.save(&preset, overwrite)
     })
     .await
@@ -34,9 +37,11 @@ pub(crate) async fn processing_preset_delete(
     name: String,
 ) -> Result<(), String> {
     let lease = state.lifecycle.begin()?;
+    let maintenance = Arc::clone(&state.data_maintenance);
     let path = state.paths.root.join("processing-presets.db");
     tauri::async_runtime::spawn_blocking(move || {
         let _lease = lease;
+        let _guard = maintenance.lock().map_err(|e| e.to_string())?;
         ProcessingPresetStore::open(&path)?.delete(&name)
     })
     .await

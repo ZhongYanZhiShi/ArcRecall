@@ -4,9 +4,39 @@ use std::path::Path;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum TaskOperation {
+    #[default]
+    Recovery,
+    Compression,
+    SelectiveExtraction,
+    IntegrityCheck,
+    BatchIntegrityCheck,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskCheckItem {
+    pub path: String,
+    pub state: String,
+    pub elapsed_ms: u64,
+    pub checked_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskRecord {
+    #[serde(default)]
+    pub operation: TaskOperation,
+    #[serde(default)]
+    pub source_paths: Vec<String>,
+    #[serde(default)]
+    pub selected_paths: Vec<String>,
+    #[serde(default)]
+    pub output_path: Option<String>,
+    #[serde(default)]
+    pub check_items: Vec<TaskCheckItem>,
     pub task_id: String,
     pub archive_path: String,
     pub output_directory: String,
@@ -47,9 +77,25 @@ impl TaskRecordStore {
     }
 
     pub fn list(&self, skip: u32, failed_only: bool) -> Result<Vec<TaskRecord>, String> {
-        let mut stmt = self.0.prepare("SELECT record, state FROM task_records WHERE ?1=0 OR state NOT IN ('success','running') ORDER BY started DESC, id DESC LIMIT 100 OFFSET ?2").map_err(|e| e.to_string())?;
+        self.list_filtered(skip, failed_only, None)
+    }
+
+    pub fn list_filtered(
+        &self,
+        skip: u32,
+        failed_only: bool,
+        operation: Option<TaskOperation>,
+    ) -> Result<Vec<TaskRecord>, String> {
+        let operation = operation.map(|op| {
+            serde_json::to_value(op)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        });
+        let mut stmt = self.0.prepare("SELECT record, state FROM task_records WHERE (?1=0 OR state NOT IN ('success','running')) AND (?3 IS NULL OR COALESCE(json_extract(record,'$.operation'),'recovery')=?3) ORDER BY started DESC, id DESC LIMIT 100 OFFSET ?2").map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(params![failed_only, skip], |row| {
+            .query_map(params![failed_only, skip, operation], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(|e| e.to_string())?;
@@ -57,9 +103,47 @@ impl TaskRecordStore {
             let (json, state) = row.map_err(|e| e.to_string())?;
             let mut record: TaskRecord = serde_json::from_str(&json).map_err(|e| e.to_string())?;
             record.state = state;
+            if record.state == "interrupted" {
+                for item in &mut record.check_items {
+                    if matches!(item.state.as_str(), "waiting" | "checking") {
+                        item.state = "interrupted".into();
+                    }
+                }
+            }
             Ok(record)
         })
         .collect()
+    }
+
+    pub fn all(&self) -> Result<Vec<TaskRecord>, String> {
+        let mut result = Vec::new();
+        loop {
+            let page = self.list(result.len() as u32, false)?;
+            let done = page.len() < 100;
+            result.extend(page);
+            if done {
+                return Ok(result);
+            }
+        }
+    }
+
+    pub fn replace_all(&mut self, records: &[TaskRecord]) -> Result<(), String> {
+        let tx = self.0.transaction().map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM task_records", [])
+            .map_err(|e| e.to_string())?;
+        for record in records {
+            let mut record = record.clone();
+            if record.state == "running" {
+                record.state = "interrupted".into();
+            }
+            let json = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+            tx.execute(
+                "INSERT INTO task_records VALUES (?1,?2,?3,?4,NULL)",
+                params![record.task_id, record.started_at_ms, record.state, json],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())
     }
 
     pub fn interrupt_running(&self) -> Result<(), String> {
@@ -125,6 +209,7 @@ mod tests {
             dictionary_group: Some("测试分组".into()),
             pending_archive_paths: vec![],
             skipped_scan_directories: vec![],
+            ..TaskRecord::default()
         };
         TaskRecordStore::open(&path).unwrap().save(&record).unwrap();
         let store = TaskRecordStore::open(&path).unwrap();
@@ -141,5 +226,59 @@ mod tests {
         assert!(store.list(100, false).unwrap().is_empty());
         store.delete("task-1").unwrap();
         assert!(store.list(0, false).unwrap().is_empty());
+    }
+    #[test]
+    fn operation_filters_apply_before_pagination_and_old_rows_default_to_recovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TaskRecordStore::open(&temp.path().join("records.db")).unwrap();
+        for index in 0..205 {
+            let record = TaskRecord {
+                task_id: format!("task-{index}"),
+                started_at_ms: index,
+                state: "success".into(),
+                operation: if index % 2 == 0 {
+                    TaskOperation::Compression
+                } else {
+                    TaskOperation::IntegrityCheck
+                },
+                ..Default::default()
+            };
+            store.save(&record).unwrap();
+        }
+        let old = TaskRecord {
+            task_id: "legacy".into(),
+            state: "failed".into(),
+            ..Default::default()
+        };
+        let mut json = serde_json::to_value(old).unwrap();
+        json.as_object_mut().unwrap().remove("operation");
+        store
+            .0
+            .execute(
+                "INSERT INTO task_records VALUES ('legacy',0,'failed',?1,NULL)",
+                [json.to_string()],
+            )
+            .unwrap();
+        assert_eq!(store.all().unwrap().len(), 206);
+        assert_eq!(
+            store
+                .list_filtered(100, false, Some(TaskOperation::Compression))
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            store
+                .list_filtered(0, true, Some(TaskOperation::Recovery))
+                .unwrap()[0]
+                .task_id,
+            "legacy"
+        );
+        assert!(
+            store
+                .list_filtered(0, true, Some(TaskOperation::Compression))
+                .unwrap()
+                .is_empty()
+        );
     }
 }

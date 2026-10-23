@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod backup;
 pub mod dictionary;
 pub mod history;
 pub mod paths;

@@ -18,12 +18,17 @@ pub(crate) struct PreparedDatabaseRestore {
     token: String,
     directory: tempfile::TempDir,
     unreadable_password_count: usize,
+    contents: Option<arc_recall_core::backup::BackupContents>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DatabaseRestorePreview {
     token: String,
+    unified: bool,
+    preset_count: usize,
+    task_record_count: usize,
+    includes_settings: bool,
     #[serde(flatten)]
     info: arc_recall_core::DatabaseRestoreInfo,
     unreadable_password_count: usize,
@@ -50,7 +55,7 @@ pub(crate) async fn database_restore_preview(
             .tempdir()
             .map_err(|error| error.to_string())?;
         let snapshot = directory.path().join("snapshot.db");
-        let info = arc_recall_core::snapshot_database_restore(Path::new(&path), &snapshot)?;
+        let (info, contents) = arc_recall_core::backup::prepare(Path::new(&path), &snapshot)?;
         let history = arc_recall_core::RecoveryHistoryStore::open(&snapshot)
             .map_err(|error| error.to_string())?;
         let migration = crate::history_support::migrate_legacy_history_passwords(&history)?;
@@ -76,9 +81,14 @@ pub(crate) async fn database_restore_preview(
                 token: token.clone(),
                 directory,
                 unreadable_password_count,
+                contents: contents.clone(),
             },
             DatabaseRestorePreview {
                 token,
+                unified: contents.is_some(),
+                preset_count: contents.as_ref().map_or(0, |data| data.presets.len()),
+                task_record_count: contents.as_ref().map_or(0, |data| data.records.len()),
+                includes_settings: contents.is_some(),
                 info,
                 unreadable_password_count,
             },
@@ -137,14 +147,23 @@ pub(crate) async fn database_restore_apply(
     };
     let dictionary = Arc::clone(&state.dictionary);
     let history = Arc::clone(&state.history);
-    let exports = state.paths.exports.clone();
+    let paths = state.paths.clone();
+    let settings = Arc::clone(&state.settings);
+    let maintenance = Arc::clone(&state.data_maintenance);
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _lease = lease;
+        let _maintenance = maintenance.lock().map_err(|error| error.to_string())?;
         let dictionary = dictionary.lock().map_err(|error| error.to_string())?;
         let _history = history.lock().map_err(|error| error.to_string())?;
-        let safety_backup = unique_database_backup_path(&exports, current_time_ms())?;
-        let info = dictionary.restore_snapshot(
+        let settings = settings.lock().map_err(|error| error.to_string())?;
+        let safety_backup = unique_database_backup_path(&paths.exports, current_time_ms())?
+            .with_extension("arcrecall");
+        let info = arc_recall_core::backup::restore(
+            &paths,
+            &dictionary,
+            &settings,
             &prepared.directory.path().join("snapshot.db"),
+            prepared.contents.as_ref(),
             &safety_backup,
         )?;
         Ok::<_, String>(DatabaseRestoreResult {
@@ -154,6 +173,15 @@ pub(crate) async fn database_restore_apply(
     })
     .await
     .map_err(|error| error.to_string())?;
+    if result.is_ok() {
+        let settings = state
+            .settings
+            .lock()
+            .map_err(|e| e.to_string())?
+            .load()
+            .map_err(|e| e.to_string())?;
+        apply_logging_settings(&state.logger, &settings.logging)?;
+    }
     write_log(
         &state.logger,
         if result.is_ok() {
@@ -166,7 +194,7 @@ pub(crate) async fn database_restore_apply(
         if result.is_ok() {
             "数据库已从备份恢复。"
         } else {
-            "数据库恢复失败，原有数据保留。"
+            "数据恢复未完成，请查看恢复结果。"
         },
         std::iter::empty(),
     );
@@ -179,6 +207,42 @@ pub(crate) struct DatabaseBackupResult {
     path: String,
     byte_count: u64,
     created_at_ms: u64,
+}
+
+#[tauri::command]
+pub(crate) async fn data_backup(
+    state: State<'_, AppState>,
+) -> Result<DatabaseBackupResult, String> {
+    let lease = state.lifecycle.begin()?;
+    let _reservation = crate::task_coordination::TaskStartReservation::acquire(
+        &state.archive_task_starting,
+        "请等待当前归档或数据维护操作完成后再备份。",
+    )?;
+    crate::ensure_no_active_archive_task(&state)?;
+    let paths = state.paths.clone();
+    let dictionary = Arc::clone(&state.dictionary);
+    let history = Arc::clone(&state.history);
+    let settings = Arc::clone(&state.settings);
+    let maintenance = Arc::clone(&state.data_maintenance);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lease = lease;
+        let _maintenance = maintenance.lock().map_err(|e| e.to_string())?;
+        let dictionary = dictionary.lock().map_err(|e| e.to_string())?;
+        let _history = history.lock().map_err(|e| e.to_string())?;
+        let settings = settings.lock().map_err(|e| e.to_string())?;
+        let created_at_ms = current_time_ms();
+        let destination =
+            unique_database_backup_path(&paths.exports, created_at_ms)?.with_extension("arcrecall");
+        let byte_count =
+            arc_recall_core::backup::create(&paths, &dictionary, &settings, &destination)?;
+        Ok(DatabaseBackupResult {
+            path: destination.display().to_string(),
+            byte_count,
+            created_at_ms,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -452,7 +516,8 @@ mod tests {
             history: Arc::new(Mutex::new(
                 RecoveryHistoryStore::open(&paths.database).unwrap(),
             )),
-            settings: Mutex::new(SettingsStore::open(&paths.settings).unwrap()),
+            settings: Arc::new(Mutex::new(SettingsStore::open(&paths.settings).unwrap())),
+            data_maintenance: Arc::new(Mutex::new(())),
             logger: Arc::new(LogStore::new(&paths.logs).unwrap()),
             recovery_session: RecoverySession::create(&paths.temp).unwrap(),
             paths,

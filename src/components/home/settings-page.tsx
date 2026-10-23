@@ -92,6 +92,7 @@ export const SettingsPage = React.forwardRef<
   },
   ref
 ) {
+  const [dataRevision, setDataRevision] = React.useState(0)
   const aiSettingsPanelRef = React.useRef<AiSettingsPanelHandle>(null)
   const settingsScrollRef = React.useRef<HTMLDivElement>(null)
   const [category, setCategory] =
@@ -267,14 +268,19 @@ export const SettingsPage = React.forwardRef<
               keepMounted={visitedCategories.includes("app")}
               className="mt-0 outline-none"
             >
-              <AppSettingsPanel />
+              <AppSettingsPanel key={dataRevision} />
             </TabsContent>
             <TabsContent
               value="data"
               keepMounted={visitedCategories.includes("data")}
               className="mt-0 outline-none"
             >
-              <DataSettingsPanel onRestored={onDatabaseRestored} />
+              <DataSettingsPanel
+                onRestored={() => {
+                  setDataRevision((v) => v + 1)
+                  onDatabaseRestored()
+                }}
+              />
             </TabsContent>
           </div>
         </Tabs>

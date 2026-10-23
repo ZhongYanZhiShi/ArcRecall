@@ -110,9 +110,11 @@ pub(crate) async fn recovery_start(
         dictionary_group: request.dictionary_group.clone(),
         pending_archive_paths: Vec::new(),
         skipped_scan_directories: Vec::new(),
+        ..Default::default()
     };
     let result = recovery_start_inner(state.clone(), request).await;
     if result.is_err() {
+        let _maintenance = state.data_maintenance.lock().map_err(|e| e.to_string())?;
         record.elapsed_ms = current_time_ms().saturating_sub(record.started_at_ms);
         let saved = arc_recall_core::task_records::TaskRecordStore::open(
             &state.paths.root.join("task-records.db"),

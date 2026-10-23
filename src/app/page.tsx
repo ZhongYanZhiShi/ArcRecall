@@ -299,6 +299,7 @@ export default function Page() {
           {renderActivity(
             "extract",
             <ExtractPage
+              dataRevision={databaseRevision}
               onOpenEngineSettings={handleOpenEngineSettings}
               onStreamActivityChange={setExtractActivity}
             />

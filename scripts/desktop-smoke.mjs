@@ -575,6 +575,9 @@ if (process.argv.includes("--workflows-only")) {
       data,
       evidence,
     })
+    const { verifyUnifiedData, stageInterruptedRestore } =
+      await import("./desktop-unified-data.mjs")
+    await verifyUnifiedData({ invoke, page, data, evidence, password })
     const presets = await invoke("processing_presets_list")
     const before = await invoke("task_records_list", {
       skip: 0,
@@ -589,8 +592,13 @@ if (process.argv.includes("--workflows-only")) {
           item.state === "success" && item.options?.openWhenDone === false
       )
     )
+    const expectedSettings = await stageInterruptedRestore({ invoke, data })
     await close()
     await launch()
+    assert.deepEqual(await invoke("settings_get"), expectedSettings)
+    console.log(
+      "PASS: native startup rolls back interrupted unified restore before exposing data"
+    )
     assert.deepEqual(await invoke("processing_presets_list"), presets)
     assert.deepEqual(
       await invoke("task_records_list", { skip: 0, failedOnly: false }),

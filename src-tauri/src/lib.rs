@@ -45,7 +45,7 @@ use compression_commands::{
     compression_password_save, compression_password_status, compression_start, compression_status,
 };
 use data_commands::{
-    database_backup, database_info, database_restore_apply, database_restore_discard,
+    data_backup, database_backup, database_info, database_restore_apply, database_restore_discard,
     database_restore_preview, dictionary_add, dictionary_count, dictionary_delete, dictionary_list,
     settings_get, settings_update,
 };
@@ -79,7 +79,8 @@ struct AppState {
     dictionary: Arc<Mutex<DictionaryCandidateStore>>,
     prepared_restore: Mutex<Option<data_commands::PreparedDatabaseRestore>>,
     history: Arc<Mutex<RecoveryHistoryStore>>,
-    settings: Mutex<SettingsStore>,
+    settings: Arc<Mutex<SettingsStore>>,
+    data_maintenance: Arc<Mutex<()>>,
     logger: Arc<LogStore>,
     recovery_task: Mutex<Option<RecoveryTaskHandle>>,
     compression_task: Mutex<Option<CompressionTaskHandle>>,
@@ -409,6 +410,7 @@ pub fn run() {
                 .map_err(|e| format!("open recovery history store: {e}"))?;
             let settings = SettingsStore::open(&paths.settings)
                 .map_err(|e| format!("open settings store: {e}"))?;
+            arc_recall_core::backup::rollback_pending(&paths, &dictionary, &settings)?;
             let loaded_settings = settings.load().map_err(|e| format!("load settings: {e}"))?;
             let logger =
                 Arc::new(LogStore::new(&paths.logs).map_err(|e| format!("open log store: {e}"))?);
@@ -461,7 +463,8 @@ pub fn run() {
                 resource_dir,
                 dictionary: Arc::new(Mutex::new(dictionary)),
                 history: Arc::new(Mutex::new(history)),
-                settings: Mutex::new(settings),
+                settings: Arc::new(Mutex::new(settings)),
+                data_maintenance: Arc::new(Mutex::new(())),
                 logger,
                 recovery_task: Mutex::new(None),
                 compression_task: Mutex::new(None),
@@ -508,6 +511,7 @@ pub fn run() {
             log_clear,
             log_open_directory,
             database_backup,
+            data_backup,
             database_restore_preview,
             database_restore_apply,
             database_restore_discard,

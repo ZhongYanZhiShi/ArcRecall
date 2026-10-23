@@ -145,39 +145,78 @@ pub(crate) async fn compression_start(
     )?;
     ensure_no_active_archive_task(&state)?;
 
-    let seven_zip = require_seven_zip(&state).await?;
-    if cancellation.is_cancelled() {
-        return Err("压缩任务已取消。".into());
-    }
-
     let task_id = next_compression_task_id();
-    let password = resolve_compression_password(
-        request.password,
-        request.use_permanent_password,
-        get_permanent_compression_password,
-    )?;
-    let job = CompressionJob {
-        sources: request.sources.into_iter().map(PathBuf::from).collect(),
-        output_directory: request
-            .output_directory
-            .as_deref()
-            .filter(|path| !path.trim().is_empty())
-            .map(PathBuf::from),
-        base_name: request.base_name,
-        format: request.format,
-        level: request.level,
-        password,
-        encrypt_file_names: request.encrypt_file_names,
-        work_id: task_id.clone(),
+    let record_path = state.paths.root.join("task-records.db");
+    let mut record = arc_recall_core::task_records::TaskRecord {
+        task_id: task_id.clone(),
+        operation: arc_recall_core::task_records::TaskOperation::Compression,
+        archive_path: request.sources.first().cloned().unwrap_or_default(),
+        source_paths: request.sources.clone(),
+        started_at_ms: current_time_ms(),
+        state: "running".into(),
+        ..Default::default()
     };
-    let prepared = tauri::async_runtime::spawn_blocking(move || prepare_compression(job))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())?;
-    if cancellation.is_cancelled() {
-        return Err("压缩任务已取消。".into());
+    arc_recall_core::task_records::TaskRecordStore::open(&record_path)?
+        .save_for_session(&record, state.recovery_session.directory())?;
+    let preparation = async {
+        let seven_zip = require_seven_zip(&state).await?;
+        if cancellation.is_cancelled() {
+            return Err("压缩任务已取消。".into());
+        }
+
+        let password = resolve_compression_password(
+            request.password,
+            request.use_permanent_password,
+            get_permanent_compression_password,
+        )?;
+        let job = CompressionJob {
+            sources: request.sources.into_iter().map(PathBuf::from).collect(),
+            output_directory: request
+                .output_directory
+                .as_deref()
+                .filter(|path| !path.trim().is_empty())
+                .map(PathBuf::from),
+            base_name: request.base_name,
+            format: request.format,
+            level: request.level,
+            password,
+            encrypt_file_names: request.encrypt_file_names,
+            work_id: task_id.clone(),
+        };
+        let prepared = tauri::async_runtime::spawn_blocking(move || prepare_compression(job))
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?;
+        if cancellation.is_cancelled() {
+            return Err("压缩任务已取消。".into());
+        }
+        Ok::<_, String>((seven_zip, prepared))
     }
-    let started_at_ms = current_time_ms();
+    .await;
+    let (seven_zip, prepared) = match preparation {
+        Ok(value) => value,
+        Err(error) => {
+            record.state = if cancellation.is_cancelled() {
+                "cancelled"
+            } else {
+                "failed"
+            }
+            .into();
+            record.failure_kind = Some("Preparation".into());
+            record.elapsed_ms = current_time_ms().saturating_sub(record.started_at_ms);
+            arc_recall_core::task_records::TaskRecordStore::open(&record_path)?.save(&record)?;
+            return Err(error);
+        }
+    };
+    record.output_directory = prepared
+        .output_path()
+        .parent()
+        .map(path_for_display)
+        .unwrap_or_default();
+    record.output_path = Some(path_for_display(prepared.output_path()));
+    arc_recall_core::task_records::TaskRecordStore::open(&record_path)?
+        .save_for_session(&record, state.recovery_session.directory())?;
+    let started_at_ms = record.started_at_ms;
     let initial = CompressionTaskStatus {
         task_id: task_id.clone(),
         phase: CompressionPhase::Preparing,
@@ -258,6 +297,10 @@ pub(crate) async fn compression_start(
                     task_status.message = "压缩完成。".into();
                     task_status.processed_source_count = result.source_count;
                     task_status.output_path = path_for_display(&result.output_path);
+                    record.state = "success".into();
+                    record.elapsed_ms = task_status.elapsed_ms;
+                    record.output_path = Some(task_status.output_path.clone());
+                    persist_compression_record(&record_path, &record, &logger);
                     drop(task_status);
                     write_log(
                         &logger,
@@ -275,6 +318,9 @@ pub(crate) async fn compression_start(
                     task_status.phase = CompressionPhase::Cancelled;
                     task_status.cancelled = true;
                     task_status.message = "压缩任务已取消，临时归档已清理。".into();
+                    record.state = "cancelled".into();
+                    record.elapsed_ms = task_status.elapsed_ms;
+                    persist_compression_record(&record_path, &record, &logger);
                     drop(task_status);
                     write_log(
                         &logger,
@@ -288,6 +334,10 @@ pub(crate) async fn compression_start(
                 Ok(Err(error)) => {
                     task_status.phase = CompressionPhase::Failed;
                     task_status.message = error.to_string();
+                    record.state = "failed".into();
+                    record.elapsed_ms = task_status.elapsed_ms;
+                    record.failure_kind = Some("Process".into());
+                    persist_compression_record(&record_path, &record, &logger);
                     drop(task_status);
                     write_log(
                         &logger,
@@ -304,6 +354,10 @@ pub(crate) async fn compression_start(
                         "压缩后台任务异常终止：{}",
                         panic_payload_message(payload.as_ref())
                     );
+                    record.state = "failed".into();
+                    record.elapsed_ms = task_status.elapsed_ms;
+                    record.failure_kind = Some("Process".into());
+                    persist_compression_record(&record_path, &record, &logger);
                     drop(task_status);
                     write_log(
                         &logger,
@@ -432,6 +486,26 @@ fn next_compression_task_id() -> String {
     let timestamp = current_time_ms();
     let sequence = COMPRESSION_TASK_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     format!("compression-{timestamp}-{sequence}")
+}
+
+fn persist_compression_record(
+    path: &std::path::Path,
+    record: &arc_recall_core::task_records::TaskRecord,
+    logger: &crate::logging::LogStore,
+) {
+    if arc_recall_core::task_records::TaskRecordStore::open(path)
+        .and_then(|store| store.save(record))
+        .is_err()
+    {
+        write_log(
+            logger,
+            LogLevel::Error,
+            "compression",
+            "compression.record_failed",
+            "压缩任务已结束，但任务记录保存失败。",
+            std::iter::empty(),
+        );
+    }
 }
 
 #[cfg(test)]

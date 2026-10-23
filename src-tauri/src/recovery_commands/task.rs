@@ -166,6 +166,7 @@ impl RecoveryTaskStatus {
                 .cloned()
                 .collect(),
             skipped_scan_directories: self.skipped_scan_directories.clone(),
+            ..Default::default()
         }
     }
 }

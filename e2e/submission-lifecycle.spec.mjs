@@ -22,7 +22,7 @@ async function setup(page, theme, width) {
           [
             "ai_settings_update",
             "settings_update",
-            "database_backup",
+            "data_backup",
             "dictionary_add",
           ].includes(command)
         )

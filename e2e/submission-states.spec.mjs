@@ -37,7 +37,7 @@ async function setup(page, theme, width) {
             "ai_connection_test",
             "dictionary_add",
             "settings_update",
-            "database_backup",
+            "data_backup",
             "tool_set_tools_directory",
           ].includes(command)
         ) {
@@ -473,7 +473,7 @@ for (const theme of ["dark", "light"])
       await submitOnce(
         page,
         page.getByRole("button", { name: "创建备份", exact: true }),
-        "database_backup"
+        "data_backup"
       )
       await page.evaluate(() =>
         window.submissions[0].resolve({
@@ -483,13 +483,13 @@ for (const theme of ["dark", "light"])
         })
       )
       await expect(page.locator("[data-sonner-toaster]")).toContainText(
-        "数据库备份已创建"
+        "统一数据备份已创建"
       )
       await screenshot(page, `${prefix}-backup-success`)
       await submitOnce(
         page,
         page.getByRole("button", { name: "创建备份", exact: true }),
-        "database_backup"
+        "data_backup"
       )
       await expect(
         page.getByRole("button", { name: "正在备份…", exact: true })

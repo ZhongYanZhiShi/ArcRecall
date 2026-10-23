@@ -1,9 +1,10 @@
 use crate::AppState;
 use arc_recall_core::{
     DictionaryCandidateQuery, DictionaryListResult,
-    task_records::{TaskRecord, TaskRecordStore},
+    task_records::{TaskOperation, TaskRecord, TaskRecordStore},
     tools::{ArchivePreview, preview_archive},
 };
+use std::sync::Arc;
 use tauri::State;
 
 #[tauri::command]
@@ -18,9 +19,25 @@ pub(crate) async fn archive_action_run(
         "已有归档操作正在运行，请先等待完成或取消。",
     )?;
     crate::ensure_no_active_archive_task(&state)?;
+    let cancellation = lease.cancellation.clone();
+    let mut record = TaskRecord {
+        task_id: format!("action-{}-{}", crate::current_time_ms(), id),
+        operation: if request.selected_paths.is_some() {
+            TaskOperation::SelectiveExtraction
+        } else {
+            TaskOperation::IntegrityCheck
+        },
+        archive_path: request.path.to_string_lossy().into_owned(),
+        selected_paths: request.selected_paths.clone().unwrap_or_default(),
+        started_at_ms: crate::current_time_ms(),
+        state: "running".into(),
+        ..Default::default()
+    };
     *state.archive_action.lock().map_err(|e| e.to_string())? =
         Some((id, lease.cancellation.clone()));
     let result = async {
+        TaskRecordStore::open(&state.paths.root.join("task-records.db"))?
+            .save_for_session(&record, state.recovery_session.directory())?;
         let seven_zip = crate::engine_commands::require_seven_zip(&state).await?;
         let workspace = tempfile::Builder::new()
             .prefix("archive-action-")
@@ -40,6 +57,26 @@ pub(crate) async fn archive_action_run(
     }
     .await;
     *state.archive_action.lock().map_err(|e| e.to_string())? = None;
+    record.elapsed_ms = crate::current_time_ms().saturating_sub(record.started_at_ms);
+    record.state = if result.is_ok() {
+        "success"
+    } else if cancellation.is_cancelled() {
+        "cancelled"
+    } else {
+        "failed"
+    }
+    .into();
+    if let Ok(value) = &result {
+        record.output_directory = value.output_directory.clone().unwrap_or_default();
+    }
+    if result.is_err() {
+        record.failure_kind = Some("Process".into());
+    }
+    TaskRecordStore::open(&state.paths.root.join("task-records.db"))?
+        .save(&record)
+        .map_err(|_| {
+            "归档操作已结束，但任务记录保存失败，请先检查记录再决定是否重试。".to_string()
+        })?;
     result
 }
 
@@ -59,10 +96,11 @@ pub(crate) async fn task_records_list(
     state: State<'_, AppState>,
     skip: u32,
     failed_only: bool,
+    operation: Option<TaskOperation>,
 ) -> Result<Vec<TaskRecord>, String> {
     let path = state.paths.root.join("task-records.db");
     tauri::async_runtime::spawn_blocking(move || {
-        TaskRecordStore::open(&path)?.list(skip, failed_only)
+        TaskRecordStore::open(&path)?.list_filtered(skip, failed_only, operation)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -73,10 +111,14 @@ pub(crate) async fn task_record_delete(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
+    let maintenance = Arc::clone(&state.data_maintenance);
     let path = state.paths.root.join("task-records.db");
-    tauri::async_runtime::spawn_blocking(move || TaskRecordStore::open(&path)?.delete(&id))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = maintenance.lock().map_err(|e| e.to_string())?;
+        TaskRecordStore::open(&path)?.delete(&id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

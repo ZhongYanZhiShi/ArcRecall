@@ -210,10 +210,20 @@ fn snapshot(shared: &SharedBatch) -> Option<BatchCheckStatus> {
     shared.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+#[cfg(test)]
 fn run_checks(
     shared: &SharedBatch,
     cancellation: &CancellationToken,
+    check: impl FnMut(&str) -> Result<(), String>,
+) -> BatchCheckStatus {
+    run_checks_with_progress(shared, cancellation, check, |_| {})
+}
+
+fn run_checks_with_progress(
+    shared: &SharedBatch,
+    cancellation: &CancellationToken,
     mut check: impl FnMut(&str) -> Result<(), String>,
+    mut progress: impl FnMut(&BatchCheckStatus),
 ) -> BatchCheckStatus {
     let count = snapshot(shared).expect("batch initialized").items.len();
     for index in 0..count {
@@ -248,6 +258,9 @@ fn run_checks(
             item.message = FAILED_MESSAGE.into();
             item.checked_at_ms = Some(crate::current_time_ms());
         }
+        let updated = guard.as_ref().expect("batch initialized").clone();
+        drop(guard);
+        progress(&updated);
     }
     finish_batch(shared, cancellation.is_cancelled())
 }
@@ -303,12 +316,30 @@ pub(crate) async fn archive_batch_check_run(
             retry_failed,
         )?);
     }
+    let mut record = batch_record(&snapshot(&state.batch_check).expect("batch initialized"));
     let cancellation = lease.cancellation.clone();
     *state
         .archive_action
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = Some((id, cancellation.clone()));
+    let initial_save = arc_recall_core::task_records::TaskRecordStore::open(
+        &state.paths.root.join("task-records.db"),
+    )
+    .and_then(|store| store.save_for_session(&record, state.recovery_session.directory()));
+    if let Err(error) = initial_save {
+        finish_batch(&state.batch_check, false);
+        *state
+            .archive_action
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+        return Err(error);
+    }
     let shared = Arc::clone(&state.batch_check);
+    let record_path = state.paths.root.join("task-records.db");
+    let owner = state.recovery_session.directory().to_path_buf();
+    let progress_id = record.task_id.clone();
+    let progress_started = record.started_at_ms;
+    let logger = Arc::clone(&state.logger);
     let result = async {
         if cancellation.is_cancelled() {
             return Ok(finish_batch(&shared, true));
@@ -342,27 +373,50 @@ pub(crate) async fn archive_batch_check_run(
                     .expect("batch initialized")
                     .items = items;
             }
-            run_checks(&shared, &_lease.cancellation, |path| {
-                // Separate workspaces prevent split-archive materialization collisions and
-                // release each archive's temporary files before the next archive starts.
-                let item_workspace = tempfile::Builder::new()
-                    .prefix("archive-")
-                    .tempdir_in(workspace.path())
-                    .map_err(|_| "无法创建检查目录。".to_string())?;
-                let request = ArchiveActionRequest {
-                    path: path.into(),
-                    password: password.clone(),
-                    selected_paths: None,
-                    output_parent: None,
-                };
-                run_archive_action(
-                    &request,
-                    &seven_zip,
-                    item_workspace.path(),
-                    &_lease.cancellation,
-                )
-                .map(|_| ())
-            })
+            run_checks_with_progress(
+                &shared,
+                &_lease.cancellation,
+                |path| {
+                    // Separate workspaces prevent split-archive materialization collisions and
+                    // release each archive's temporary files before the next archive starts.
+                    let item_workspace = tempfile::Builder::new()
+                        .prefix("archive-")
+                        .tempdir_in(workspace.path())
+                        .map_err(|_| "无法创建检查目录。".to_string())?;
+                    let request = ArchiveActionRequest {
+                        path: path.into(),
+                        password: password.clone(),
+                        selected_paths: None,
+                        output_parent: None,
+                    };
+                    run_archive_action(
+                        &request,
+                        &seven_zip,
+                        item_workspace.path(),
+                        &_lease.cancellation,
+                    )
+                    .map(|_| ())
+                },
+                |batch| {
+                    let mut record = batch_record(batch);
+                    record.task_id = progress_id.clone();
+                    record.started_at_ms = progress_started;
+                    record.elapsed_ms = crate::current_time_ms().saturating_sub(progress_started);
+                    if arc_recall_core::task_records::TaskRecordStore::open(&record_path)
+                        .and_then(|store| store.save_for_session(&record, &owner))
+                        .is_err()
+                    {
+                        crate::write_log(
+                            &logger,
+                            crate::logging::LogLevel::Error,
+                            "archive",
+                            "archive.record_failed",
+                            "批量检查进度记录保存失败。",
+                            std::iter::empty(),
+                        );
+                    }
+                },
+            )
         })
         .await
         .map_err(|_| "批量检查意外终止，请重试未通过项。".to_string())
@@ -376,7 +430,71 @@ pub(crate) async fn archive_batch_check_run(
     if result.is_err() {
         finish_batch(&state.batch_check, cancellation.is_cancelled());
     }
+    let final_record = batch_record(&snapshot(&state.batch_check).expect("batch initialized"));
+    record.state = final_record.state;
+    record.check_items = final_record.check_items;
+    record.source_paths = final_record.source_paths;
+    record.elapsed_ms = crate::current_time_ms().saturating_sub(record.started_at_ms);
+    arc_recall_core::task_records::TaskRecordStore::open(
+        &state.paths.root.join("task-records.db"),
+    )?
+    .save(&record)
+    .map_err(|_| "检查已结束，但任务记录保存失败，请检查磁盘空间。".to_string())?;
     result
+}
+
+fn batch_record(batch: &BatchCheckStatus) -> arc_recall_core::task_records::TaskRecord {
+    use arc_recall_core::task_records::{TaskCheckItem, TaskOperation, TaskRecord};
+    let started = crate::current_time_ms();
+    TaskRecord {
+        task_id: format!("batch-{}-{started}", batch.id),
+        operation: TaskOperation::BatchIntegrityCheck,
+        archive_path: batch
+            .items
+            .first()
+            .map(|item| item.path.clone())
+            .unwrap_or_default(),
+        source_paths: batch.items.iter().map(|item| item.path.clone()).collect(),
+        started_at_ms: started,
+        state: if batch.running {
+            "running"
+        } else if batch.cancelled {
+            "cancelled"
+        } else if batch
+            .items
+            .iter()
+            .all(|item| item.state == CheckState::Passed)
+        {
+            "success"
+        } else if batch
+            .items
+            .iter()
+            .any(|item| item.state == CheckState::Passed)
+        {
+            "partial"
+        } else {
+            "failed"
+        }
+        .into(),
+        check_items: batch
+            .items
+            .iter()
+            .map(|item| TaskCheckItem {
+                path: item.path.clone(),
+                state: match item.state {
+                    CheckState::Waiting => "waiting",
+                    CheckState::Checking => "checking",
+                    CheckState::Passed => "passed",
+                    CheckState::Failed => "failed",
+                    CheckState::Cancelled => "cancelled",
+                }
+                .into(),
+                elapsed_ms: item.elapsed_ms,
+                checked_at_ms: item.checked_at_ms,
+            })
+            .collect(),
+        ..Default::default()
+    }
 }
 
 #[tauri::command]
@@ -739,5 +857,39 @@ mod tests {
         for formula in ["@SUM(A1)", "  +123", "\t=2", "-2"] {
             assert!(csv_cell(formula).starts_with("\"'"));
         }
+    }
+    #[test]
+    fn completed_item_progress_survives_interruption_before_the_next_check() {
+        let shared = Arc::new(Mutex::new(Some(BatchCheckStatus {
+            id: "progress".into(),
+            running: true,
+            cancelled: false,
+            items: vec![
+                BatchCheckItem::waiting("first.zip".into()),
+                BatchCheckItem::waiting("second.zip".into()),
+            ],
+        })));
+        let token = CancellationToken::default();
+        let temp = tempfile::tempdir().unwrap();
+        let store =
+            arc_recall_core::task_records::TaskRecordStore::open(&temp.path().join("records.db"))
+                .unwrap();
+        run_checks_with_progress(
+            &shared,
+            &token,
+            |_| Ok(()),
+            |batch| {
+                let mut record = batch_record(batch);
+                record.task_id = "progress-record".into();
+                store.save(&record).unwrap();
+                token.cancel();
+            },
+        );
+        store.interrupt_running().unwrap();
+        let record = store.list(0, false).unwrap().remove(0);
+        assert_eq!(record.state, "interrupted");
+        assert_eq!(record.check_items[0].state, "passed");
+        assert!(record.check_items[0].checked_at_ms.is_some());
+        assert_eq!(record.check_items[1].state, "interrupted");
     }
 }
