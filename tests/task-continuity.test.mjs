@@ -4,6 +4,24 @@ import { createRecoveryQueue } from "../src/lib/recovery-queue.ts"
 import { createQueueJournal, journalItems } from "../src/lib/queue-journal.ts"
 import { buildRecoveryReport } from "../src/lib/recovery-report.ts"
 
+test("队列记忆保留字典范围但排除重试密码", () => {
+  const rows = journalItems({
+    items: [
+      {
+        id: 1,
+        path: "C:/资料归档.zip",
+        state: "waiting",
+        options: {
+          dictionaryGroup: "资料分组",
+          knownPassword: "temporary-secret",
+        },
+      },
+    ],
+  })
+  assert.equal(rows[0].options.dictionaryGroup, "资料分组")
+  assert.ok(!JSON.stringify(rows).includes("temporary-secret"))
+})
+
 const task = {
   taskId: "example",
   archivePath: "C:/private/source.zip",

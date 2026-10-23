@@ -285,6 +285,7 @@ export function createRecoveryQueue(api: QueueApi) {
               knownPassword: itemOptions.knownPassword,
               recursive: itemOptions.recursive,
               computeMode: itemOptions.computeMode,
+              dictionaryGroup: itemOptions.dictionaryGroup,
               avoidOutputCollision: true,
             })
             activeTaskId = task.taskId

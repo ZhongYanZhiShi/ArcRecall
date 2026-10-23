@@ -3,8 +3,10 @@ mod compression;
 mod hashcat;
 mod install_io;
 mod john;
+mod preview;
 mod recovery;
 mod runner;
+pub use preview::{ArchivePreview, preview_archive};
 
 pub use bundle::{
     ENGINE_BUNDLE_MANIFEST_VERSION, ENGINE_BUNDLE_TARGET, EngineBundleError, EngineComponentStatus,

@@ -8,6 +8,7 @@ export type JournalItem = Pick<
     outputDirectory?: string | null
     exactOutputDirectory?: string | null
     recursive?: boolean
+    dictionaryGroup?: string | null
     computeMode?: "gpuPreferred" | "cpuOnly"
   }
 }
@@ -28,6 +29,7 @@ export function journalItems(snapshot: QueueSnapshot): JournalItem[] {
             exactOutputDirectory: options.exactOutputDirectory,
             recursive: options.recursive,
             computeMode: options.computeMode,
+            dictionaryGroup: options.dictionaryGroup,
           }
         : undefined,
     })

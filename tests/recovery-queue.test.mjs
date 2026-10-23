@@ -38,6 +38,23 @@ const api = (overrides = {}) => ({
   ...overrides,
 })
 
+test("任务指定的字典分组在批量执行时优先于批次默认值", async () => {
+  const requests = []
+  const queue = createRecoveryQueue(
+    api({
+      start: async (request) => {
+        requests.push(request)
+        return finished(request.archivePath)
+      },
+    })
+  )
+  queue.enqueue(["C:/资料归档.zip"], { dictionaryGroup: "资料分组" })
+  queue.enqueue(["C:/普通归档.zip"])
+  await queue.start({ dictionaryGroup: null })
+  assert.equal(requests[0].dictionaryGroup, "资料分组")
+  assert.equal(requests[1].dictionaryGroup, null)
+})
+
 test("批次按顺序执行、失败继续、独立输出且只重排失败项", async () => {
   const requests = []
   let first = true

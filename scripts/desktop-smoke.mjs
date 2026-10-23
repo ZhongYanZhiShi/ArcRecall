@@ -558,6 +558,29 @@ async function verifyAiFileReference() {
   }
 }
 
+if (process.argv.includes("--workflows-only")) {
+  try {
+    await launch()
+    const { verifyWorkflows } = await import("./desktop-workflows.mjs")
+    await verifyWorkflows({ invoke, page, archive, password, data, evidence })
+    const before = await invoke("task_records_list", {
+      skip: 0,
+      failedOnly: false,
+    })
+    await close()
+    await launch()
+    assert.deepEqual(
+      await invoke("task_records_list", { skip: 0, failedOnly: false }),
+      before
+    )
+    assert.deepEqual(errors, [])
+  } finally {
+    await close(false)
+    console.log(`Isolated test data: ${root}`)
+  }
+  process.exit(0)
+}
+
 // A focused acceptance path uses the same isolated WebView and real IPC setup.
 if (process.argv.includes("--titlebar-only")) {
   try {

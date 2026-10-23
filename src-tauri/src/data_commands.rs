@@ -251,10 +251,11 @@ pub(crate) async fn dictionary_count(state: State<'_, AppState>) -> Result<u64, 
 pub(crate) async fn dictionary_add(
     state: State<'_, AppState>,
     candidates: Vec<String>,
+    group: Option<String>,
 ) -> Result<DictionaryCandidateAddSummary, String> {
     let result = run_dictionary(Arc::clone(&state.dictionary), move |store| {
         store
-            .add_candidates(candidates)
+            .add_candidates_to_group(candidates, group.as_deref())
             .map_err(|error| error.to_string())
     })
     .await;

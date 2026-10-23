@@ -47,7 +47,7 @@ pub fn inspect_database_restore(path: &Path) -> Result<DatabaseRestoreInfo, Stri
             return Err(rusqlite::Error::InvalidQuery);
         }
         let unexpected: u64 = connection.query_row(
-            "SELECT COUNT(*) FROM sqlite_schema WHERE type IN ('trigger', 'view') OR (type='table' AND name NOT IN ('dictionary_candidates','recovery_history','sqlite_sequence'))", [], |row| row.get(0))?;
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type IN ('trigger', 'view') OR (type='table' AND name NOT IN ('dictionary_candidates','dictionary_groups','dictionary_group_members','recovery_history','sqlite_sequence'))", [], |row| row.get(0))?;
         if unexpected != 0 {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -137,12 +137,16 @@ impl DictionaryCandidateStore {
         let tx = connection
             .transaction()
             .map_err(|error| error.to_string())?;
-        tx.execute_batch(&format!("DELETE FROM dictionary_candidates;
+        tx.execute_batch(&format!("DELETE FROM dictionary_group_members; DELETE FROM dictionary_groups; DELETE FROM dictionary_candidates;
             INSERT INTO dictionary_candidates (id,candidate_text,byte_count,success_count) SELECT id,candidate_text,byte_count,success_count FROM restore_source.dictionary_candidates;
             DELETE FROM recovery_history;
             INSERT INTO recovery_history (id,fingerprint_sha256,archive_format,file_size,volume_count,first_success_at_ms,last_verified_at_ms,verification_count,password_protected,{})
             SELECT id,fingerprint_sha256,archive_format,file_size,volume_count,first_success_at_ms,last_verified_at_ms,verification_count,password_protected,{optional_values} FROM restore_source.recovery_history;", optional_columns.join(",")))
             .map_err(|error| format!("恢复失败，当前数据已回滚：{error}"))?;
+        let has_groups: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM restore_source.sqlite_master WHERE type='table' AND name='dictionary_groups')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+        if has_groups {
+            tx.execute_batch("INSERT INTO dictionary_groups SELECT name FROM restore_source.dictionary_groups; INSERT INTO dictionary_group_members SELECT m.group_name,m.candidate_id FROM restore_source.dictionary_group_members m JOIN dictionary_groups g ON m.group_name=g.name JOIN dictionary_candidates c ON m.candidate_id=c.id;").map_err(|e| format!("恢复字典分组失败，已回滚：{e}"))?;
+        }
         tx.commit().map_err(|error| error.to_string())?;
         Ok(info)
     }
@@ -192,6 +196,7 @@ mod tests {
         let source_store = DictionaryCandidateStore::open(&source).unwrap();
         RecoveryHistoryStore::open(&source).unwrap();
         source_store.add_candidates(["one", " two "]).unwrap();
+        source_store.assign_group("测试分组", &[1]).unwrap();
         let snapshot = dir.path().join("snapshot.db");
         assert_eq!(
             snapshot_database_restore(&source, &snapshot)
@@ -207,6 +212,15 @@ mod tests {
         let safety = dir.path().join("safety.db");
         target.restore_snapshot(&snapshot, &safety).unwrap();
         assert_eq!(target.count().unwrap(), 2);
+        assert_eq!(target.groups().unwrap(), vec!["测试分组"]);
+        assert_eq!(
+            target
+                .list_group("测试分组", &Default::default())
+                .unwrap()
+                .entries[0]
+                .value,
+            "one"
+        );
         assert_eq!(target.get_value(2).unwrap().as_deref(), Some(" two "));
         assert_eq!(
             DictionaryCandidateStore::open(safety)
@@ -249,7 +263,7 @@ mod tests {
         let snapshot = dir.path().join("snapshot.db");
         store.backup(&snapshot).unwrap();
         let connection = Connection::open(&snapshot).unwrap();
-        connection.execute_batch("CREATE TABLE duplicate_candidates AS SELECT * FROM dictionary_candidates; DROP TABLE dictionary_candidates; ALTER TABLE duplicate_candidates RENAME TO dictionary_candidates; INSERT INTO dictionary_candidates SELECT * FROM dictionary_candidates;").unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=OFF; CREATE TABLE duplicate_candidates AS SELECT * FROM dictionary_candidates; DROP TABLE dictionary_candidates; ALTER TABLE duplicate_candidates RENAME TO dictionary_candidates; INSERT INTO dictionary_candidates SELECT * FROM dictionary_candidates;").unwrap();
         drop(connection);
         // Structurally readable but incompatible with the destination's uniqueness constraints.
         let safety = dir.path().join("safety.db");

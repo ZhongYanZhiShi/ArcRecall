@@ -70,6 +70,7 @@ export type RecoveryTaskEvent = {
 }
 
 export type RecoveryTaskStatus = {
+  dictionaryGroup?: string | null
   taskId: string
   phase: RecoveryPhase
   running: boolean
@@ -135,6 +136,7 @@ export type RecoveryTaskStatus = {
 }
 
 export type RecoveryStartRequest = {
+  dictionaryGroup?: string | null
   queueEntryId?: number
   rescanTaskId?: string
   archivePath: string

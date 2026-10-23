@@ -76,6 +76,7 @@ pub(super) enum RecoveryFailureKind {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecoveryTaskStatus {
     pub(super) task_id: String,
+    pub(super) dictionary_group: Option<String>,
     pub(super) phase: RecoveryPhase,
     pub(super) running: bool,
     pub(super) completed: bool,
@@ -122,10 +123,58 @@ pub(crate) struct RecoveryTaskStatus {
     pub(super) resume: Option<Arc<RecoveryResumeContext>>,
 }
 
+impl RecoveryTaskStatus {
+    pub(super) fn record(&self) -> arc_recall_core::task_records::TaskRecord {
+        arc_recall_core::task_records::TaskRecord {
+            task_id: self.task_id.clone(),
+            archive_path: self.archive_path.clone(),
+            output_directory: self.output_directory.clone(),
+            started_at_ms: self.started_at_ms,
+            elapsed_ms: self.elapsed_ms,
+            state: (if self.running {
+                "running"
+            } else if self.cancelled {
+                "cancelled"
+            } else if self.success
+                && self.pending_archive_paths.is_empty()
+                && self.skipped_archive_paths.is_empty()
+                && self.skipped_scan_directories.is_empty()
+                && !self.scan_interrupted
+                && !self.depth_limit_reached
+                && !self.count_limit_reached
+            {
+                "success"
+            } else if self.root_extraction_completed {
+                "partial"
+            } else {
+                "failed"
+            })
+            .into(),
+            failure_kind: self.failure_kind.map(|kind| format!("{kind:?}")),
+            recursive: self.recursive_enabled,
+            compute_mode: if self.compute_mode == RecoveryComputeMode::CpuOnly {
+                "cpuOnly"
+            } else {
+                "gpuPreferred"
+            }
+            .into(),
+            dictionary_group: self.dictionary_group.clone(),
+            pending_archive_paths: self
+                .pending_archive_paths
+                .iter()
+                .chain(self.skipped_archive_paths.iter())
+                .cloned()
+                .collect(),
+            skipped_scan_directories: self.skipped_scan_directories.clone(),
+        }
+    }
+}
+
 pub(super) struct RecoveryTaskCompletionGuard {
     status: Arc<Mutex<RecoveryTaskStatus>>,
     work_directory: PathBuf,
     finalized: bool,
+    record_path: Option<PathBuf>,
 }
 
 impl RecoveryTaskCompletionGuard {
@@ -134,7 +183,13 @@ impl RecoveryTaskCompletionGuard {
             status,
             work_directory,
             finalized: false,
+            record_path: None,
         }
+    }
+
+    pub(super) fn with_record_path(mut self, path: PathBuf) -> Self {
+        self.record_path = Some(path);
+        self
     }
 
     pub(super) fn mark_finalized(&mut self) {
@@ -159,6 +214,21 @@ impl Drop for RecoveryTaskCompletionGuard {
                 status.phase = RecoveryPhase::Failed;
                 status.message = "后台恢复任务异常终止，已自动停止并清理临时文件。".into();
                 status.elapsed_ms = current_time_ms().saturating_sub(status.started_at_ms);
+            }
+        }
+        if let Some(path) = &self.record_path {
+            let mut status = self.status.lock().unwrap_or_else(|p| p.into_inner());
+            let result =
+                arc_recall_core::task_records::TaskRecordStore::open(path).and_then(|store| {
+                    store.save_for_session(
+                        &status.record(),
+                        self.work_directory.parent().unwrap_or(&self.work_directory),
+                    )
+                });
+            if result.is_err() {
+                status
+                    .message
+                    .push_str(" 任务记录保存失败，请保留当前结果。");
             }
         }
         let _ = std::fs::remove_dir_all(&self.work_directory);
@@ -356,8 +426,25 @@ pub(super) fn persist_recovery_completion(
 mod tests {
     use super::*;
 
+    #[test]
+    fn durable_record_excludes_passwords_and_raw_messages() {
+        let mut status = test_recovery_status();
+        status.recovered_password = Some("sensitive-test-secret".into());
+        status.message = "sensitive-engine-output".into();
+        status.running = false;
+        status.success = true;
+        status.root_extraction_completed = true;
+        status.skipped_scan_directories.push("未扫描目录".into());
+        let record = status.record();
+        assert_eq!(record.state, "partial");
+        let serialized = serde_json::to_string(&record).unwrap();
+        assert!(!serialized.contains("sensitive"));
+        assert!(!serialized.contains("password"));
+    }
+
     fn test_recovery_status() -> RecoveryTaskStatus {
         RecoveryTaskStatus {
+            dictionary_group: None,
             task_id: "test".into(),
             phase: RecoveryPhase::Preparing,
             running: true,

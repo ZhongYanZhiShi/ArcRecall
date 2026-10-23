@@ -36,6 +36,12 @@ CREATE INDEX IF NOT EXISTS ix_dictionary_candidates_success_order
 ON dictionary_candidates(success_count DESC, id ASC);
 
 DROP INDEX IF EXISTS ix_dictionary_candidates_insertion_order;
+CREATE TABLE IF NOT EXISTS dictionary_groups (name TEXT PRIMARY KEY CHECK(length(name) BETWEEN 1 AND 80));
+CREATE TABLE IF NOT EXISTS dictionary_group_members (
+    group_name TEXT NOT NULL REFERENCES dictionary_groups(name) ON DELETE CASCADE,
+    candidate_id INTEGER NOT NULL REFERENCES dictionary_candidates(id) ON DELETE CASCADE,
+    PRIMARY KEY(group_name, candidate_id)
+);
 "#;
 
 /// Errors from the global dictionary candidate store.
@@ -85,9 +91,21 @@ impl DictionaryCandidateStore {
         &self,
         candidates: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<DictionaryCandidateAddSummary, DictionaryError> {
+        self.add_candidates_to_group(candidates, None)
+    }
+
+    pub fn add_candidates_to_group(
+        &self,
+        candidates: impl IntoIterator<Item = impl AsRef<str>>,
+        group: Option<&str>,
+    ) -> Result<DictionaryCandidateAddSummary, DictionaryError> {
         let _guard = self.write_lock.lock().expect("dictionary write lock");
         self.with_connection(|conn| {
             let tx = conn.unchecked_transaction()?;
+            if let Some(name) = group {
+                let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM dictionary_groups WHERE name=?1)", [name], |r| r.get(0))?;
+                if !exists { return Err(DictionaryError::NotFound("所选字典分组已不存在".into())); }
+            }
             let mut insert = tx.prepare_cached(
                 "INSERT OR IGNORE INTO dictionary_candidates (candidate_text, byte_count) \
                  VALUES (?1, ?2);",
@@ -107,6 +125,9 @@ impl DictionaryCandidateStore {
                 }
                 let changed = insert.execute(params![text, byte_count as i64])?;
                 added += changed as u64;
+                if let Some(name) = group {
+                    tx.execute("INSERT OR IGNORE INTO dictionary_group_members SELECT ?1,id FROM dictionary_candidates WHERE candidate_text=?2", params![name, text])?;
+                }
             }
 
             drop(insert);
@@ -118,6 +139,69 @@ impl DictionaryCandidateStore {
                 duplicate_count: submitted.saturating_sub(invalid).saturating_sub(added),
                 invalid_count: invalid,
             })
+        })
+    }
+
+    pub fn groups(&self) -> Result<Vec<String>, DictionaryError> {
+        self.with_connection(|conn| {
+            let mut stmt = conn.prepare("SELECT name FROM dictionary_groups ORDER BY name")?;
+            Ok(stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
+    pub fn assign_group(&self, name: &str, ids: &[i64]) -> Result<(), DictionaryError> {
+        let _guard = self.write_lock.lock().expect("dictionary write lock");
+        self.with_connection(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            tx.execute("INSERT OR IGNORE INTO dictionary_groups(name) VALUES (?1)", [name])?;
+            for id in ids {
+                tx.execute("INSERT OR IGNORE INTO dictionary_group_members SELECT ?1,id FROM dictionary_candidates WHERE id=?2", params![name, id])?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn delete_group(&self, name: &str) -> Result<(), DictionaryError> {
+        let _guard = self.write_lock.lock().expect("dictionary write lock");
+        self.with_connection(|conn| {
+            conn.execute("DELETE FROM dictionary_groups WHERE name=?1", [name])?;
+            Ok(())
+        })
+    }
+
+    pub fn remove_group_members(&self, name: &str, ids: &[i64]) -> Result<(), DictionaryError> {
+        let _guard = self.write_lock.lock().expect("dictionary write lock");
+        self.with_connection(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            for id in ids {
+                tx.execute(
+                    "DELETE FROM dictionary_group_members WHERE group_name=?1 AND candidate_id=?2",
+                    params![name, id],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn list_group(
+        &self,
+        name: &str,
+        query: &DictionaryCandidateQuery,
+    ) -> Result<DictionaryListResult, DictionaryError> {
+        self.with_connection(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let total_count = tx.query_row("SELECT COUNT(*) FROM dictionary_candidates", [], |r| r.get(0))?;
+            let matched_count = tx.query_row("SELECT COUNT(*) FROM dictionary_candidates c JOIN dictionary_group_members m ON c.id=m.candidate_id WHERE m.group_name=?1 AND instr(c.candidate_text,?2)>0", params![name, query.search_text], |r| r.get(0))?;
+            let entries = {
+                let mut stmt = tx.prepare("SELECT c.id,c.candidate_text,c.byte_count,c.success_count FROM dictionary_candidates c JOIN dictionary_group_members m ON c.id=m.candidate_id WHERE m.group_name=?1 AND instr(c.candidate_text,?2)>0 ORDER BY c.id LIMIT ?3 OFFSET ?4")?;
+                stmt.query_map(params![name, query.search_text, query.take.clamp(1,5000), query.skip.max(0)], |row| Ok(DictionaryCandidateEntry { id: row.get(0)?, value: row.get(1)?, byte_count: row.get(2)?, success_count: row.get(3)? }))?.collect::<Result<Vec<_>, _>>()?
+            };
+            tx.commit()?;
+            Ok(DictionaryListResult { entries, total_count, matched_count })
         })
     }
 
@@ -317,13 +401,37 @@ impl DictionaryCandidateStore {
         destination: impl AsRef<Path>,
         cancellation: &CancellationToken,
     ) -> Result<u64, DictionaryError> {
-        self.export_wordlist_checked(destination.as_ref(), || cancellation.is_cancelled())
+        self.export_wordlist_group(destination, cancellation, None)
     }
 
+    pub fn export_wordlist_group(
+        &self,
+        destination: impl AsRef<Path>,
+        cancellation: &CancellationToken,
+        group: Option<&str>,
+    ) -> Result<u64, DictionaryError> {
+        if let Some(name) = group
+            && !self.groups()?.iter().any(|g| g == name)
+        {
+            return Err(DictionaryError::NotFound("所选字典分组已不存在".into()));
+        }
+        self.export_wordlist_filtered(destination.as_ref(), || cancellation.is_cancelled(), group)
+    }
+
+    #[cfg(test)]
     fn export_wordlist_checked(
         &self,
         destination: &Path,
+        is_cancelled: impl FnMut() -> bool,
+    ) -> Result<u64, DictionaryError> {
+        self.export_wordlist_filtered(destination, is_cancelled, None)
+    }
+
+    fn export_wordlist_filtered(
+        &self,
+        destination: &Path,
         mut is_cancelled: impl FnMut() -> bool,
+        group: Option<&str>,
     ) -> Result<u64, DictionaryError> {
         if is_cancelled() {
             return Err(DictionaryError::Cancelled);
@@ -342,9 +450,10 @@ impl DictionaryCandidateStore {
             let mut stmt = conn.prepare_cached(
                 "SELECT candidate_text \
                  FROM dictionary_candidates \
+                 WHERE ?1 IS NULL OR id IN (SELECT candidate_id FROM dictionary_group_members WHERE group_name=?1) \
                  ORDER BY success_count DESC, id ASC;",
             )?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            let rows = stmt.query_map([group], |row| row.get::<_, String>(0))?;
             let mut exported = 0u64;
             for row in rows {
                 if is_cancelled() {
@@ -503,6 +612,91 @@ mod tests {
         let path = dir.path().join("arcrecall.db");
         let store = DictionaryCandidateStore::open(&path).expect("open store");
         (dir, store)
+    }
+
+    #[test]
+    fn scoped_import_assigns_duplicates_and_missing_groups_do_not_insert() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DictionaryCandidateStore::open(dir.path().join("dictionary.db")).unwrap();
+        store.add_candidates(["existing"]).unwrap();
+        store.assign_group("资料", &[]).unwrap();
+        let summary = store
+            .add_candidates_to_group(["existing", "new"], Some("资料"))
+            .unwrap();
+        assert_eq!(summary.added_count, 1);
+        assert_eq!(summary.duplicate_count, 1);
+        assert_eq!(
+            store
+                .list_group("资料", &Default::default())
+                .unwrap()
+                .matched_count,
+            2
+        );
+        store.remove_group_members("资料", &[1]).unwrap();
+        assert_eq!(store.count().unwrap(), 2);
+        assert_eq!(
+            store
+                .list_group("资料", &Default::default())
+                .unwrap()
+                .matched_count,
+            1
+        );
+        assert!(
+            store
+                .add_candidates_to_group(["should-not-insert"], Some("不存在"))
+                .is_err()
+        );
+        assert_eq!(store.count().unwrap(), 2);
+    }
+
+    #[test]
+    fn group_membership_filters_exports_without_duplicating_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DictionaryCandidateStore::open(dir.path().join("groups.db")).unwrap();
+        store
+            .add_candidates(["alpha", "beta", "multi\nline"])
+            .unwrap();
+        store.assign_group("资料", &[1, 3]).unwrap();
+        store.assign_group("资料", &[1]).unwrap();
+        store.assign_group("备用", &[1, 2]).unwrap();
+        assert_eq!(store.count().unwrap(), 3);
+        assert_eq!(
+            store
+                .list_group("资料", &Default::default())
+                .unwrap()
+                .matched_count,
+            2
+        );
+        let wordlist = dir.path().join("words.txt");
+        assert_eq!(
+            store
+                .export_wordlist_group(&wordlist, &CancellationToken::default(), Some("资料"))
+                .unwrap(),
+            1
+        );
+        assert_eq!(std::fs::read_to_string(&wordlist).unwrap(), "alpha\n");
+        store.delete_group("资料").unwrap();
+        assert_eq!(store.count().unwrap(), 3);
+        assert!(
+            store
+                .export_wordlist_group(&wordlist, &CancellationToken::default(), Some("资料"))
+                .is_err()
+        );
+        store.delete(&[1]).unwrap();
+        assert_eq!(
+            store
+                .list_group("备用", &Default::default())
+                .unwrap()
+                .matched_count,
+            1
+        );
+        store.assign_group("空分组", &[]).unwrap();
+        assert_eq!(
+            store
+                .export_wordlist_group(&wordlist, &CancellationToken::default(), Some("空分组"))
+                .unwrap(),
+            0
+        );
     }
 
     #[test]

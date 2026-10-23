@@ -1,3 +1,4 @@
+import { ArchivePreviewButton } from "./archive-preview"
 import { FullText } from "@/components/home/full-text"
 import {
   ChevronRight,
@@ -85,6 +86,7 @@ type ExtractPageViewProps = {
   repairedCopyPath?: string | null
   queueContent?: React.ReactNode
   queueMemorySettings?: React.ReactNode
+  dictionarySettings?: React.ReactNode
   outputMode: OutputMode
   setOutputMode: React.Dispatch<React.SetStateAction<OutputMode>>
   outputDir: string | null
@@ -137,6 +139,7 @@ export function ExtractPageView({
   repairedCopyPath,
   queueContent,
   queueMemorySettings,
+  dictionarySettings,
   outputMode,
   setOutputMode,
   outputDir,
@@ -338,6 +341,14 @@ export function ExtractPageView({
                     支持多文件拖入或多行路径粘贴
                     <Kbd className="ml-1">Ctrl + V</Kbd>
                   </p>
+                  {analysis && (
+                    <ArchivePreviewButton
+                      key={analysis.archivePath}
+                      path={analysis.archivePath}
+                      password={knownPassword}
+                      disabled={busy || running}
+                    />
+                  )}
                   {analysis ? (
                     <Button
                       variant="ghost"
@@ -576,6 +587,10 @@ export function ExtractPageView({
                     onOpenEngineSettings={onOpenEngineSettings}
                   />
                 </FieldSet>
+              </section>
+              <section className="byte-options-group">
+                <h3>候选字典范围</h3>
+                {dictionarySettings}
               </section>
               {queueMemorySettings ? (
                 <section

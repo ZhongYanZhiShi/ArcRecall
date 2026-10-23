@@ -53,6 +53,8 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group"
+import { DictionaryGroups } from "./dictionary-groups"
+import { listGroup } from "@/lib/workflows"
 import { DictionaryTableBody } from "@/components/home/dictionary-table-body"
 import { TablePagination } from "@/components/ui/table-pagination"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -91,6 +93,7 @@ import {
 type StatusTone = "neutral" | "busy" | "ok" | "error"
 
 export function DictionaryPage() {
+  const [group, setGroup] = React.useState<string | null>(null)
   const [entries, setEntries] = React.useState<DictionaryCandidateEntry[]>([])
   const [pageIndex, setPageIndex] = React.useState(0)
   const [pageSize, setPageSize] = React.useState(DICTIONARY_PAGE_SIZE)
@@ -131,12 +134,16 @@ export function DictionaryPage() {
     async (
       searchText: string,
       requestedPageIndex = 0,
-      requestedPageSize = pageSize
+      requestedPageSize = pageSize,
+      requestedGroup = group
     ) => {
       setLoadState("loading")
       try {
         const fetchPage = (nextPageIndex: number) =>
-          listDictionary({
+          (requestedGroup
+            ? (query: Parameters<typeof listDictionary>[0]) =>
+                listGroup(requestedGroup, query ?? {})
+            : listDictionary)({
             searchText,
             skip: nextPageIndex * requestedPageSize,
             take: requestedPageSize,
@@ -183,7 +190,7 @@ export function DictionaryPage() {
         throw error
       }
     },
-    [pageSize]
+    [pageSize, group]
   )
 
   const runBusy = React.useCallback(
@@ -353,6 +360,7 @@ export function DictionaryPage() {
       let tone: StatusTone
       try {
         const summary = await importDictionaryFile(file, {
+          group,
           signal: controller.signal,
           onProgress: (progress) => {
             const now = Date.now()
@@ -409,7 +417,7 @@ export function DictionaryPage() {
     void runBusy(
       "正在添加候选…",
       async () => {
-        const summary = await addDictionaryCandidates([singleCandidate])
+        const summary = await addDictionaryCandidates([singleCandidate], group)
         setSingleCandidate("")
         await finishAdding(formatAddStatus("单条新增完成", summary))
       },
@@ -425,7 +433,7 @@ export function DictionaryPage() {
       "正在批量添加候选…",
       async () => {
         const candidates = splitLines(pastedCandidates)
-        const summary = await addDictionaryCandidates(candidates)
+        const summary = await addDictionaryCandidates(candidates, group)
         setPastedCandidates("")
         await finishAdding(formatAddStatus("批量新增完成", summary))
       },
@@ -539,6 +547,18 @@ export function DictionaryPage() {
           }
         />
 
+        <DictionaryGroups
+          value={group}
+          ids={[...selectedIds]}
+          disabled={isBusy}
+          onChange={(next) => {
+            setGroup(next)
+            setSelectedIds(new Set())
+            void runBusy("正在读取分组…", async () => {
+              await loadEntries(appliedSearch, 0, pageSize, next)
+            })
+          }}
+        />
         {importProgress ? (
           <Card size="sm" className="shrink-0 gap-2">
             <CardContent className="flex items-center gap-3">
@@ -923,7 +943,10 @@ export function DictionaryPage() {
         >
           <SheetHeader className="shrink-0 border-b border-border/80 p-4 pr-12">
             <SheetTitle>添加密码</SheetTitle>
-            <SheetDescription>每行一个密码，重复项自动跳过。</SheetDescription>
+            <SheetDescription>
+              每行一个密码，重复项不重复保存。
+              {group ? `本次添加到「${group}」分组。` : "本次添加到全部字典。"}
+            </SheetDescription>
           </SheetHeader>
 
           <div className="workbench-details-body dictionary-add-body flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 [&>*]:shrink-0">
@@ -1056,7 +1079,8 @@ export function DictionaryPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>删除候选</AlertDialogTitle>
             <AlertDialogDescription>
-              确认删除选中的 {selectedIds.size} 个候选？此操作不可撤销。
+              确认从全部字典和所有分组删除选中的 {selectedIds.size}{" "}
+              个候选？此操作不可撤销。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

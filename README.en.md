@@ -2,6 +2,12 @@ English | [简体中文](./README.md)
 
 # ArcRecall
 
+New workflow tools: read-only archive previews (searchable paths, declared sizes and encryption flags; up to 5,000 displayed entries), dictionary groups with per-task selection, and recovery task records under History. Encrypted directory listings use the known password entered on the extraction page. Previews never extract files or expand nested archives.
+
+Candidates may belong to multiple groups. Adding or importing while a group is selected assigns candidates to that group; removing membership or deleting a group preserves the candidates. Groups are included in dictionary backups; restoring an older backup clears existing groups. Known and locally remembered passwords still take precedence over the selected dictionary. A missing group must be reselected and never silently falls back to the full dictionary.
+
+Recovery task records store paths, basic options, outcome categories and unfinished archives, without passwords, live candidates or raw engine messages. They cover new recovery tasks only, including cancellation, preparation failures and interrupted sessions. Records are stored separately in `task-records.db`, are individually deletable, and are not included in dictionary/password-history database backups. Retrying queues a fresh run against the current source, with collision-free output; it does not resume engine progress. Compression tasks are not included yet.
+
 ArcRecall is a local archive tool for identifying file formats, creating copies with correct extensions, and recursively extracting nested archives. Decryption relies on known passwords and dictionary candidates, with dictionary verification at the core of the current workflow. Brute-force modes and other exhaustive password-search features will not be added.
 
 ## Download and use

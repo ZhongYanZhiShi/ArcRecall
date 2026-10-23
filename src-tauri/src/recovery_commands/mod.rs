@@ -35,6 +35,8 @@ static RECOVERY_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecoveryStartRequest {
     queue_entry_id: Option<u32>,
+    #[serde(default)]
+    dictionary_group: Option<String>,
     archive_path: String,
     #[serde(default)]
     rescan_task_id: Option<String>,
@@ -86,6 +88,44 @@ pub(crate) async fn archive_analyze(
 
 #[tauri::command]
 pub(crate) async fn recovery_start(
+    state: State<'_, AppState>,
+    request: RecoveryStartRequest,
+) -> Result<RecoveryTaskStatus, String> {
+    ensure_no_active_archive_task(&state)?;
+    let mut record = arc_recall_core::task_records::TaskRecord {
+        task_id: next_recovery_task_id(),
+        archive_path: request.archive_path.clone(),
+        output_directory: request.output_directory.clone().unwrap_or_default(),
+        started_at_ms: current_time_ms(),
+        elapsed_ms: 0,
+        state: "failed".into(),
+        failure_kind: Some("Preparation".into()),
+        recursive: request.recursive,
+        compute_mode: if request.compute_mode == RecoveryComputeMode::CpuOnly {
+            "cpuOnly"
+        } else {
+            "gpuPreferred"
+        }
+        .into(),
+        dictionary_group: request.dictionary_group.clone(),
+        pending_archive_paths: Vec::new(),
+        skipped_scan_directories: Vec::new(),
+    };
+    let result = recovery_start_inner(state.clone(), request).await;
+    if result.is_err() {
+        record.elapsed_ms = current_time_ms().saturating_sub(record.started_at_ms);
+        let saved = arc_recall_core::task_records::TaskRecordStore::open(
+            &state.paths.root.join("task-records.db"),
+        )
+        .and_then(|store| store.save(&record));
+        if saved.is_err() {
+            return result.map_err(|error| format!("{error}（任务记录也未能保存）"));
+        }
+    }
+    result
+}
+
+async fn recovery_start_inner(
     state: State<'_, AppState>,
     mut request: RecoveryStartRequest,
 ) -> Result<RecoveryTaskStatus, String> {
@@ -145,6 +185,7 @@ pub(crate) async fn recovery_start(
         request.avoid_output_collision = false;
         request.compute_mode = previous.compute_mode;
         request.recursive = true;
+        request.dictionary_group = previous.dictionary_group.clone();
         Some(resume)
     } else {
         None
@@ -202,6 +243,17 @@ pub(crate) async fn recovery_start(
         .map_err(|error| error.to_string())?
         .recovery;
 
+    if let Some(group) = &request.dictionary_group {
+        let groups = state
+            .dictionary
+            .lock()
+            .map_err(|e| e.to_string())?
+            .groups()
+            .map_err(|e| e.to_string())?;
+        if !groups.contains(group) {
+            return Err("所选字典分组已不存在，请重新选择。".into());
+        }
+    }
     let task_id = next_recovery_task_id();
     let work_directory = state.recovery_session.directory().join(&task_id);
     let dictionary_path = work_directory.join("dictionary.txt");
@@ -230,6 +282,7 @@ pub(crate) async fn recovery_start(
 
     let status = Arc::new(Mutex::new(RecoveryTaskStatus {
         task_id: task_id.clone(),
+        dictionary_group: request.dictionary_group.clone(),
         phase: RecoveryPhase::Preparing,
         running: true,
         completed: false,
@@ -274,6 +327,11 @@ pub(crate) async fn recovery_start(
         timings: Vec::new(),
         resume: None,
     }));
+    let record_path = state.paths.root.join("task-records.db");
+    arc_recall_core::task_records::TaskRecordStore::open(&record_path)?.save_for_session(
+        &status.lock().map_err(|e| e.to_string())?.record(),
+        state.recovery_session.directory(),
+    )?;
     {
         let mut current = state
             .recovery_task
@@ -333,7 +391,8 @@ pub(crate) async fn recovery_start(
         let mut job = job;
         let mut precomputed_fingerprint_sha256 = None;
         let mut completion_guard =
-            RecoveryTaskCompletionGuard::new(Arc::clone(&status_for_worker), work_directory);
+            RecoveryTaskCompletionGuard::new(Arc::clone(&status_for_worker), work_directory)
+                .with_record_path(record_path);
         let mut last_logged_phase = None;
         let outcome = catch_recovery_panic(|| {
             if resume.is_none() && job.known_password.is_none() {
@@ -376,7 +435,11 @@ pub(crate) async fn recovery_start(
                         RecoveryError::Message(format!("打开全局字典失败：{error}"))
                     })?;
                 let candidate_count = store
-                    .export_wordlist_with_cancellation(&dictionary_path, &dictionary_cancellation)
+                    .export_wordlist_group(
+                        &dictionary_path,
+                        &dictionary_cancellation,
+                        request.dictionary_group.as_deref(),
+                    )
                     .map_err(|error| match error {
                         DictionaryError::Cancelled => RecoveryError::Cancelled,
                         other => RecoveryError::Message(format!("准备恢复字典失败：{other}")),
@@ -822,7 +885,7 @@ fn resolve_available_output_directory(preferred: &Path) -> PathBuf {
 fn next_recovery_task_id() -> String {
     let timestamp = current_time_ms();
     let sequence = RECOVERY_TASK_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("recovery-{timestamp}-{sequence}")
+    format!("recovery-{timestamp}-{}-{sequence}", std::process::id())
 }
 
 #[cfg(test)]

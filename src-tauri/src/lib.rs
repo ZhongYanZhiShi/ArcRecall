@@ -1,3 +1,5 @@
+mod workflow_commands;
+use workflow_commands::*;
 mod ai_commands;
 mod clipboard_security;
 mod compression_commands;
@@ -384,6 +386,10 @@ pub fn run() {
         .setup(|app| {
             let paths = resolve_app_paths(app.handle())?;
             let recovery_session = RecoverySession::create(&paths.temp)?;
+            arc_recall_core::task_records::TaskRecordStore::open(
+                &paths.root.join("task-records.db"),
+            )?
+            .interrupt_running()?;
             let resource_dir = app
                 .path()
                 .resource_dir()
@@ -459,6 +465,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            task_records_list,
+            task_record_delete,
+            dictionary_groups,
+            dictionary_group_assign,
+            dictionary_group_delete,
+            dictionary_group_list,
+            archive_preview,
             recovery_queue_load,
             recovery_report_export,
             recovery_queue_save,

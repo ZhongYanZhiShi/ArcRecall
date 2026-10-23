@@ -44,6 +44,7 @@ export type DictionaryImportProgress = {
 }
 
 type DictionaryImportOptions = {
+  group?: string | null
   signal?: AbortSignal
   onProgress?: (progress: DictionaryImportProgress) => void
 }
@@ -132,7 +133,8 @@ export async function countDictionary(): Promise<number> {
 }
 
 export async function addDictionaryCandidates(
-  candidates: string[]
+  candidates: string[],
+  group?: string | null
 ): Promise<DictionaryCandidateAddSummary> {
   if (candidates.length === 0) {
     return EMPTY_SUMMARY
@@ -146,6 +148,7 @@ export async function addDictionaryCandidates(
     const batch = candidates.slice(i, i + DICTIONARY_BATCH_SIZE)
     const part = await invoke<DictionaryCandidateAddSummary>("dictionary_add", {
       candidates: batch,
+      group: group ?? null,
     })
     summary = mergeSummary(summary, part)
   }
@@ -192,7 +195,7 @@ export async function importDictionaryFile(
     const flush = async () => {
       options.signal?.throwIfAborted()
       if (batch.length === 0) return
-      const part = await addDictionaryCandidates(batch)
+      const part = await addDictionaryCandidates(batch, options.group)
       summary = mergeSummary(summary, part)
       batch = []
       batchBytes = 0

@@ -1,0 +1,68 @@
+import { invoke } from "@tauri-apps/api/core"
+import {
+  isDesktopRuntime,
+  type DictionaryCandidateQuery,
+  type DictionaryListResult,
+} from "./dictionary"
+
+export type TaskRecord = {
+  taskId: string
+  archivePath: string
+  outputDirectory: string
+  startedAtMs: number
+  elapsedMs: number
+  state: string
+  failureKind: string | null
+  recursive: boolean
+  computeMode: "cpuOnly" | "gpuPreferred"
+  dictionaryGroup: string | null
+  pendingArchivePaths: string[]
+  skippedScanDirectories: string[]
+}
+export type ArchivePreview = {
+  entries: {
+    path: string
+    size: number
+    directory: boolean
+    encrypted: boolean
+  }[]
+  totalEntries: number
+  totalBytes: number
+  truncated: boolean
+}
+export function listGroups(): Promise<string[]> {
+  return isDesktopRuntime() ? invoke("dictionary_groups") : Promise.resolve([])
+}
+export function assignGroup(name: string, ids: number[]): Promise<void> {
+  return invoke("dictionary_group_assign", { name, ids })
+}
+export function deleteGroup(name: string): Promise<void> {
+  return invoke("dictionary_group_delete", { name })
+}
+export function listGroup(
+  name: string,
+  query: DictionaryCandidateQuery
+): Promise<DictionaryListResult> {
+  return invoke("dictionary_group_list", { name, query })
+}
+export function listTaskRecords(
+  skip: number,
+  failedOnly: boolean
+): Promise<TaskRecord[]> {
+  return isDesktopRuntime()
+    ? invoke("task_records_list", { skip, failedOnly })
+    : Promise.resolve([])
+}
+export function deleteTaskRecord(id: string): Promise<void> {
+  return invoke("task_record_delete", { id })
+}
+export function previewArchive(
+  path: string,
+  password: string
+): Promise<ArchivePreview> {
+  return invoke("archive_preview", { path, password: password || null })
+}
+
+export function removeGroupMembers(name: string, ids: number[]): Promise<void> {
+  return invoke("dictionary_group_assign", { name, ids, remove: true })
+}

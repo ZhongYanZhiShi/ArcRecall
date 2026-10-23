@@ -30,6 +30,8 @@ import {
   recoveryQueue,
   recoveryQueueJournal,
 } from "@/lib/recovery-queue-session"
+import { listGroup } from "@/lib/workflows"
+import { DictionaryGroupSelect } from "./dictionary-group-select"
 import { QueueMemoryPanel } from "@/components/home/queue-memory-panel"
 import { RecoveryQueuePanel } from "@/components/home/recovery-queue-panel"
 import { createRecoveryTaskSubscription } from "@/lib/recovery-task-attachment"
@@ -67,6 +69,9 @@ export function ExtractPage({
   const [outputMode, setOutputMode] = React.useState<OutputMode>("sibling")
   const [outputDir, setOutputDir] = React.useState<string | null>(null)
   const [openWhenDone, setOpenWhenDone] = React.useState(true)
+  const [dictionaryGroup, setDictionaryGroup] = React.useState<string | null>(
+    null
+  )
   const [recursive, setRecursive] = React.useState(true)
   const [computeMode, setComputeMode] =
     React.useState<RecoveryComputeMode>("gpuPreferred")
@@ -98,10 +103,16 @@ export function ExtractPage({
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const refreshDictionaryCount = React.useCallback(() => {
-    void countDictionary()
+    void (
+      dictionaryGroup
+        ? listGroup(dictionaryGroup, { searchText: "", skip: 0, take: 1 }).then(
+            (result) => result.matchedCount
+          )
+        : countDictionary()
+    )
       .then(setDictionaryCount)
       .catch(() => setDictionaryCount(isDesktopRuntime() ? null : 0))
-  }, [])
+  }, [dictionaryGroup])
   const {
     task: activeTask,
     setTask,
@@ -409,6 +420,7 @@ export function ExtractPage({
           knownPassword: knownPassword || null,
           recursive,
           computeMode,
+          dictionaryGroup,
         })
         if (itemId === undefined)
           throw new Error("无法加入任务队列，请重新选择归档。")
@@ -427,6 +439,7 @@ export function ExtractPage({
         avoidOutputCollision: outputMode === "sibling",
         recursive,
         computeMode,
+        dictionaryGroup,
       })
       autoOpenTasks.current.add(started.taskId)
       setSelectedQueueItemId(null)
@@ -443,6 +456,7 @@ export function ExtractPage({
   }, [
     analysis,
     computeMode,
+    dictionaryGroup,
     knownPassword,
     openWhenDone,
     isInputLocked,
@@ -592,6 +606,7 @@ export function ExtractPage({
       outputDirectory: outputMode === "custom" ? outputDir : null,
       recursive,
       computeMode,
+      dictionaryGroup,
       knownPassword: knownPassword || null,
       openWhenDone,
     })
@@ -652,6 +667,13 @@ export function ExtractPage({
       handlePickBatch={handlePickBatch}
       handleRepairCopy={handleRepairCopy}
       repairedCopyPath={repairedCopyPath}
+      dictionarySettings={
+        <DictionaryGroupSelect
+          value={dictionaryGroup}
+          onChange={setDictionaryGroup}
+          disabled={busy || running || queue.running}
+        />
+      }
       queueMemorySettings={
         <QueueMemoryPanel disabled={busy || running || queue.running} />
       }
@@ -704,6 +726,7 @@ export function ExtractPage({
                   {
                     recursive: task.recursiveEnabled,
                     computeMode: task.computeMode,
+                    dictionaryGroup: task.dictionaryGroup,
                     knownPassword:
                       task.recoveredPassword ?? (knownPassword || null),
                   }

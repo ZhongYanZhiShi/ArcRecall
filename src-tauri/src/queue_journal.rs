@@ -41,6 +41,8 @@ struct QueueOptions {
     recursive: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     compute_mode: Option<RecoveryComputeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dictionary_group: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

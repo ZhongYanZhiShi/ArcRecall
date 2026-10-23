@@ -77,6 +77,9 @@ jobs:
       - name: Test real Windows desktop and restart recovery
         run: pnpm test:desktop
 
+      - name: Test dictionary groups, archive preview and task records
+        run: pnpm test:desktop:workflows
+
       - name: Upload UI test evidence
         if: always()
         uses: actions/upload-artifact@v4

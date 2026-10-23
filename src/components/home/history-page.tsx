@@ -1,5 +1,6 @@
 "use client"
 
+import { TaskRecordsPanel } from "./task-records-panel"
 import { FullText } from "@/components/home/full-text"
 import { WorkbenchDetails, WorkbenchDetailsActions } from "./workbench-details"
 
@@ -396,6 +397,7 @@ export function HistoryPage() {
           description="回看归档层级、恢复密码与输出位置。"
           actions={
             <>
+              <TaskRecordsPanel />
               <Button
                 size="sm"
                 variant="outline"
