@@ -85,6 +85,7 @@ type ExtractPageViewProps = {
   handleRepairCopy?: () => void
   repairedCopyPath?: string | null
   queueContent?: React.ReactNode
+  workflowTools?: React.ReactNode
   queueMemorySettings?: React.ReactNode
   dictionarySettings?: React.ReactNode
   outputMode: OutputMode
@@ -138,6 +139,7 @@ export function ExtractPageView({
   handleRepairCopy,
   repairedCopyPath,
   queueContent,
+  workflowTools,
   queueMemorySettings,
   dictionarySettings,
   outputMode,
@@ -406,6 +408,9 @@ export function ExtractPageView({
               </>
             )}
           </Card>
+          {workflowTools && (
+            <div className="flex shrink-0 flex-wrap gap-2">{workflowTools}</div>
+          )}
           {task?.completed ? (
             <details className="byte-disclosure" key={`layers:${task.taskId}`}>
               <summary>归档层级与处理状态</summary>

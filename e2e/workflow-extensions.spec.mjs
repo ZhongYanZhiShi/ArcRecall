@@ -7,6 +7,16 @@ async function setup(page) {
   ).toBeVisible()
   await page.evaluate(() => {
     window.workflowCalls = []
+    window.testPresets = [
+      {
+        name: "资料处理",
+        outputDirectory: null,
+        recursive: false,
+        computeMode: "cpuOnly",
+        dictionaryGroup: "资料分组",
+        openWhenDone: false,
+      },
+    ]
     const entries = [
       { id: 1, value: "candidate-one", byteCount: 13, successCount: 0 },
       { id: 2, value: "candidate-two", byteCount: 13, successCount: 0 },
@@ -20,6 +30,54 @@ async function setup(page) {
       unregisterCallback: () => {},
       async invoke(command, args) {
         window.workflowCalls.push({ command, args })
+        if (command === "processing_presets_list") return window.testPresets
+        if (command === "processing_preset_apply")
+          return window.testPresets.find((p) => p.name === args.name)
+        if (command === "processing_preset_save") {
+          window.testPresets = [
+            ...window.testPresets.filter((p) => p.name !== args.preset.name),
+            args.preset,
+          ]
+          return null
+        }
+        if (command === "processing_preset_delete") {
+          window.testPresets = window.testPresets.filter(
+            (p) => p.name !== args.name
+          )
+          return null
+        }
+        if (command === "archive_folder_scan") {
+          const result = {
+            entries: [
+              {
+                path: "C:/扫描/资料.7z.001",
+                volumePaths: ["C:/扫描/资料.7z.001", "C:/扫描/资料.7z.002"],
+                format: "7z",
+                fileSize: 100,
+                volumeCount: 2,
+              },
+              {
+                path: "C:/扫描/其他.zip",
+                volumePaths: ["C:/扫描/其他.zip"],
+                format: "ZIP",
+                fileSize: 50,
+                volumeCount: 1,
+              },
+            ],
+            warnings: [],
+            visitedEntries: 3,
+            ignoredFiles: 0,
+            skippedLinks: 0,
+            truncated: false,
+            cancelled: false,
+          }
+          if (window.deferFolderScan)
+            return new Promise((resolve) => {
+              window.finishFolderScan = () =>
+                resolve({ ...result, cancelled: true })
+            })
+          return result
+        }
         if (command === "plugin:dialog|open") return "C:/测试输出"
         if (command === "archive_action_run") {
           if (window.deferArchiveAction)
@@ -38,6 +96,7 @@ async function setup(page) {
         }
         if (command === "archive_action_cancel") {
           window.rejectArchiveAction?.("操作已取消")
+          window.finishFolderScan?.()
           return null
         }
         if (command === "dictionary_groups") return ["资料分组"]
@@ -240,5 +299,92 @@ test("运行完整性检查时禁止重复提交并允许取消", async ({ page 
   await expect(dialog.getByRole("alert")).toHaveText("操作已取消")
   await expect(
     dialog.getByRole("button", { name: "检查完整性", exact: true })
+  ).toBeEnabled()
+})
+
+test("应用预设后扫描结果经确认加入队列且不自动开始", async ({ page }) => {
+  await setup(page)
+  await page.getByRole("button", { name: "处理预设", exact: true }).click()
+  const presets = page.getByRole("dialog", { name: "处理预设", exact: true })
+  await presets.getByRole("combobox", { name: "已保存预设" }).click()
+  await page.getByRole("option", { name: "资料处理", exact: true }).click()
+  await presets.getByRole("button", { name: "应用预设", exact: true }).click()
+  await expect(presets).not.toBeVisible()
+  await page.getByRole("button", { name: "处理预设", exact: true }).click()
+  await presets
+    .getByRole("textbox", { name: "预设名称", exact: true })
+    .fill("新预设")
+  await presets
+    .getByRole("button", { name: "保存当前选项", exact: true })
+    .click()
+  await expect(page.getByText("预设已保存", { exact: true })).toBeVisible()
+  const saved = await page.evaluate(
+    () =>
+      window.workflowCalls.find((c) => c.command === "processing_preset_save")
+        .args.preset
+  )
+  expect(saved.recursive).toBe(false)
+  expect(saved.dictionaryGroup).toBe("资料分组")
+  expect(saved).not.toHaveProperty("knownPassword")
+  await expect(
+    presets.getByRole("button", { name: "保存当前选项", exact: true })
+  ).toBeDisabled()
+  await page.keyboard.press("Escape")
+  await page.getByRole("button", { name: "扫描文件夹", exact: true }).click()
+  const scanner = page.getByRole("dialog", { name: "扫描文件夹并导入" })
+  await scanner
+    .getByRole("button", { name: "选择文件夹并扫描", exact: true })
+    .click()
+  await expect(
+    scanner.getByRole("checkbox", {
+      name: "导入 C:/扫描/资料.7z.001",
+      exact: true,
+    })
+  ).toBeVisible()
+  await scanner
+    .getByRole("checkbox", { name: "导入 C:/扫描/资料.7z.001", exact: true })
+    .click()
+  await scanner
+    .getByRole("button", { name: "确认加入队列（1）", exact: true })
+    .click()
+  await expect(scanner).not.toBeVisible()
+  expect(
+    await page.evaluate(() =>
+      window.workflowCalls.some((c) => c.command === "recovery_start")
+    )
+  ).toBe(false)
+  await page.getByRole("button", { name: "扫描文件夹", exact: true }).click()
+  await expect(
+    scanner.getByRole("checkbox", {
+      name: "导入 C:/扫描/资料.7z.001",
+      exact: true,
+    })
+  ).toBeDisabled()
+  await page.screenshot({
+    path: test.info().outputPath("folder-scan-import.png"),
+    animations: "disabled",
+  })
+})
+
+test("扫描取消后保留部分结果供用户确认", async ({ page }) => {
+  await setup(page)
+  await page.evaluate(() => {
+    window.deferFolderScan = true
+  })
+  await page.getByRole("button", { name: "扫描文件夹", exact: true }).click()
+  const scanner = page.getByRole("dialog", { name: "扫描文件夹并导入" })
+  await scanner
+    .getByRole("button", { name: "选择文件夹并扫描", exact: true })
+    .click()
+  await expect
+    .poll(() => page.evaluate(() => !!window.finishFolderScan))
+    .toBe(true)
+  await scanner.getByRole("button", { name: "停止扫描", exact: true }).click()
+  await expect(scanner.getByRole("status")).toContainText("扫描已停止")
+  await expect(
+    scanner.getByRole("checkbox", {
+      name: "导入 C:/扫描/其他.zip",
+      exact: true,
+    })
   ).toBeEnabled()
 })

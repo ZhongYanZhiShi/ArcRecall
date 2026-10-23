@@ -32,6 +32,9 @@ import {
 } from "@/lib/recovery-queue-session"
 import { listGroup } from "@/lib/workflows"
 import { DictionaryGroupSelect } from "./dictionary-group-select"
+import { ProcessingPresets } from "./processing-presets"
+import { FolderScanImport } from "./folder-scan-import"
+import type { ProcessingOptions } from "@/lib/planning"
 import { QueueMemoryPanel } from "@/components/home/queue-memory-panel"
 import { RecoveryQueuePanel } from "@/components/home/recovery-queue-panel"
 import { createRecoveryTaskSubscription } from "@/lib/recovery-task-attachment"
@@ -629,8 +632,38 @@ export function ExtractPage({
     }
   }
 
+  const processingOptions: ProcessingOptions = {
+    outputDirectory: outputMode === "custom" ? (outputDir ?? "") : null,
+    recursive,
+    computeMode,
+    dictionaryGroup,
+    openWhenDone,
+  }
+  const planningDisabled =
+    busy || running || queue.running || !journal.ready || computeModeBusy
   return (
     <ExtractPageView
+      workflowTools={
+        <>
+          <ProcessingPresets
+            value={processingOptions}
+            disabled={planningDisabled}
+            onApply={(preset) => {
+              if (isInputLocked()) return
+              setOutputMode(preset.outputDirectory ? "custom" : "sibling")
+              setOutputDir(preset.outputDirectory)
+              setRecursive(preset.recursive)
+              setComputeMode(preset.computeMode)
+              setDictionaryGroup(preset.dictionaryGroup)
+              setOpenWhenDone(preset.openWhenDone)
+            }}
+          />
+          <FolderScanImport
+            options={processingOptions}
+            disabled={planningDisabled}
+          />
+        </>
+      }
       outputMode={outputMode}
       setOutputMode={setOutputMode}
       outputDir={outputDir}

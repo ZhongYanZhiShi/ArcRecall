@@ -1,9 +1,11 @@
 mod bundle;
 mod compression;
+mod folder_scan;
 mod hashcat;
 mod install_io;
 mod john;
 mod preview;
+pub use folder_scan::{FolderScanResult, scan_archive_folder};
 mod recovery;
 mod runner;
 pub use preview::{ArchivePreview, preview_archive};

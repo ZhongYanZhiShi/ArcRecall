@@ -2,6 +2,7 @@ pub mod ai;
 pub mod dictionary;
 pub mod history;
 pub mod paths;
+pub mod processing_presets;
 pub mod settings;
 pub mod task_records;
 pub mod tools;

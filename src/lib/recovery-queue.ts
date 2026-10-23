@@ -70,6 +70,24 @@ export function uniqueArchivePaths(paths: readonly string[]): string[] {
     })
 }
 
+/** Skip an entire scanned volume group if any member already belongs to the queue. */
+export function newScannedArchivePaths(
+  existing: readonly string[],
+  candidates: readonly { path: string; volumePaths?: readonly string[] }[]
+): string[] {
+  const seen = new Set(existing.map(archivePathKey))
+  const additions: string[] = []
+  for (const entry of candidates) {
+    const members = [entry.path, ...(entry.volumePaths ?? [])].map(
+      archivePathKey
+    )
+    if (members.some((path) => seen.has(path))) continue
+    members.forEach((path) => seen.add(path))
+    additions.push(entry.path)
+  }
+  return additions
+}
+
 /** In-memory session queue. Scheduling outlives view subscriptions, while no
  * source path or password is written to browser storage. */
 export function createRecoveryQueue(api: QueueApi) {

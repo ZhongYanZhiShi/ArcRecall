@@ -3,6 +3,7 @@ import test from "node:test"
 import {
   createRecoveryQueue,
   uniqueArchivePaths,
+  newScannedArchivePaths,
 } from "../src/lib/recovery-queue.ts"
 
 const deferred = () => {
@@ -12,6 +13,27 @@ const deferred = () => {
   })
   return { promise, resolve }
 }
+
+test("扫描导入跳过已在队列中的任意分卷且不重置现有任务", () => {
+  const queue = createRecoveryQueue(api())
+  queue.enqueue(["C:/归档/分卷.7z.002"], { dictionaryGroup: "原分组" })
+  const before = queue.getSnapshot().items[0]
+  const additions = newScannedArchivePaths(
+    [before.path],
+    [
+      {
+        path: "c:\\归档\\分卷.7z.001",
+        volumePaths: ["c:\\归档\\分卷.7z.001", "c:\\归档\\分卷.7z.002"],
+      },
+      { path: "C:/归档/独立.zip", volumePaths: ["C:/归档/独立.zip"] },
+      { path: "c:\\归档\\独立.zip" },
+    ]
+  )
+  assert.deepEqual(additions, ["C:/归档/独立.zip"])
+  queue.enqueue(additions, { dictionaryGroup: "新分组" })
+  assert.equal(queue.getSnapshot().items[0], before)
+  assert.equal(queue.getSnapshot().items[1].options.dictionaryGroup, "新分组")
+})
 const analysis = (path) => ({
   archivePath: path,
   suggestedOutputDirectory: path.replace(/\.[^.]+$/, ""),

@@ -563,12 +563,16 @@ if (process.argv.includes("--workflows-only")) {
     await launch()
     const { verifyWorkflows } = await import("./desktop-workflows.mjs")
     await verifyWorkflows({ invoke, page, archive, password, data, evidence })
+    const { verifyPlanning } = await import("./desktop-planning.mjs")
+    await verifyPlanning({ invoke, page, archive, data, evidence })
+    const presets = await invoke("processing_presets_list")
     const before = await invoke("task_records_list", {
       skip: 0,
       failedOnly: false,
     })
     await close()
     await launch()
+    assert.deepEqual(await invoke("processing_presets_list"), presets)
     assert.deepEqual(
       await invoke("task_records_list", { skip: 0, failedOnly: false }),
       before

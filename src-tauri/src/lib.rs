@@ -1,4 +1,6 @@
+mod planning_commands;
 mod workflow_commands;
+use planning_commands::*;
 use workflow_commands::*;
 mod ai_commands;
 mod clipboard_security;
@@ -476,6 +478,11 @@ pub fn run() {
             archive_preview,
             archive_action_run,
             archive_action_cancel,
+            processing_presets_list,
+            processing_preset_save,
+            processing_preset_delete,
+            processing_preset_apply,
+            archive_folder_scan,
             recovery_queue_load,
             recovery_report_export,
             recovery_queue_save,
