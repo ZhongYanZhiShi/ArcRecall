@@ -10,6 +10,7 @@ export type JournalItem = Pick<
     recursive?: boolean
     dictionaryGroup?: string | null
     computeMode?: "gpuPreferred" | "cpuOnly"
+    openWhenDone?: boolean
   }
 }
 export type Journal = { version: 1; enabled: boolean; items: JournalItem[] }
@@ -30,6 +31,7 @@ export function journalItems(snapshot: QueueSnapshot): JournalItem[] {
             recursive: options.recursive,
             computeMode: options.computeMode,
             dictionaryGroup: options.dictionaryGroup,
+            openWhenDone: options.openWhenDone,
           }
         : undefined,
     })

@@ -3,6 +3,7 @@ import type {
   RecoveryStartRequest,
   RecoveryTaskStatus,
 } from "./recovery"
+import type { ProcessingOptions } from "./planning"
 
 export type QueueItem = {
   id: number
@@ -27,6 +28,8 @@ export type QueueSnapshot = {
   running: boolean
   stopping: boolean
   cancelling: boolean
+  pauseRequested: boolean
+  paused: boolean
   error: string | null
 }
 export type QueueOptions = Omit<
@@ -51,7 +54,8 @@ function mergeChanged<T extends object>(current: T, update: Partial<T>): T {
     : { ...current, ...update }
 }
 
-function archivePathKey(path: string) {
+export function archivePathKey(path: string) {
+  path = path.replace(/^\\\\\?\\UNC\\/i, "\\\\").replace(/^\\\\\?\\/, "")
   return /^[a-z]:|^\\\\/i.test(path)
     ? path.replaceAll("/", "\\").toLowerCase()
     : path
@@ -96,6 +100,8 @@ export function createRecoveryQueue(api: QueueApi) {
     running: false,
     stopping: false,
     cancelling: false,
+    pauseRequested: false,
+    paused: false,
     error: null,
   }
   let sequence = 0
@@ -128,15 +134,33 @@ export function createRecoveryQueue(api: QueueApi) {
     })
   const message = (error: unknown) =>
     error instanceof Error ? error.message : String(error)
+  const eligible = (item: QueueItem, onlyItemId?: number) =>
+    item.state === "waiting" &&
+    !item.blockedReason &&
+    (onlyItemId === undefined || item.id === onlyItemId)
+  const removeMany = (ids: readonly number[]) => {
+    if (snapshot.running) return
+    const removed = new Set(ids)
+    const items = snapshot.items.filter((item) => !removed.has(item.id))
+    publish({
+      items,
+      paused: snapshot.paused && items.some((item) => eligible(item)),
+    })
+  }
   const stop = async () => {
     if (!snapshot.running || snapshot.cancelling) return
     const cancellingTaskId = activeTaskId
     if (!cancellingTaskId) {
-      publish({ stopping: true })
+      publish({ stopping: true, pauseRequested: false })
       return
     }
     stopError = null
-    publish({ stopping: true, cancelling: true, error: null })
+    publish({
+      stopping: true,
+      cancelling: true,
+      pauseRequested: false,
+      error: null,
+    })
     try {
       await api.cancel(cancellingTaskId)
     } catch (error) {
@@ -211,12 +235,61 @@ export function createRecoveryQueue(api: QueueApi) {
         .map((item) => item.id)
     },
     remove(id: number) {
-      if (!snapshot.running)
-        publish({ items: snapshot.items.filter((item) => item.id !== id) })
+      removeMany([id])
+    },
+    removeMany,
+    moveWaiting(id: number, direction: "up" | "down") {
+      if (snapshot.running) return
+      const positions = snapshot.items.flatMap((item, index) =>
+        eligible(item) ? [index] : []
+      )
+      const position = positions.findIndex(
+        (index) => snapshot.items[index].id === id
+      )
+      const neighbor = position + (direction === "up" ? -1 : 1)
+      if (position < 0 || neighbor < 0 || neighbor >= positions.length) return
+      const items = [...snapshot.items]
+      const source = positions[position]
+      const destination = positions[neighbor]
+      ;[items[source], items[destination]] = [items[destination], items[source]]
+      publish({ items })
+    },
+    applyProcessingOptions(ids: readonly number[], options: ProcessingOptions) {
+      if (snapshot.running)
+        throw new Error("请等待批次暂停或结束后再应用预设。")
+      const selected = new Set(ids)
+      let applied = 0
+      publish({
+        items: snapshot.items.map((item) => {
+          if (!selected.has(item.id) || !eligible(item)) return item
+          applied++
+          const nextOptions = { ...item.options }
+          delete nextOptions.exactOutputDirectory
+          // Copy only processing fields, preserving a session-only password and
+          // source identity. Preset names must never enter recovery requests.
+          return {
+            ...item,
+            options: {
+              ...nextOptions,
+              outputDirectory: options.outputDirectory,
+              recursive: options.recursive,
+              computeMode: options.computeMode,
+              dictionaryGroup: options.dictionaryGroup,
+              openWhenDone: options.openWhenDone,
+            },
+          }
+        }),
+      })
+      return applied
     },
     clear() {
       if (!snapshot.running)
-        publish({ items: [], error: null, currentItemId: undefined })
+        publish({
+          items: [],
+          error: null,
+          currentItemId: undefined,
+          paused: false,
+        })
     },
     retryFailed() {
       if (!snapshot.running)
@@ -231,33 +304,40 @@ export function createRecoveryQueue(api: QueueApi) {
         })
     },
     stop,
+    pauseAfterCurrent() {
+      if (snapshot.running && !snapshot.stopping)
+        publish({ pauseRequested: true })
+    },
+    cancelPause() {
+      if (snapshot.running) publish({ pauseRequested: false })
+    },
     async start(options: QueueOptions, onlyItemId?: number) {
       if (
         snapshot.running ||
-        !snapshot.items.some(
-          (item) =>
-            item.state === "waiting" &&
-            !item.blockedReason &&
-            (onlyItemId === undefined || item.id === onlyItemId)
-        )
+        !snapshot.items.some((item) => eligible(item, onlyItemId))
       )
         return
       publish({
         running: true,
         stopping: false,
         cancelling: false,
+        paused: false,
+        pauseRequested: false,
         error: null,
       })
       let lastOutput: string | null = null
+      let openLastOutput = false
+      let paused = false
       try {
         while (!snapshot.stopping) {
-          const item = snapshot.items.find(
-            (candidate) =>
-              candidate.state === "waiting" &&
-              !candidate.blockedReason &&
-              (onlyItemId === undefined || candidate.id === onlyItemId)
+          const item = snapshot.items.find((candidate) =>
+            eligible(candidate, onlyItemId)
           )
           if (!item) break
+          if (snapshot.pauseRequested) {
+            paused = true
+            break
+          }
           const itemOptions = {
             ...options,
             ...item.options,
@@ -338,12 +418,15 @@ export function createRecoveryQueue(api: QueueApi) {
               },
               { error: null }
             )
-            if (task.success) lastOutput = task.outputDirectory
+            if (task.success) {
+              lastOutput = task.outputDirectory
+              openLastOutput = !!itemOptions.openWhenDone
+            }
           } catch (error) {
             patch(item.id, { state: "failed", error: message(error) })
           }
         }
-        if (lastOutput && options.openWhenDone && !snapshot.stopping) {
+        if (lastOutput && openLastOutput && !snapshot.stopping) {
           try {
             await api.openOutput(lastOutput)
           } catch (error) {
@@ -353,7 +436,13 @@ export function createRecoveryQueue(api: QueueApi) {
       } finally {
         activeTaskId = null
         stopError = null
-        publish({ running: false, stopping: false, cancelling: false })
+        publish({
+          running: false,
+          stopping: false,
+          cancelling: false,
+          pauseRequested: false,
+          paused: paused && !snapshot.stopping,
+        })
         try {
           await api.checkpoint?.()
         } catch (error) {

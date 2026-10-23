@@ -43,6 +43,8 @@ struct QueueOptions {
     compute_mode: Option<RecoveryComputeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dictionary_group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    open_when_done: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -289,6 +291,37 @@ mod tests {
         assert_eq!(store.load().unwrap().items[0].state, QueueState::Success);
         store.save(false, vec![]).unwrap();
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn open_when_done_round_trips_and_older_options_keep_the_default_unset() {
+        let legacy: QueueEntry = serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "path": "missing.zip",
+            "state": "waiting",
+            "options": { "recursive": false }
+        }))
+        .unwrap();
+        assert_eq!(legacy.options.as_ref().unwrap().open_when_done, None);
+        assert!(
+            serde_json::to_value(&legacy).unwrap()["options"]
+                .get("openWhenDone")
+                .is_none()
+        );
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("queue.json");
+        for open_when_done in [true, false] {
+            let mut item = legacy.clone();
+            item.options.as_mut().unwrap().open_when_done = Some(open_when_done);
+            QueueJournal::new(path.clone())
+                .save(true, vec![item])
+                .unwrap();
+            let restored = QueueJournal::new(path.clone()).load().unwrap();
+            assert_eq!(
+                restored.items[0].options.as_ref().unwrap().open_when_done,
+                Some(open_when_done)
+            );
+        }
     }
 
     #[test]

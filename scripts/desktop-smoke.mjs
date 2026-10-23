@@ -565,17 +565,58 @@ if (process.argv.includes("--workflows-only")) {
     await verifyWorkflows({ invoke, page, archive, password, data, evidence })
     const { verifyPlanning } = await import("./desktop-planning.mjs")
     await verifyPlanning({ invoke, page, archive, data, evidence })
+    const { verifyBatchWorkflows } =
+      await import("./desktop-batch-workflows.mjs")
+    await verifyBatchWorkflows({
+      invoke,
+      page,
+      archive,
+      password,
+      data,
+      evidence,
+    })
     const presets = await invoke("processing_presets_list")
     const before = await invoke("task_records_list", {
       skip: 0,
       failedOnly: false,
     })
+    const queueBeforeRestart = await invoke("recovery_queue_load")
+    assert.equal(queueBeforeRestart.enabled, true)
+    assert.equal(queueBeforeRestart.items.length, 2)
+    assert.ok(
+      queueBeforeRestart.items.every(
+        (item) =>
+          item.state === "success" && item.options?.openWhenDone === false
+      )
+    )
     await close()
     await launch()
     assert.deepEqual(await invoke("processing_presets_list"), presets)
     assert.deepEqual(
       await invoke("task_records_list", { skip: 0, failedOnly: false }),
       before
+    )
+    assert.deepEqual(await invoke("recovery_queue_load"), queueBeforeRestart)
+    const restoredQueue = page.getByRole("region", {
+      name: "批次队列",
+      exact: true,
+    })
+    await expect(restoredQueue.getByRole("listitem")).toHaveCount(2)
+    await expect(restoredQueue.getByRole("listitem").first()).toContainText(
+      "加密归档.dll"
+    )
+    await expect(restoredQueue.getByRole("listitem").last()).toContainText(
+      "普通归档.7z"
+    )
+    await expect(
+      restoredQueue.getByRole("button", { name: "暂无待处理任务", exact: true })
+    ).toBeDisabled()
+    await page.screenshot({
+      path: join(evidence, "native-queue-restored.png"),
+      animations: "disabled",
+    })
+    console.log(
+      "PASS: native restart preserves queue order, completed states and preset openWhenDone options"
     )
     assert.deepEqual(errors, [])
   } finally {

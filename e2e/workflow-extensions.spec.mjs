@@ -79,6 +79,65 @@ async function setup(page) {
           return result
         }
         if (command === "plugin:dialog|open") return "C:/测试输出"
+        if (command === "archive_batch_check_status")
+          return window.batchStatus?.id === args.id
+            ? structuredClone(window.batchStatus)
+            : null
+        if (command === "archive_batch_check_export")
+          return `C:/报告/batch.${args.format}`
+        if (command === "archive_batch_check_run") {
+          const previous = window.batchStatus
+          window.batchStatus = {
+            id: args.id,
+            running: false,
+            cancelled: false,
+            items: args.paths.map((path, i) => {
+              const old =
+                args.retryFailed &&
+                previous?.items.find((item) => item.path === path)
+              if (old && old.state !== "failed") return old
+              return {
+                path,
+                state:
+                  i === 0 || args.password === "correct-password"
+                    ? "passed"
+                    : "failed",
+                message: "本次检查结果",
+                elapsedMs: 10,
+                checkedAtMs: args.retryFailed ? 2000 : 1000,
+              }
+            }),
+          }
+          if (window.failBatchSetup) {
+            window.batchStatus.items = window.batchStatus.items.map((item) => ({
+              ...item,
+              state: "failed",
+              checkedAtMs: null,
+            }))
+            throw new Error("无法准备检查引擎")
+          }
+          if (window.canonicalBatchPaths) {
+            window.batchStatus.items = window.batchStatus.items.map((item) => ({
+              ...item,
+              path: item.path.replaceAll("/", "\\"),
+              sourcePaths: [item.path],
+            }))
+          }
+          if (window.deferBatchCheck) {
+            window.batchStatus.running = true
+            window.batchStatus.items[1].state = "checking"
+            return new Promise((resolve) => {
+              window.finishBatchCheck = () => {
+                window.batchStatus.running = false
+                window.batchStatus.cancelled = true
+                window.batchStatus.items[1].state = "cancelled"
+                window.batchStatus.items[1].checkedAtMs = null
+                resolve(structuredClone(window.batchStatus))
+              }
+            })
+          }
+          return structuredClone(window.batchStatus)
+        }
         if (command === "archive_action_run") {
           if (window.deferArchiveAction)
             return new Promise((resolve, reject) => {
@@ -97,6 +156,7 @@ async function setup(page) {
         if (command === "archive_action_cancel") {
           window.rejectArchiveAction?.("操作已取消")
           window.finishFolderScan?.()
+          window.finishBatchCheck?.()
           return null
         }
         if (command === "dictionary_groups") return ["资料分组"]
@@ -387,4 +447,141 @@ test("扫描取消后保留部分结果供用户确认", async ({ page }) => {
       exact: true,
     })
   ).toBeEnabled()
+})
+
+async function openScannedBatch(page) {
+  await setup(page)
+  await page.getByRole("button", { name: "扫描文件夹", exact: true }).click()
+  const scanner = page.getByRole("dialog", { name: "扫描文件夹并导入" })
+  await scanner
+    .getByRole("button", { name: "选择文件夹并扫描", exact: true })
+    .click()
+  await scanner
+    .getByRole("button", { name: "选择筛选结果", exact: true })
+    .click()
+  await scanner
+    .getByRole("button", { name: "批量检查完整性", exact: true })
+    .click()
+  return {
+    scanner,
+    batch: page.getByRole("dialog", { name: "批量完整性检查", exact: true }),
+  }
+}
+
+test("批量检查后只选择通过项且仍需确认入队", async ({ page }) => {
+  const { scanner, batch } = await openScannedBatch(page)
+  await page.evaluate(() => {
+    window.canonicalBatchPaths = true
+  })
+  await batch.getByLabel("本次检查密码", { exact: true }).fill("wrong-password")
+  await batch.getByRole("button", { name: "开始检查", exact: true }).click()
+  await expect(batch.getByRole("status").first()).toContainText(
+    "通过 1 · 未通过 1"
+  )
+  await expect(batch.getByLabel("本次检查密码", { exact: true })).toHaveValue(
+    ""
+  )
+  await page.screenshot({
+    path: test.info().outputPath("batch-integrity-results.png"),
+    animations: "disabled",
+  })
+  await batch
+    .getByRole("button", { name: "仅选择通过项（1）", exact: true })
+    .click()
+  await expect(batch).not.toBeVisible()
+  await expect(
+    scanner.getByRole("button", { name: "确认加入队列（1）", exact: true })
+  ).toBeEnabled()
+  expect(
+    await page.evaluate(() =>
+      window.workflowCalls.some((call) => call.command === "recovery_start")
+    )
+  ).toBe(false)
+})
+
+test("仅重查未通过项并按选择导出路径", async ({ page }) => {
+  const { batch } = await openScannedBatch(page)
+  await batch.getByRole("button", { name: "开始检查", exact: true }).click()
+  await expect(batch.getByRole("status").first()).toContainText("未通过 1")
+  await batch
+    .getByLabel("本次检查密码", { exact: true })
+    .fill("correct-password")
+  await batch
+    .getByRole("button", { name: "仅重查未通过项", exact: true })
+    .click()
+  await expect(batch.getByRole("status").first()).toContainText(
+    "通过 2 · 未通过 0"
+  )
+  const runs = await page.evaluate(() =>
+    window.workflowCalls.filter(
+      (call) => call.command === "archive_batch_check_run"
+    )
+  )
+  expect(runs[1].args).toMatchObject({
+    id: runs[0].args.id,
+    retryFailed: true,
+    paths: runs[0].args.paths,
+  })
+  expect(
+    await page.evaluate(() =>
+      window.batchStatus.items.map((item) => item.checkedAtMs)
+    )
+  ).toEqual([1000, 2000])
+  await batch.getByRole("button", { name: "导出 JSON", exact: true }).click()
+  await expect(
+    batch.getByText("报告文件：C:/报告/batch.json", { exact: true })
+  ).toBeVisible()
+  await batch
+    .getByRole("checkbox", { name: "报告包含文件路径", exact: true })
+    .click()
+  await batch.getByRole("button", { name: "导出 CSV", exact: true }).click()
+  const reports = await page.evaluate(() =>
+    window.workflowCalls.filter(
+      (call) => call.command === "archive_batch_check_export"
+    )
+  )
+  expect(reports.map((call) => call.args.includePaths)).toEqual([false, true])
+  expect(reports.every((call) => !Object.hasOwn(call.args, "password"))).toBe(
+    true
+  )
+})
+
+test("批量检查取消期间锁定操作并保留已完成结果", async ({ page }) => {
+  const { batch } = await openScannedBatch(page)
+  await page.evaluate(() => {
+    window.deferBatchCheck = true
+  })
+  await batch.getByRole("button", { name: "开始检查", exact: true }).click()
+  await expect(
+    batch.getByRole("button", { name: "开始检查", exact: true })
+  ).toBeDisabled()
+  await page.keyboard.press("Escape")
+  await expect(batch).toBeVisible()
+  await expect
+    .poll(() => page.evaluate(() => !!window.finishBatchCheck))
+    .toBe(true)
+  await batch.getByRole("button", { name: "取消检查", exact: true }).click()
+  await expect(batch.getByRole("status").first()).toContainText("检查已取消")
+  await expect(batch.getByRole("status").first()).toContainText(
+    "通过 1 · 未通过 0"
+  )
+  await expect(
+    batch.getByRole("button", { name: "仅选择通过项（1）", exact: true })
+  ).toBeEnabled()
+})
+
+test("批量检查准备失败后可重查并导出最终状态", async ({ page }) => {
+  const { batch } = await openScannedBatch(page)
+  await page.evaluate(() => {
+    window.failBatchSetup = true
+  })
+  await batch.getByRole("button", { name: "开始检查", exact: true }).click()
+  await expect(batch.getByRole("alert")).toContainText("无法准备检查引擎")
+  await expect(
+    batch.getByRole("button", { name: "仅重查未通过项", exact: true })
+  ).toBeEnabled()
+  await expect(
+    batch.getByRole("button", { name: "导出 JSON", exact: true })
+  ).toBeEnabled()
+  await expect(batch.getByRole("status").first()).toContainText("检查结束")
 })

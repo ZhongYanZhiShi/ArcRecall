@@ -3,6 +3,7 @@ mod workflow_commands;
 use planning_commands::*;
 use workflow_commands::*;
 mod ai_commands;
+mod batch_check_commands;
 mod clipboard_security;
 mod compression_commands;
 mod credential_protection;
@@ -33,6 +34,10 @@ use ai_commands::{
 use arc_recall_core::{
     APP_DATA_FOLDER_NAME, AppLogLevel, AppPaths, DictionaryCandidateStore, LoggingSettings,
     RecoveryHistoryStore, SERVICE_NAME, SettingsStore, health_status,
+};
+use batch_check_commands::{
+    BatchCheckStatus, archive_batch_check_export, archive_batch_check_run,
+    archive_batch_check_status,
 };
 use clipboard_security::clipboard_clear_if_matches;
 use compression_commands::{
@@ -80,6 +85,7 @@ struct AppState {
     compression_task: Mutex<Option<CompressionTaskHandle>>,
     archive_task_starting: AtomicBool,
     archive_action: Mutex<Option<(String, arc_recall_core::CancellationToken)>>,
+    batch_check: Arc<Mutex<Option<BatchCheckStatus>>>,
     lifecycle: Arc<TaskLifecycle>,
     recovery_session: RecoverySession,
     exit_ready: AtomicBool,
@@ -461,6 +467,7 @@ pub fn run() {
                 compression_task: Mutex::new(None),
                 archive_task_starting: AtomicBool::new(false),
                 archive_action: Mutex::new(None),
+                batch_check: Arc::new(Mutex::new(None)),
                 lifecycle: Arc::new(TaskLifecycle::default()),
                 recovery_session,
                 exit_ready: AtomicBool::new(false),
@@ -478,6 +485,9 @@ pub fn run() {
             archive_preview,
             archive_action_run,
             archive_action_cancel,
+            archive_batch_check_run,
+            archive_batch_check_status,
+            archive_batch_check_export,
             processing_presets_list,
             processing_preset_save,
             processing_preset_delete,

@@ -19,7 +19,8 @@ import {
   type ProcessingOptions,
 } from "@/lib/planning"
 import { cancelArchiveAction } from "@/lib/workflows"
-import { newScannedArchivePaths } from "@/lib/recovery-queue"
+import { archivePathKey, newScannedArchivePaths } from "@/lib/recovery-queue"
+import { BatchIntegrityCheck } from "./batch-integrity-check"
 import {
   recoveryQueue,
   recoveryQueueJournal,
@@ -40,6 +41,7 @@ export function FolderScanImport({
   const [query, setQuery] = React.useState("")
   const [page, setPage] = React.useState(0)
   const [busy, setBusy] = React.useState(false)
+  const [integrityBusy, setIntegrityBusy] = React.useState(false)
   const [cancelling, setCancelling] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const operation = React.useRef(false)
@@ -56,7 +58,7 @@ export function FolderScanImport({
       entry.path.toLocaleLowerCase().includes(query.toLocaleLowerCase())
     ) ?? []
   async function start() {
-    if (operation.current || disabled) return
+    if (operation.current || disabled || integrityBusy) return
     operation.current = true
     setBusy(true)
     setError(null)
@@ -81,7 +83,7 @@ export function FolderScanImport({
     }
   }
   async function confirm() {
-    if (operation.current || disabled) return
+    if (operation.current || disabled || integrityBusy) return
     operation.current = true
     setBusy(true)
     setError(null)
@@ -122,7 +124,7 @@ export function FolderScanImport({
       <Sheet
         open={open}
         onOpenChange={(next) => {
-          if (!busy) setOpen(next)
+          if (!busy && !integrityBusy) setOpen(next)
         }}
       >
         <SheetContent className="flex w-full flex-col sm:max-w-2xl">
@@ -250,6 +252,25 @@ export function FolderScanImport({
                   >
                     清空选择
                   </Button>
+                  <BatchIntegrityCheck
+                    paths={result.entries
+                      .filter((entry) => selected.has(entry.path))
+                      .map((entry) => entry.path)}
+                    disabled={busy || disabled}
+                    onBusyChange={setIntegrityBusy}
+                    onSelectPassed={(paths) => {
+                      const passed = new Set(paths.map(archivePathKey))
+                      setSelected(
+                        new Set(
+                          result.entries
+                            .filter((entry) =>
+                              passed.has(archivePathKey(entry.path))
+                            )
+                            .map((entry) => entry.path)
+                        )
+                      )
+                    }}
+                  />
                 </div>
                 <ScrollArea className="min-h-0 flex-1">
                   <div className="space-y-2">

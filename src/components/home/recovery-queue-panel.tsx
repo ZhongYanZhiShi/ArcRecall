@@ -1,12 +1,18 @@
+"use client"
+
+import * as React from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
+import { QueuePresetApply } from "@/components/home/queue-preset-apply"
+import { BatchIntegrityCheck } from "@/components/home/batch-integrity-check"
 import {
   archiveNameFromPath,
   hasIncompleteRecursiveScan,
 } from "@/components/home/recovery-view-utils"
-import type { QueueSnapshot } from "@/lib/recovery-queue"
+import { archivePathKey, type QueueSnapshot } from "@/lib/recovery-queue"
 import { recoveryQueue } from "@/lib/recovery-queue-session"
 
 const LABELS = {
@@ -35,10 +41,22 @@ export function RecoveryQueuePanel({
   knownPassword: string
   onPasswordChange: (value: string) => void
 }) {
+  const [selected, setSelected] = React.useState<Set<number>>(new Set())
+  const [presetBusy, setPresetBusy] = React.useState(false)
+  const [integrityBusy, setIntegrityBusy] = React.useState(false)
   if (queue.items.length === 0) return null
-  const pending = queue.items.filter(
+  const waiting = queue.items.filter(
     (item) => item.state === "waiting" && !item.blockedReason
-  ).length
+  )
+  const pending = waiting.length
+  const selectedIds = queue.items
+    .filter((item) => selected.has(item.id))
+    .map((item) => item.id)
+  const selectedWaitingIds = waiting
+    .filter((item) => selected.has(item.id))
+    .map((item) => item.id)
+  const editingDisabled =
+    disabled || queue.running || presetBusy || integrityBusy
   const failed = queue.items.some(
     (item) =>
       !item.blockedReason &&
@@ -58,30 +76,44 @@ export function RecoveryQueuePanel({
         </p>
         <div className="flex flex-wrap gap-2">
           {queue.running ? (
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={
-                queue.cancelling || (queue.stopping && !currentTask?.running)
-              }
-              aria-busy={queue.cancelling}
-              onClick={() => void recoveryQueue.stop()}
-            >
-              {queue.cancelling
-                ? "正在停止"
-                : queue.stopping && currentTask?.running
-                  ? "再次请求停止"
-                  : queue.stopping
-                    ? "正在停止"
-                    : "停止批次"}
-            </Button>
+            <>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={queue.stopping}
+                onClick={() =>
+                  queue.pauseRequested
+                    ? recoveryQueue.cancelPause()
+                    : recoveryQueue.pauseAfterCurrent()
+                }
+              >
+                {queue.pauseRequested ? "取消暂停安排" : "当前项完成后暂停"}
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={
+                  queue.cancelling || (queue.stopping && !currentTask?.running)
+                }
+                aria-busy={queue.cancelling}
+                onClick={() => void recoveryQueue.stop()}
+              >
+                {queue.cancelling
+                  ? "正在停止"
+                  : queue.stopping && currentTask?.running
+                    ? "再次请求停止"
+                    : queue.stopping
+                      ? "正在停止"
+                      : "停止批次"}
+              </Button>
+            </>
           ) : (
             <>
               {failed ? (
                 <Button
                   size="xs"
                   variant="outline"
-                  disabled={disabled}
+                  disabled={editingDisabled}
                   onClick={() => recoveryQueue.retryFailed()}
                 >
                   将失败与取消项重新排队
@@ -90,17 +122,19 @@ export function RecoveryQueuePanel({
               <Button
                 size="xs"
                 variant="ghost"
-                disabled={disabled}
+                disabled={editingDisabled}
                 onClick={() => recoveryQueue.clear()}
               >
                 清空队列
               </Button>
               <Button
                 size="xs"
-                disabled={disabled || pending === 0}
+                disabled={editingDisabled || pending === 0}
                 onClick={onStart}
               >
-                {pending > 0 ? `按顺序处理 ${pending} 项` : "暂无待处理任务"}
+                {pending > 0
+                  ? `${queue.paused ? "继续处理" : "按顺序处理"} ${pending} 项`
+                  : "暂无待处理任务"}
               </Button>
             </>
           )}
@@ -109,6 +143,68 @@ export function RecoveryQueuePanel({
       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
         新任务按当前选项逐项处理，重试项保留原选项；失败后继续，停止会保留等待项。未启用任务记忆时，退出应用后队列清空。
       </p>
+      {queue.pauseRequested || queue.paused ? (
+        <p role="status" className="mt-2 text-xs text-primary">
+          {queue.pauseRequested
+            ? "已安排暂停：当前归档仍会完成处理，随后保留等待项。"
+            : "队列已暂停，可调整等待项后继续处理。"}
+        </p>
+      ) : null}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={editingDisabled || !pending}
+          onClick={() => setSelected(new Set(waiting.map((item) => item.id)))}
+        >
+          选择等待项
+        </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={editingDisabled || !selectedIds.length}
+          onClick={() => setSelected(new Set())}
+        >
+          清除选择
+        </Button>
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={editingDisabled || !selectedIds.length}
+          onClick={() => {
+            recoveryQueue.removeMany(selectedIds)
+            setSelected(new Set())
+          }}
+        >
+          移除所选 {selectedIds.length} 项
+        </Button>
+        <QueuePresetApply
+          ids={selectedWaitingIds}
+          disabled={disabled || queue.running || integrityBusy}
+          onBusyChange={setPresetBusy}
+        />
+        <BatchIntegrityCheck
+          paths={queue.items
+            .filter((item) => selected.has(item.id))
+            .map((item) => item.path)}
+          disabled={disabled || queue.running || presetBusy}
+          onBusyChange={setIntegrityBusy}
+          onSelectPassed={(paths) =>
+            setSelected(
+              new Set(
+                queue.items
+                  .filter((item) =>
+                    paths.some(
+                      (path) =>
+                        archivePathKey(path) === archivePathKey(item.path)
+                    )
+                  )
+                  .map((item) => item.id)
+              )
+            )
+          }
+        />
+      </div>
       <div className="mt-3 grid items-center gap-2 sm:grid-cols-[auto_1fr]">
         <Label htmlFor="batch-known-password" className="text-xs">
           本批次优先密码（可选）
@@ -119,7 +215,7 @@ export function RecoveryQueuePanel({
           autoComplete="off"
           value={knownPassword}
           onChange={(event) => onPasswordChange(event.target.value)}
-          disabled={disabled || queue.running}
+          disabled={editingDisabled}
           placeholder="留空使用历史密码和字典"
         />
       </div>
@@ -134,6 +230,19 @@ export function RecoveryQueuePanel({
             key={item.id}
             className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-muted/30 p-2 text-xs"
           >
+            <Checkbox
+              aria-label={`选择队列项 ${archiveNameFromPath(item.path)}`}
+              checked={selected.has(item.id)}
+              disabled={editingDisabled}
+              onCheckedChange={(checked) =>
+                setSelected((current) => {
+                  const next = new Set(current)
+                  if (checked) next.add(item.id)
+                  else next.delete(item.id)
+                  return next
+                })
+              }
+            />
             <div className="min-w-0 flex-1 basis-32">
               <p className="truncate" title={item.path}>
                 {archiveNameFromPath(item.path)}
@@ -191,15 +300,41 @@ export function RecoveryQueuePanel({
               </Button>
             ) : null}
             {!queue.running ? (
-              <Button
-                size="xs"
-                variant="ghost"
-                disabled={disabled}
-                aria-label={`移除 ${archiveNameFromPath(item.path)}`}
-                onClick={() => recoveryQueue.remove(item.id)}
-              >
-                移除
-              </Button>
+              <>
+                {item.state === "waiting" && !item.blockedReason ? (
+                  <>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      aria-label={`上移 ${archiveNameFromPath(item.path)}`}
+                      disabled={editingDisabled || waiting[0]?.id === item.id}
+                      onClick={() => recoveryQueue.moveWaiting(item.id, "up")}
+                    >
+                      上移
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      aria-label={`下移 ${archiveNameFromPath(item.path)}`}
+                      disabled={
+                        editingDisabled || waiting.at(-1)?.id === item.id
+                      }
+                      onClick={() => recoveryQueue.moveWaiting(item.id, "down")}
+                    >
+                      下移
+                    </Button>
+                  </>
+                ) : null}
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  disabled={editingDisabled}
+                  aria-label={`移除 ${archiveNameFromPath(item.path)}`}
+                  onClick={() => recoveryQueue.remove(item.id)}
+                >
+                  移除
+                </Button>
+              </>
             ) : null}
           </li>
         ))}
