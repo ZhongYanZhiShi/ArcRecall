@@ -20,6 +20,26 @@ async function setup(page) {
       unregisterCallback: () => {},
       async invoke(command, args) {
         window.workflowCalls.push({ command, args })
+        if (command === "plugin:dialog|open") return "C:/测试输出"
+        if (command === "archive_action_run") {
+          if (window.deferArchiveAction)
+            return new Promise((resolve, reject) => {
+              window.rejectArchiveAction = reject
+            })
+          return {
+            outputDirectory: args.request.selectedPaths
+              ? "C:/测试输出/新目录"
+              : null,
+            entryCount: 1,
+            message: args.request.selectedPaths
+              ? "所选文件提取完成"
+              : "完整性检查通过",
+          }
+        }
+        if (command === "archive_action_cancel") {
+          window.rejectArchiveAction?.("操作已取消")
+          return null
+        }
         if (command === "dictionary_groups") return ["资料分组"]
         if (command === "dictionary_list")
           return { entries, totalCount: 2, matchedCount: 2 }
@@ -168,4 +188,57 @@ test("失败记录允许补充密码并加入队列而不直接执行", async ({
       .filter((call) => call.command === "recovery_queue_save")
       .some((call) => JSON.stringify(call.args).includes("temporary-secret"))
   ).toBe(false)
+})
+
+test("预览中勾选单个文件后只提交所选路径并展示输出位置", async ({ page }) => {
+  await setup(page)
+  await page.evaluate(() => {
+    const data = new DataTransfer()
+    data.setData("text/plain", "C:/测试目录/嵌套归档.zip")
+    window.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data }))
+  })
+  await page.getByRole("button", { name: "预览内容", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "归档内容预览" })
+  await dialog
+    .getByRole("checkbox", { name: "选择 中文目录/资料.txt", exact: true })
+    .click()
+  await dialog
+    .getByRole("button", { name: "提取所选（1）", exact: true })
+    .click()
+  await expect(dialog.getByText("所选文件提取完成")).toBeVisible()
+  expect(
+    await page.evaluate(
+      () =>
+        window.workflowCalls.find((c) => c.command === "archive_action_run")
+          .args.request.selectedPaths
+    )
+  ).toEqual(["中文目录/资料.txt"])
+  await expect(
+    dialog.getByRole("button", { name: "打开提取目录" })
+  ).toBeVisible()
+  await dialog.getByRole("button", { name: "检查完整性", exact: true }).click()
+  await expect(
+    dialog.getByText("完整性检查通过", { exact: true })
+  ).toBeVisible()
+})
+
+test("运行完整性检查时禁止重复提交并允许取消", async ({ page }) => {
+  await setup(page)
+  await page.evaluate(() => {
+    window.deferArchiveAction = true
+    const data = new DataTransfer()
+    data.setData("text/plain", "C:/测试目录/嵌套归档.zip")
+    window.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data }))
+  })
+  await page.getByRole("button", { name: "预览内容", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "归档内容预览" })
+  await dialog.getByRole("button", { name: "检查完整性", exact: true }).click()
+  await expect(
+    dialog.getByRole("button", { name: "检查完整性", exact: true })
+  ).toBeDisabled()
+  await dialog.getByRole("button", { name: "取消操作", exact: true }).click()
+  await expect(dialog.getByRole("alert")).toHaveText("操作已取消")
+  await expect(
+    dialog.getByRole("button", { name: "检查完整性", exact: true })
+  ).toBeEnabled()
 })

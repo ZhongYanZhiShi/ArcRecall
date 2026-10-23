@@ -25,6 +25,7 @@ export type ArchivePreview = {
     size: number
     directory: boolean
     encrypted: boolean
+    link?: boolean
   }[]
   totalEntries: number
   totalBytes: number
@@ -65,4 +66,25 @@ export function previewArchive(
 
 export function removeGroupMembers(name: string, ids: number[]): Promise<void> {
   return invoke("dictionary_group_assign", { name, ids, remove: true })
+}
+
+export type ArchiveActionResult = {
+  outputDirectory: string | null
+  entryCount: number
+  message: string
+}
+export function runArchiveAction(
+  id: string,
+  path: string,
+  password: string,
+  selectedPaths: string[] | null,
+  outputParent: string | null
+): Promise<ArchiveActionResult> {
+  return invoke("archive_action_run", {
+    id,
+    request: { path, password: password || null, selectedPaths, outputParent },
+  })
+}
+export function cancelArchiveAction(id: string): Promise<void> {
+  return invoke("archive_action_cancel", { id })
 }

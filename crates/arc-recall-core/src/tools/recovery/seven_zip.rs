@@ -159,17 +159,18 @@ pub(super) fn extract_with_password(
         }
     })?;
     timed_operation(RecoveryOperation::Extraction, report, |report| {
-        extract_preflighted(input, tools, password, cancellation, declared, report)
+        extract_preflighted(input, tools, password, cancellation, declared, report, None)
     })
 }
 
-fn extract_preflighted(
+pub(super) fn extract_preflighted(
     input: &RecoveryInput<'_>,
     tools: &RecoveryToolPaths,
     password: &str,
     cancellation: &CancellationToken,
     declared: ArchiveExtractionBudget,
     report: &mut dyn FnMut(RecoveryUpdate),
+    selection_file: Option<&Path>,
 ) -> Result<(), RecoveryError> {
     let job = input.job;
     let (remaining_bytes, remaining_entries) = input.disk_budget.remaining();
@@ -207,6 +208,13 @@ fn extract_preflighted(
         job.archive_path.as_os_str().to_owned(),
     ];
     request.max_output_bytes = 4 * 1024 * 1024;
+    if let Some(list) = selection_file {
+        request.args.extend([
+            "-spd".into(),
+            "-scsUTF-8".into(),
+            OsString::from(format!("-i@{}", list.display())),
+        ]);
+    }
     let mut last_check = std::time::Instant::now();
     let mut limit_error = None;
     let output = super::super::runner::run_process_observed(
@@ -336,7 +344,7 @@ fn validate_extraction_budget(
     Ok(budget)
 }
 
-fn check_extraction_budget(
+pub(super) fn check_extraction_budget(
     budget: ArchiveExtractionBudget,
     archive_bytes: u64,
 ) -> Result<(), RecoveryError> {

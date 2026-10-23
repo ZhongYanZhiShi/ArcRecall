@@ -9,6 +9,7 @@ pub struct ArchivePreviewEntry {
     pub size: u64,
     pub directory: bool,
     pub encrypted: bool,
+    pub link: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,6 +72,7 @@ fn parse_listing(text: &str) -> Result<ArchivePreview, String> {
             size: 0,
             directory: false,
             encrypted: false,
+            link: false,
         };
         for line in block.lines() {
             if let Some(path) = line.strip_prefix("Path = ") {
@@ -88,6 +90,14 @@ fn parse_listing(text: &str) -> Result<ArchivePreview, String> {
             }
             if line == "Encrypted = +" {
                 entry.encrypted = true;
+            }
+            if line.starts_with("Symbolic Link = ")
+                || line.starts_with("Hard Link = ")
+                || line
+                    .strip_prefix("Attributes = ")
+                    .is_some_and(|v| v.split_whitespace().any(|a| a.starts_with('l')))
+            {
+                entry.link = true;
             }
         }
         if entry.path.is_empty() {

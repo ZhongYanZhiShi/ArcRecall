@@ -7,7 +7,9 @@ use super::runner::{
     CancellationToken, ProcessOutput, ProcessRequest, ProcessRunnerError, run_process,
 };
 
+mod actions;
 mod archive;
+pub use actions::{ArchiveActionRequest, ArchiveActionResult, run_archive_action};
 mod cleanup;
 mod cracking;
 mod disk_budget;

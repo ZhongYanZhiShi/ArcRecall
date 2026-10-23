@@ -7,6 +7,54 @@ use arc_recall_core::{
 use tauri::State;
 
 #[tauri::command]
+pub(crate) async fn archive_action_run(
+    state: State<'_, AppState>,
+    id: String,
+    request: arc_recall_core::tools::ArchiveActionRequest,
+) -> Result<arc_recall_core::tools::ArchiveActionResult, String> {
+    let lease = state.lifecycle.begin()?;
+    let _reservation = crate::task_coordination::TaskStartReservation::acquire(
+        &state.archive_task_starting,
+        "已有归档操作正在运行，请先等待完成或取消。",
+    )?;
+    crate::ensure_no_active_archive_task(&state)?;
+    *state.archive_action.lock().map_err(|e| e.to_string())? =
+        Some((id, lease.cancellation.clone()));
+    let result = async {
+        let seven_zip = crate::engine_commands::require_seven_zip(&state).await?;
+        let workspace = tempfile::Builder::new()
+            .prefix("archive-action-")
+            .tempdir_in(state.recovery_session.directory())
+            .map_err(|e| e.to_string())?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let _lease = lease;
+            arc_recall_core::tools::run_archive_action(
+                &request,
+                &seven_zip,
+                workspace.path(),
+                &_lease.cancellation,
+            )
+        })
+        .await
+        .map_err(|_| "归档操作意外终止。".to_string())?
+    }
+    .await;
+    *state.archive_action.lock().map_err(|e| e.to_string())? = None;
+    result
+}
+
+#[tauri::command]
+pub(crate) fn archive_action_cancel(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let action = state.archive_action.lock().map_err(|e| e.to_string())?;
+    if let Some((active, token)) = action.as_ref()
+        && active == &id
+    {
+        token.cancel();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub(crate) async fn task_records_list(
     state: State<'_, AppState>,
     skip: u32,

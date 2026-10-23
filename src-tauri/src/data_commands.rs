@@ -462,6 +462,7 @@ mod tests {
             recovery_task: Mutex::new(None),
             compression_task: Mutex::new(None),
             archive_task_starting: AtomicBool::new(false),
+            archive_action: Mutex::new(None),
             lifecycle: Arc::clone(&lifecycle),
             exit_ready: AtomicBool::new(false),
             seven_zip_cache: Arc::new(Mutex::new(None)),
