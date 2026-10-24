@@ -62,13 +62,27 @@ export function listGroup(
 ): Promise<DictionaryListResult> {
   return invoke("dictionary_group_list", { name, query })
 }
+export type TaskRecordQuery = {
+  text?: string
+  state?: string | null
+  fromMs?: number | null
+  beforeMs?: number | null
+  operation?: TaskOperation | null
+  failedOnly?: boolean
+}
 export function listTaskRecords(
   skip: number,
   failedOnly: boolean,
-  operation: TaskOperation | null = null
+  operation: TaskOperation | null = null,
+  query?: TaskRecordQuery
 ): Promise<TaskRecord[]> {
   return isDesktopRuntime()
-    ? invoke("task_records_list", { skip, failedOnly, operation })
+    ? query
+      ? invoke("task_records_search", {
+          skip,
+          query: { ...query, failedOnly, operation },
+        })
+      : invoke("task_records_list", { skip, failedOnly, operation })
     : Promise.resolve([])
 }
 export function deleteTaskRecord(id: string): Promise<void> {

@@ -2361,7 +2361,7 @@ test("统一记录按类型查询，检查重试防止重复提交并可取消",
   ).props.onChange({ target: { value: "batchIntegrityCheck" } })
   render()
   await settle()
-  assert.deepEqual(queries.at(-1), [0, false, "batchIntegrityCheck"])
+  assert.deepEqual(queries.at(-1), [0, false, "batchIntegrityCheck", {}])
   button(render(), "准备重试").props.onClick()
   find(
     render(),

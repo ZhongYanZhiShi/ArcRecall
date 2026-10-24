@@ -4,6 +4,10 @@ use std::path::Path;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
+#[path = "task_record_query.rs"]
+mod query;
+pub use query::TaskRecordQuery;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TaskOperation {
@@ -86,33 +90,15 @@ impl TaskRecordStore {
         failed_only: bool,
         operation: Option<TaskOperation>,
     ) -> Result<Vec<TaskRecord>, String> {
-        let operation = operation.map(|op| {
-            serde_json::to_value(op)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_string()
-        });
-        let mut stmt = self.0.prepare("SELECT record, state FROM task_records WHERE (?1=0 OR state NOT IN ('success','running')) AND (?3 IS NULL OR COALESCE(json_extract(record,'$.operation'),'recovery')=?3) ORDER BY started DESC, id DESC LIMIT 100 OFFSET ?2").map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(params![failed_only, skip, operation], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|e| e.to_string())?;
-        rows.map(|row| {
-            let (json, state) = row.map_err(|e| e.to_string())?;
-            let mut record: TaskRecord = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-            record.state = state;
-            if record.state == "interrupted" {
-                for item in &mut record.check_items {
-                    if matches!(item.state.as_str(), "waiting" | "checking") {
-                        item.state = "interrupted".into();
-                    }
-                }
-            }
-            Ok(record)
-        })
-        .collect()
+        self.search(
+            &TaskRecordQuery {
+                operation,
+                failed_only,
+                ..Default::default()
+            },
+            skip,
+            100,
+        )
     }
 
     pub fn all(&self) -> Result<Vec<TaskRecord>, String> {

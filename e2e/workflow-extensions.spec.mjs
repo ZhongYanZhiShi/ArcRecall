@@ -176,7 +176,10 @@ async function setup(page) {
             matchedCount: 0,
             passwordCount: 0,
           }
-        if (command === "task_records_list")
+        if (
+          command === "task_records_list" ||
+          command === "task_records_search"
+        )
           return [
             {
               taskId: "sample-task",

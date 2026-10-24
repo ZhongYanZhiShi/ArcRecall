@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod backup;
+pub mod backup_management;
 pub mod dictionary;
 pub mod history;
 pub mod paths;

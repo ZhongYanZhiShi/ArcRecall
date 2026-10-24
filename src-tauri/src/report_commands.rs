@@ -74,7 +74,7 @@ pub(crate) enum ReportFormat {
     Csv,
 }
 
-fn csv_cell(value: &str) -> String {
+pub(crate) fn csv_cell(value: &str) -> String {
     // Quoting alone does not prevent spreadsheet formulas.
     let unsafe_start = value.trim_start().starts_with(['=', '+', '-', '@'])
         || value.starts_with(['\t', '\r', '\n']);

@@ -19,6 +19,7 @@ import {
 import { backupDatabase } from "@/lib/logging"
 import { isDesktopRuntime, isDictionaryImportRunning } from "@/lib/dictionary"
 import { recoveryQueue } from "@/lib/recovery-queue-session"
+import { BackupManagementPanel } from "./backup-management-panel"
 
 type RestorePreview = {
   unified: boolean
@@ -135,6 +136,16 @@ export function DatabaseRestorePanel({
           {message}
         </p>
       ) : null}
+      <BackupManagementPanel
+        disabled={busy}
+        onPreview={(path) =>
+          run("preview", async () => {
+            setPreview(
+              await invoke<RestorePreview>("database_restore_preview", { path })
+            )
+          })
+        }
+      />
       <AlertDialog
         open={preview !== null}
         onOpenChange={(open) => {

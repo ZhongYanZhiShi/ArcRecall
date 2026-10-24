@@ -1,4 +1,8 @@
+mod backup_management_commands;
 mod planning_commands;
+mod record_management_commands;
+use backup_management_commands::{backup_management_get, backup_policy_save, backup_run_now};
+use record_management_commands::*;
 mod workflow_commands;
 use planning_commands::*;
 use workflow_commands::*;
@@ -476,9 +480,16 @@ pub fn run() {
                 exit_ready: AtomicBool::new(false),
                 seven_zip_cache: Arc::new(Mutex::new(None)),
             });
+            backup_management_commands::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            task_records_search,
+            task_records_export,
+            task_records_delete,
+            backup_management_get,
+            backup_policy_save,
+            backup_run_now,
             task_records_list,
             task_record_delete,
             dictionary_groups,

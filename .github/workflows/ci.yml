@@ -80,6 +80,9 @@ jobs:
       - name: Test dictionary groups, archive preview and task records
         run: pnpm test:desktop:workflows
 
+      - name: Test record search, exports and automatic backup management
+        run: pnpm test:desktop:data
+
       - name: Upload UI test evidence
         if: always()
         uses: actions/upload-artifact@v4

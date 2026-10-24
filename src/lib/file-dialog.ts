@@ -7,6 +7,7 @@ type DialogLocation =
   | "compression-folder"
   | "compression-output"
   | "database-backup"
+  | "automatic-backup"
 
 const lastDirectories = new Map<DialogLocation, string>()
 

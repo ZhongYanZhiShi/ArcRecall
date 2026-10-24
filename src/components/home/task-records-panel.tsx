@@ -18,6 +18,7 @@ import {
   deleteTaskRecord,
   type TaskRecord,
   type TaskOperation,
+  type TaskRecordQuery,
   runArchiveAction,
   cancelArchiveAction,
 } from "@/lib/workflows"
@@ -26,6 +27,7 @@ import {
   recoveryQueueJournal,
 } from "@/lib/recovery-queue-session"
 import { openOutputDirectory, pickOutputDirectory } from "@/lib/recovery"
+import { buildRecordDateRange } from "@/lib/task-record-search"
 import { DictionaryGroupSelect } from "./dictionary-group-select"
 
 const operations: Record<TaskOperation, string> = {
@@ -64,6 +66,15 @@ export function TaskRecordsPanel() {
   const [operationFilter, setOperationFilter] = React.useState<
     TaskOperation | ""
   >("")
+  const [text, setText] = React.useState("")
+  const [fromDate, setFromDate] = React.useState("")
+  const [toDate, setToDate] = React.useState("")
+  const [stateFilter, setStateFilter] = React.useState("")
+  const [filters, setFilters] = React.useState<TaskRecordQuery>({})
+  const [checked, setChecked] = React.useState<string[]>([])
+  const [confirmDelete, setConfirmDelete] = React.useState(false)
+  const [includePaths, setIncludePaths] = React.useState(false)
+  const [exportPath, setExportPath] = React.useState<string | null>(null)
   const [failedOnly, setFailedOnly] = React.useState(false)
   const [page, setPage] = React.useState(0)
   const [busy, setBusy] = React.useState(false)
@@ -83,10 +94,19 @@ export function TaskRecordsPanel() {
         if (disposed) return []
         setBusy(true)
         setError(null)
-        return listTaskRecords(page * 100, failedOnly, operationFilter || null)
+        return listTaskRecords(
+          page * 100,
+          failedOnly,
+          operationFilter || null,
+          filters
+        )
       })
       .then((next) => {
-        if (!disposed) setRows(next)
+        if (!disposed) {
+          setRows(next)
+          setChecked([])
+          setConfirmDelete(false)
+        }
       })
       .catch((reason) => {
         if (!disposed) setError(String(reason))
@@ -97,7 +117,22 @@ export function TaskRecordsPanel() {
     return () => {
       disposed = true
     }
-  }, [open, page, failedOnly, revision, operationFilter])
+  }, [open, page, failedOnly, revision, operationFilter, filters])
+  const query = { ...filters, failedOnly, operation: operationFilter || null }
+  async function manage(action: () => Promise<void>) {
+    if (operation.current) return
+    operation.current = true
+    setBusy(true)
+    setError(null)
+    try {
+      await action()
+    } catch (reason) {
+      setError(String(reason))
+    } finally {
+      operation.current = false
+      setBusy(false)
+    }
+  }
   async function retry(paths: string[], root: boolean) {
     if (!selected || operation.current) return
     operation.current = true
@@ -215,6 +250,191 @@ export function TaskRecordsPanel() {
                 刷新记录
               </Button>
             </div>
+            <form
+              className="grid grid-cols-2 gap-2"
+              onSubmit={(event) => {
+                event.preventDefault()
+                if (busy) return
+                try {
+                  const range = buildRecordDateRange(fromDate, toDate)
+                  setFilters({ text, state: stateFilter || null, ...range })
+                  setPage(0)
+                  setError(null)
+                } catch (reason) {
+                  setError(String(reason))
+                }
+              }}
+            >
+              <Input
+                className="col-span-2"
+                aria-label="记录关键词"
+                placeholder="搜索文件名或路径"
+                maxLength={500}
+                value={text}
+                disabled={busy}
+                onChange={(e) => setText(e.target.value)}
+              />
+              <label className="text-xs">
+                开始日期
+                <Input
+                  aria-label="记录开始日期"
+                  type="date"
+                  value={fromDate}
+                  disabled={busy}
+                  onChange={(e) => setFromDate(e.target.value)}
+                />
+              </label>
+              <label className="text-xs">
+                结束日期
+                <Input
+                  aria-label="记录结束日期"
+                  type="date"
+                  value={toDate}
+                  disabled={busy}
+                  onChange={(e) => setToDate(e.target.value)}
+                />
+              </label>
+              <select
+                aria-label="记录状态"
+                className="h-9 rounded-md border bg-background px-2 text-sm"
+                disabled={busy}
+                value={stateFilter}
+                onChange={(e) => setStateFilter(e.target.value)}
+              >
+                <option value="">全部状态</option>
+                {[
+                  "running",
+                  "success",
+                  "partial",
+                  "failed",
+                  "cancelled",
+                  "interrupted",
+                ].map((state) => (
+                  <option key={state} value={state}>
+                    {labels[state]}
+                  </option>
+                ))}
+              </select>
+              <Button type="submit" variant="outline" disabled={busy}>
+                查询记录
+              </Button>
+            </form>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-1 text-xs">
+                <input
+                  type="checkbox"
+                  checked={includePaths}
+                  disabled={busy}
+                  onChange={(e) => setIncludePaths(e.target.checked)}
+                />
+                导出包含路径
+              </label>
+              {["json", "csv"].map((format) => (
+                <Button
+                  key={format}
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() =>
+                    void manage(async () => {
+                      const path = await invoke<string>("task_records_export", {
+                        query,
+                        format,
+                        includePaths,
+                      })
+                      setExportPath(path)
+                      toast.success("已导出全部匹配记录。")
+                    })
+                  }
+                >
+                  导出 {format.toUpperCase()}
+                </Button>
+              ))}
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy || !rows.some((r) => r.state !== "running")}
+                onClick={() => {
+                  setChecked(
+                    rows
+                      .filter((r) => r.state !== "running")
+                      .map((r) => r.taskId)
+                  )
+                  setConfirmDelete(false)
+                }}
+              >
+                选择本页
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy || checked.length === 0}
+                onClick={() => {
+                  setChecked([])
+                  setConfirmDelete(false)
+                }}
+              >
+                清空选择
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy || checked.length === 0}
+                onClick={() => setConfirmDelete(true)}
+              >
+                删除所选（{checked.length}）
+              </Button>
+            </div>
+            {confirmDelete && (
+              <div className="space-y-2 rounded-lg border p-3">
+                <p className="text-sm">
+                  确认删除所选 {checked.length}{" "}
+                  条任务记录？只删除记录，不删除源文件和输出文件；运行中的任务会保留。
+                </p>
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void manage(async () => {
+                      const count = await invoke<number>(
+                        "task_records_delete",
+                        { ids: checked }
+                      )
+                      setChecked([])
+                      setConfirmDelete(false)
+                      setSelected(null)
+                      setPassword("")
+                      setRevision((v) => v + 1)
+                      toast.success(`已删除 ${count} 条任务记录。`)
+                    })
+                  }
+                >
+                  确认删除所选记录
+                </Button>
+                <Button
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  保留记录
+                </Button>
+              </div>
+            )}
+            {exportPath && (
+              <p role="status" className="text-xs break-all">
+                报告：{exportPath}
+                <Button
+                  variant="link"
+                  size="sm"
+                  onClick={() =>
+                    void invoke("open_path", { path: exportPath }).catch((e) =>
+                      setError(String(e))
+                    )
+                  }
+                >
+                  定位报告
+                </Button>
+              </p>
+            )}
             {error && (
               <p role="alert" className="text-sm text-destructive">
                 {error}
@@ -281,6 +501,27 @@ export function TaskRecordsPanel() {
                   </>
                 ) : (
                   <div className="flex flex-wrap gap-2">
+                    {selected.operation === "batchIntegrityCheck" &&
+                      selected.checkItems?.some(
+                        (item) => item.state !== "passed"
+                      ) && (
+                        <Button
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() =>
+                            void retry(
+                              selected
+                                .checkItems!.filter(
+                                  (item) => item.state !== "passed"
+                                )
+                                .map((item) => item.path),
+                              true
+                            )
+                          }
+                        >
+                          仅重查未通过项
+                        </Button>
+                      )}
                     {selected.operation === "selectiveExtraction" && (
                       <Button
                         variant="outline"
@@ -344,7 +585,23 @@ export function TaskRecordsPanel() {
                     key={row.taskId}
                     className="space-y-2 rounded-lg border p-3"
                   >
-                    <p className="text-sm break-all">{row.archivePath}</p>
+                    <label className="flex items-start gap-2 text-sm break-all">
+                      <input
+                        type="checkbox"
+                        aria-label={`选择记录 ${row.taskId}`}
+                        checked={checked.includes(row.taskId)}
+                        disabled={busy || row.state === "running"}
+                        onChange={(e) => {
+                          setChecked((ids) =>
+                            e.target.checked
+                              ? [...ids, row.taskId]
+                              : ids.filter((id) => id !== row.taskId)
+                          )
+                          setConfirmDelete(false)
+                        }}
+                      />
+                      {row.archivePath}
+                    </label>
                     <p className="text-xs text-muted-foreground">
                       {operations[row.operation ?? "recovery"]} ·{" "}
                       {labels[row.state] ?? row.state} ·{" "}

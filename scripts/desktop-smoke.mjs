@@ -558,6 +558,30 @@ async function verifyAiFileReference() {
   }
 }
 
+if (process.argv.includes("--data-management-only")) {
+  try {
+    await launch()
+    const { verifyDataManagement, verifyAutomaticBackupRestart } =
+      await import("./desktop-data-management.mjs")
+    const policy = await verifyDataManagement({
+      invoke,
+      page,
+      archive,
+      password,
+      data,
+      evidence,
+    })
+    await close()
+    await launch()
+    await verifyAutomaticBackupRestart({ invoke, policy })
+    assert.deepEqual(errors, [])
+  } finally {
+    await close(false)
+  }
+  console.log(`Data management evidence: ${evidence}`)
+  process.exit(0)
+}
+
 if (process.argv.includes("--workflows-only")) {
   try {
     await launch()

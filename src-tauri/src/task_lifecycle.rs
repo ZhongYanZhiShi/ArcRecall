@@ -42,9 +42,13 @@ impl TaskLifecycle {
 
     /// Atomically exclude task starts while an idle application installs an update.
     pub(crate) fn reserve_update(self: &Arc<Self>) -> Result<UpdateLease, String> {
+        self.reserve_idle_maintenance()
+    }
+
+    pub(crate) fn reserve_idle_maintenance(self: &Arc<Self>) -> Result<UpdateLease, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.closing || state.updating || !state.tasks.is_empty() {
-            return Err("请等待当前任务完成后再安装更新。".into());
+            return Err("请等待当前任务或数据维护操作完成。".into());
         }
         state.updating = true;
         Ok(UpdateLease(Arc::clone(self)))
