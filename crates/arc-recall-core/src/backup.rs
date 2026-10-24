@@ -56,8 +56,8 @@ pub struct BackupContents {
 }
 impl BackupContents {
     fn validate(&self) -> Result<(), String> {
-        if !matches!(self.version, 1 | 2)
-            || (self.version == 2 && self.compression_presets.is_none())
+        if !matches!(self.version, 1..=3)
+            || (self.version >= 2 && self.compression_presets.is_none())
             || (self.version == 1 && self.compression_presets.is_some())
         {
             return Err("不支持此备份版本，请使用匹配版本的 ArcRecall。".into());
@@ -102,7 +102,7 @@ pub fn create(
     destination: &Path,
 ) -> Result<u64, String> {
     let contents = BackupContents {
-        version: 2,
+        version: 3,
         compression_presets: Some(
             CompressionPresetStore::open(&paths.root.join("compression-presets.db"))?.list()?,
         ),
@@ -309,6 +309,7 @@ mod tests {
                 &CompressionPreset {
                     name: "资料压缩".into(),
                     options: crate::compression_presets::CompressionOptions {
+                        verify_after_compression: false,
                         format: crate::CompressionFormat::SevenZip,
                         level: 5,
                         encrypt_file_names: false,
@@ -359,6 +360,7 @@ mod tests {
         let preset = CompressionPreset {
             name: "资料打包".into(),
             options: crate::compression_presets::CompressionOptions {
+                verify_after_compression: false,
                 format: crate::CompressionFormat::SevenZip,
                 level: 5,
                 encrypt_file_names: false,
@@ -375,7 +377,7 @@ mod tests {
         let snapshot = paths.root.join("snapshot.db");
         let (_, contents) = prepare(&backup, &snapshot).unwrap();
         let mut contents = contents.unwrap();
-        assert_eq!(contents.version, 2);
+        assert_eq!(contents.version, 3);
         assert_eq!(
             contents.compression_presets.as_ref().unwrap()[0].name,
             preset.name
@@ -391,6 +393,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(store.list().unwrap().len(), 1);
+        let mut old_json = serde_json::to_value(&contents).unwrap();
+        old_json["version"] = 2.into();
+        old_json["compressionPresets"][0]["options"]
+            .as_object_mut()
+            .unwrap()
+            .remove("verifyAfterCompression");
+        let old_contents: BackupContents = serde_json::from_value(old_json).unwrap();
+        old_contents.validate().unwrap();
+        assert!(
+            !old_contents.compression_presets.as_ref().unwrap()[0]
+                .options
+                .verify_after_compression
+        );
+        restore(
+            &paths,
+            &dictionary,
+            &settings,
+            &snapshot,
+            Some(&old_contents),
+            &paths.exports.join("version-two-safety.arcrecall"),
+        )
+        .unwrap();
         contents.compression_presets = None;
         assert!(contents.validate().is_err());
         contents.version = 1;

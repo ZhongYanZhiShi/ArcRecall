@@ -41,6 +41,7 @@ impl CompressionFormat {
 pub enum CompressionPhase {
     Preparing,
     Compressing,
+    Verifying,
     Completed,
     Cancelled,
     Failed,

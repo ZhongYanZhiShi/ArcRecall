@@ -558,6 +558,20 @@ async function verifyAiFileReference() {
   }
 }
 
+if (process.argv.includes("--batch-compression-only")) {
+  try {
+    await launch()
+    const { verifyBatchCompression } =
+      await import("./desktop-batch-compression.mjs")
+    await verifyBatchCompression({ invoke, page, data, evidence })
+    assert.deepEqual(errors, [])
+  } finally {
+    await close(false)
+  }
+  console.log(`Batch compression evidence: ${evidence}`)
+  process.exit(0)
+}
+
 if (process.argv.includes("--compression-presets-only")) {
   try {
     await launch()

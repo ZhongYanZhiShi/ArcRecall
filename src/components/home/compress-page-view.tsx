@@ -162,7 +162,7 @@ type CompressPageViewProps = {
   handlePickOutput: () => void
   handleMoveSource: (index: number, direction: -1 | 1) => void
   onRemoveSource: (index: number) => void
-  handleStart: (skipAiRename?: boolean) => Promise<void>
+  handleStart: (skipAiRename?: boolean, queueOnly?: boolean) => Promise<void>
   handleCancel: () => Promise<void>
   cancelling: boolean
   handleSavePermanentPassword: () => Promise<void>
@@ -338,6 +338,56 @@ export function CompressPageView({
         className="pb-5"
       >
         <WorkbenchPageHeader title="压缩" actions={presets} />
+        <ToggleGroup
+          variant="outline"
+          spacing={0}
+          value={[draft.packagingMode ?? "combined"]}
+          disabled={draftLocked}
+          onValueChange={(values) => {
+            const next = values[0]
+            if (next === "combined" || next === "separate")
+              updateDraft("packagingMode", next)
+          }}
+          className="mb-3 shrink-0"
+          aria-label="压缩方式"
+        >
+          <ToggleGroupItem value="combined">
+            全部来源合成一个归档
+          </ToggleGroupItem>
+          <ToggleGroupItem value="separate">每个来源分别压缩</ToggleGroupItem>
+        </ToggleGroup>
+        {draft.packagingMode === "separate" && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="mb-2 self-start"
+            disabled={draftLocked || !sources.length}
+            onClick={() => void handleStart(false, true)}
+          >
+            加入压缩队列，稍后开始
+          </Button>
+        )}
+        {draft.packagingMode === "separate" && (
+          <p className="mb-2 shrink-0 text-xs text-muted-foreground">
+            分别使用各来源名称创建归档，按当前预设和选项依次处理；此模式不使用
+            AI 命名。
+          </p>
+        )}
+        {draft.packagingMode === "separate" && (
+          <InputGroup className="mb-3 shrink-0">
+            <InputGroupInput
+              aria-label="批量压缩命名规则"
+              value={draft.batchNameTemplate ?? "{name}"}
+              disabled={draftLocked}
+              onChange={(event) =>
+                updateDraft("batchNameTemplate", event.target.value)
+              }
+            />
+            <InputGroupAddon>
+              <InputGroupText>批量命名</InputGroupText>
+            </InputGroupAddon>
+          </InputGroup>
+        )}
         <div className="byte-compress-stage">
           <Card
             size="sm"
@@ -495,6 +545,15 @@ export function CompressPageView({
                     disabled={draftLocked}
                   />
 
+                  <SwitchControl
+                    checked={draft.verifyAfterCompression}
+                    onCheckedChange={(value) =>
+                      updateDraft("verifyAfterCompression", value)
+                    }
+                    label="完成后校验"
+                    disabled={draftLocked}
+                    title="压缩后检查整包完整性；校验失败时保留归档"
+                  />
                   <Separator />
 
                   <div className="grid gap-3 @min-[30rem]:grid-cols-[minmax(0,1fr)_176px]">

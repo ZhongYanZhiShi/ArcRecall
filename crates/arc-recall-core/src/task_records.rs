@@ -32,6 +32,10 @@ pub struct TaskCheckItem {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskRecord {
     #[serde(default)]
+    pub compression_succeeded: bool,
+    #[serde(default)]
+    pub compression_verification: Option<CompressionVerification>,
+    #[serde(default)]
     pub compression: Option<crate::compression_presets::CompressionRecordOptions>,
     #[serde(default)]
     pub operation: TaskOperation,
@@ -59,6 +63,16 @@ pub struct TaskRecord {
 
 pub struct TaskRecordStore(Connection);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CompressionVerification {
+    Running,
+    Passed,
+    Failed,
+    Cancelled,
+    Interrupted,
+}
+
 impl TaskRecordStore {
     pub fn open(path: &Path) -> Result<Self, String> {
         let conn = Connection::open(path).map_err(|e| e.to_string())?;
@@ -74,15 +88,26 @@ impl TaskRecordStore {
 
     pub fn find(&self, id: &str) -> Result<Option<TaskRecord>, String> {
         use rusqlite::OptionalExtension;
-        let json: Option<String> = self
+        let row: Option<(String, String)> = self
             .0
-            .query_row("SELECT record FROM task_records WHERE id=?1", [id], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT record,state FROM task_records WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .optional()
             .map_err(|e| e.to_string())?;
-        json.map(|json| serde_json::from_str(&json).map_err(|e| e.to_string()))
-            .transpose()
+        row.map(|(json, state)| {
+            let mut record: TaskRecord = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+            record.state = state;
+            if record.state == "interrupted"
+                && record.compression_verification == Some(CompressionVerification::Running)
+            {
+                record.compression_verification = Some(CompressionVerification::Interrupted);
+            }
+            Ok(record)
+        })
+        .transpose()
     }
 
     pub fn save_for_session(&self, record: &TaskRecord, session: &Path) -> Result<(), String> {
@@ -136,6 +161,9 @@ impl TaskRecordStore {
             let mut record = record.clone();
             if record.state == "running" {
                 record.state = "interrupted".into();
+                if record.compression_verification == Some(CompressionVerification::Running) {
+                    record.compression_verification = Some(CompressionVerification::Interrupted);
+                }
             }
             let json = serde_json::to_string(&record).map_err(|e| e.to_string())?;
             tx.execute(
@@ -198,6 +226,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("tasks.db");
         let record = TaskRecord {
+            compression_succeeded: true,
+            compression_verification: Some(CompressionVerification::Running),
             task_id: "task-1".into(),
             archive_path: "嵌套归档.zip".into(),
             output_directory: "输出".into(),
@@ -223,6 +253,16 @@ mod tests {
         store.interrupt_running().unwrap();
         let rows = store.list(0, true).unwrap();
         assert_eq!(rows[0].state, "interrupted");
+        assert_eq!(
+            rows[0].compression_verification,
+            Some(CompressionVerification::Interrupted)
+        );
+        let found = store.find("task-1").unwrap().unwrap();
+        assert_eq!(found.state, "interrupted");
+        assert_eq!(
+            found.compression_verification,
+            Some(CompressionVerification::Interrupted)
+        );
         assert_eq!(rows[0].dictionary_group, record.dictionary_group);
         assert!(store.list(100, false).unwrap().is_empty());
         store.delete("task-1").unwrap();

@@ -701,6 +701,46 @@ export function TaskRecordsPanel({
                     )}
                     <div className="flex flex-wrap gap-2">
                       {row.operation === "compression" &&
+                        row.compressionVerification && (
+                          <p className="w-full text-xs">
+                            压缩：
+                            {row.compressionSucceeded ? "已完成" : "未完成"} ·
+                            校验：
+                            {
+                              {
+                                running: "进行中",
+                                passed: "通过",
+                                failed: "未通过",
+                                cancelled: "已取消",
+                                interrupted: "已中断",
+                              }[row.compressionVerification]
+                            }
+                          </p>
+                        )}
+                      {row.operation === "compression" &&
+                        row.outputPath &&
+                        (row.compressionSucceeded ||
+                          row.state === "success") && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy || row.state === "running"}
+                            onClick={() => {
+                              setSelected({
+                                ...row,
+                                operation: "integrityCheck",
+                                archivePath: row.outputPath!,
+                                sourcePaths: [row.outputPath!],
+                              })
+                              setPassword("")
+                              setOutput(null)
+                              setError(null)
+                            }}
+                          >
+                            单独校验输出归档
+                          </Button>
+                        )}
+                      {row.operation === "compression" &&
                         row.compression &&
                         onPrepareCompression && (
                           <Button

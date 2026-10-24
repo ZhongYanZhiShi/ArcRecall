@@ -8,11 +8,13 @@ export type CompressionFormat = "sevenZip" | "zip"
 export type CompressionPhase =
   | "preparing"
   | "compressing"
+  | "verifying"
   | "completed"
   | "cancelled"
   | "failed"
 
 export type CompressionStartRequest = {
+  verifyAfterCompression?: boolean
   sources: string[]
   outputDirectory?: string | null
   baseName: string
@@ -28,6 +30,14 @@ export type CompressionPasswordStatus = {
 }
 
 export type CompressionTaskStatus = {
+  compressionSucceeded?: boolean
+  verification?:
+    | "running"
+    | "passed"
+    | "failed"
+    | "cancelled"
+    | "interrupted"
+    | null
   taskId: string
   phase: CompressionPhase
   running: boolean

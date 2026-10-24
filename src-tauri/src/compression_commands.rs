@@ -24,6 +24,8 @@ const COMPRESSION_PASSWORD_KEYRING_ACCOUNT: &str = "permanent";
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CompressionStartRequest {
+    #[serde(default)]
+    verify_after_compression: bool,
     sources: Vec<String>,
     output_directory: Option<String>,
     base_name: String,
@@ -41,6 +43,8 @@ pub(crate) struct CompressionStartRequest {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CompressionTaskStatus {
+    compression_succeeded: bool,
+    verification: Option<arc_recall_core::task_records::CompressionVerification>,
     task_id: String,
     phase: CompressionPhase,
     running: bool,
@@ -81,7 +85,12 @@ impl CompressionTaskHandle {
             return Ok(false);
         }
         self.cancellation.cancel();
-        status.message = "正在停止 7-Zip 并清理临时归档…".into();
+        status.message = if status.phase == CompressionPhase::Verifying {
+            "正在停止校验，已生成的归档将保留…"
+        } else {
+            "正在停止 7-Zip 并清理临时归档…"
+        }
+        .into();
         Ok(true)
     }
 }
@@ -148,6 +157,7 @@ pub(crate) async fn compression_start(
     let task_id = next_compression_task_id();
     let compression_options = arc_recall_core::compression_presets::CompressionRecordOptions {
         options: arc_recall_core::compression_presets::CompressionOptions {
+            verify_after_compression: request.verify_after_compression,
             format: request.format,
             level: request.level,
             encrypt_file_names: request.encrypt_file_names,
@@ -187,6 +197,10 @@ pub(crate) async fn compression_start(
             request.use_permanent_password,
             get_permanent_compression_password,
         )?;
+        let verification_password = request
+            .verify_after_compression
+            .then(|| password.clone())
+            .flatten();
         let job = CompressionJob {
             sources: request.sources.into_iter().map(PathBuf::from).collect(),
             output_directory: request
@@ -208,10 +222,10 @@ pub(crate) async fn compression_start(
         if cancellation.is_cancelled() {
             return Err("压缩任务已取消。".into());
         }
-        Ok::<_, String>((seven_zip, prepared))
+        Ok::<_, String>((seven_zip, prepared, verification_password))
     }
     .await;
-    let (seven_zip, prepared) = match preparation {
+    let (seven_zip, prepared, verification_password) = match preparation {
         Ok(value) => value,
         Err(error) => {
             record.state = if cancellation.is_cancelled() {
@@ -236,6 +250,8 @@ pub(crate) async fn compression_start(
         .save_for_session(&record, state.recovery_session.directory())?;
     let started_at_ms = record.started_at_ms;
     let initial = CompressionTaskStatus {
+        compression_succeeded: false,
+        verification: None,
         task_id: task_id.clone(),
         phase: CompressionPhase::Preparing,
         running: true,
@@ -287,10 +303,11 @@ pub(crate) async fn compression_start(
     let status_for_updates = Arc::clone(&status);
     let status_for_result = Arc::clone(&status);
     let logger = Arc::clone(&state.logger);
+    let verification_root = state.recovery_session.directory().to_path_buf();
     std::thread::spawn(move || {
         let _task_lease = task_lease;
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            compress_archive(
+            let result = compress_archive(
                 prepared,
                 &seven_zip,
                 &cancellation,
@@ -302,9 +319,65 @@ pub(crate) async fn compression_start(
                         task_status.total_source_count = update.total_source_count;
                     }
                 },
-            )
+            );
+            if let Ok(compressed) = &result {
+                record.compression_succeeded = true;
+                record.output_path = Some(path_for_display(&compressed.output_path));
+                if request.verify_after_compression {
+                    use arc_recall_core::task_records::CompressionVerification;
+                    record.compression_verification = Some(CompressionVerification::Running);
+                    if arc_recall_core::task_records::TaskRecordStore::open(&record_path)
+                        .and_then(|store| store.save_for_session(&record, &verification_root))
+                        .is_err()
+                    {
+                        write_log(
+                            &logger,
+                            LogLevel::Error,
+                            "compression",
+                            "compression.checkpoint_failed",
+                            "压缩完成，但校验阶段记录保存失败。",
+                            std::iter::empty(),
+                        );
+                    }
+                    if let Ok(mut status) = status_for_updates.lock() {
+                        status.compression_succeeded = true;
+                        status.verification = Some(CompressionVerification::Running);
+                        status.phase = CompressionPhase::Verifying;
+                        status.message = "压缩完成，正在校验归档完整性…".into();
+                    }
+                    let checked = tempfile::tempdir_in(&verification_root)
+                        .map_err(|e| e.to_string())
+                        .and_then(|workspace| {
+                            arc_recall_core::tools::run_archive_action(
+                                &arc_recall_core::tools::ArchiveActionRequest {
+                                    path: compressed.output_path.clone(),
+                                    password: verification_password,
+                                    selected_paths: None,
+                                    output_parent: None,
+                                },
+                                &seven_zip,
+                                workspace.path(),
+                                &cancellation,
+                            )
+                        });
+                    record.compression_verification = Some(if cancellation.is_cancelled() {
+                        CompressionVerification::Cancelled
+                    } else if checked.is_ok() {
+                        CompressionVerification::Passed
+                    } else {
+                        CompressionVerification::Failed
+                    });
+                }
+            }
+            result
         }));
+        if result.is_err() && record.compression_succeeded {
+            record.compression_verification =
+                Some(arc_recall_core::task_records::CompressionVerification::Failed);
+        }
         if let Ok(mut task_status) = status_for_result.lock() {
+            task_status.compression_succeeded = record.compression_succeeded;
+            task_status.verification = record.compression_verification;
             task_status.running = false;
             task_status.completed = true;
             task_status.elapsed_ms = current_time_ms().saturating_sub(task_status.started_at_ms);
@@ -316,6 +389,25 @@ pub(crate) async fn compression_start(
                     task_status.processed_source_count = result.source_count;
                     task_status.output_path = path_for_display(&result.output_path);
                     record.state = "success".into();
+                    if let Some(verification) = record.compression_verification {
+                        use arc_recall_core::task_records::CompressionVerification;
+                        if verification == CompressionVerification::Passed {
+                            task_status.message = "压缩完成，完整性校验通过。".into();
+                        } else {
+                            task_status.success = false;
+                            task_status.phase = CompressionPhase::Failed;
+                            task_status.cancelled =
+                                verification == CompressionVerification::Cancelled;
+                            task_status.message = if task_status.cancelled {
+                                "压缩完成，校验已取消；归档已保留，可单独重新校验。"
+                            } else {
+                                "压缩完成，但完整性校验未通过；归档已保留，请重新校验。"
+                            }
+                            .into();
+                            record.state = "partial".into();
+                            record.failure_kind = Some("Verification".into());
+                        }
+                    }
                     record.elapsed_ms = task_status.elapsed_ms;
                     record.output_path = Some(task_status.output_path.clone());
                     persist_compression_record(&record_path, &record, &logger);
@@ -372,7 +464,12 @@ pub(crate) async fn compression_start(
                         "压缩后台任务异常终止：{}",
                         panic_payload_message(payload.as_ref())
                     );
-                    record.state = "failed".into();
+                    record.state = if record.compression_succeeded {
+                        "partial"
+                    } else {
+                        "failed"
+                    }
+                    .into();
                     record.elapsed_ms = task_status.elapsed_ms;
                     record.failure_kind = Some("Process".into());
                     persist_compression_record(&record_path, &record, &logger);
@@ -533,6 +630,8 @@ mod tests {
     #[test]
     fn cancellation_preserves_completed_compression_result() {
         let status = Arc::new(Mutex::new(CompressionTaskStatus {
+            compression_succeeded: false,
+            verification: None,
             task_id: "test".into(),
             phase: CompressionPhase::Compressing,
             running: true,

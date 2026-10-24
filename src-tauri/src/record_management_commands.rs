@@ -69,7 +69,7 @@ fn render(
         .map_err(|e| e.to_string()),
         ReportFormat::Csv => {
             let mut csv = String::from(
-                "\u{feff}taskId,operation,state,startedAtMs,elapsedMs,failureKind,archivePath,outputDirectory,outputPath,sourcePaths,selectedPaths,pendingArchivePaths,skippedScanDirectories,checkItems,compression\r\n",
+                "\u{feff}taskId,operation,state,startedAtMs,elapsedMs,failureKind,archivePath,outputDirectory,outputPath,sourcePaths,selectedPaths,pendingArchivePaths,skippedScanDirectories,checkItems,compression,compressionSucceeded,compressionVerification\r\n",
             );
             for record in records {
                 let value = serde_json::to_value(record).map_err(|e| e.to_string())?;
@@ -89,6 +89,8 @@ fn render(
                     "skippedScanDirectories",
                     "checkItems",
                     "compression",
+                    "compressionSucceeded",
+                    "compressionVerification",
                 ]
                 .iter()
                 .map(|key| {
@@ -155,6 +157,7 @@ mod tests {
             compression: Some(
                 arc_recall_core::compression_presets::CompressionRecordOptions {
                     options: arc_recall_core::compression_presets::CompressionOptions {
+                        verify_after_compression: false,
                         format: arc_recall_core::CompressionFormat::SevenZip,
                         level: 5,
                         encrypt_file_names: false,

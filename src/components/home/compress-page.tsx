@@ -7,7 +7,12 @@ import { toast } from "sonner"
 
 import { CompressPageView } from "@/components/home/compress-page-view"
 import { CompressionPresets } from "@/components/home/compression-presets"
-import { draftWithCompressionPreset } from "@/lib/compression-presets"
+import {
+  draftWithCompressionPreset,
+  renderCompressionName,
+} from "@/lib/compression-presets"
+import { compressionQueue } from "@/lib/compression-queue-session"
+import { CompressionQueuePanel } from "@/components/home/compression-queue-panel"
 import {
   generateAiArchiveName,
   listAiProfiles,
@@ -59,6 +64,11 @@ export function CompressPage({
   onStreamActivityChange?: (activity: ByteStreamActivity) => void
   onRegisterDraftGuard?: (guard: () => boolean) => void
 }) {
+  const compressionBatch = React.useSyncExternalStore(
+    compressionQueue.subscribe,
+    compressionQueue.getSnapshot,
+    compressionQueue.getSnapshot
+  )
   const {
     sources,
     outputMode,
@@ -108,13 +118,18 @@ export function CompressPage({
   const operationBusy = React.useRef(false)
   const operationVersion = React.useRef(0)
   const isDraftLocked = React.useCallback(
-    () => operationBusy.current || runningRef.current,
+    () =>
+      operationBusy.current ||
+      runningRef.current ||
+      compressionQueue.getSnapshot().running,
     [runningRef]
   )
   React.useLayoutEffect(() => {
     // Keep this guard registered while Activity hides the page: asynchronous
     // naming and credential work can still own the draft while effects pause.
-    onRegisterDraftGuard?.(() => operationBusy.current)
+    onRegisterDraftGuard?.(
+      () => operationBusy.current || compressionQueue.getSnapshot().running
+    )
   }, [onRegisterDraftGuard])
   const referencePreferences = useCompressionNamingPreferences(
     draft,
@@ -312,14 +327,20 @@ export function CompressPage({
   }, [appendSources, isDraftLocked])
 
   React.useEffect(() => {
-    if (!shouldAutoOpenCompletedTask(task, openWhenDone, openedTasks.current)) {
+    if (
+      !shouldAutoOpenCompletedTask(
+        task,
+        openWhenDone && draft.packagingMode !== "separate",
+        openedTasks.current
+      )
+    ) {
       return
     }
     if (!task) return
     void openPath(task.outputPath).catch((reason) =>
       notifyCompressionError(reason)
     )
-  }, [openWhenDone, task])
+  }, [openWhenDone, task, draft.packagingMode])
 
   React.useEffect(() => {
     if (
@@ -395,7 +416,7 @@ export function CompressPage({
     ) ?? null
 
   const handleStart = React.useCallback(
-    async (skipAiRename = false) => {
+    async (skipAiRename = false, queueOnly = false) => {
       if (
         isDraftLocked() ||
         !permanentPasswordReady ||
@@ -410,6 +431,49 @@ export function CompressPage({
       }
       if (sources.length === 0) {
         setError("请先添加至少一个文件或文件夹。")
+        return
+      }
+      if (draft.packagingMode === "separate") {
+        if (outputMode === "custom" && !outputDirectory) {
+          setError("请选择自定义输出目录。")
+          return
+        }
+        if (
+          encryptFileNames &&
+          !password &&
+          !(hasPermanentPassword && usePermanentPassword)
+        ) {
+          setError("开启文件名加密前需要设置密码。")
+          return
+        }
+        try {
+          compressionQueue.add(
+            sources.map((source) => ({
+              sources: [source],
+              baseName: renderCompressionName(
+                draft.batchNameTemplate ?? "{name}",
+                source
+                  .replace(/[\\/]+$/, "")
+                  .split(/[\\/]/)
+                  .pop() || "归档"
+              ),
+              outputDirectory: outputMode === "custom" ? outputDirectory : null,
+              format,
+              level,
+              encryptFileNames,
+              verifyAfterCompression: draft.verifyAfterCompression,
+            })),
+            Boolean(password || (hasPermanentPassword && usePermanentPassword))
+          )
+          if (queueOnly) return
+          await compressionQueue.run({
+            password: password || undefined,
+            usePermanentPassword: hasPermanentPassword && usePermanentPassword,
+          })
+          if (openWhenDone) await openCompletedCompressionBatch()
+        } catch (reason) {
+          setError(toErrorMessage(reason))
+        }
         return
       }
       if (!baseName.trim()) {
@@ -467,6 +531,7 @@ export function CompressPage({
             onDraftChange((current) => ({ ...current, baseName: name })),
           start: (name) =>
             startCompression({
+              verifyAfterCompression: draft.verifyAfterCompression,
               sources,
               outputDirectory:
                 outputMode === "custom" ? outputDirectory : undefined,
@@ -495,6 +560,10 @@ export function CompressPage({
     [
       activeAiProfile,
       draft.retryPasswordRequired,
+      draft.verifyAfterCompression,
+      draft.packagingMode,
+      draft.batchNameTemplate,
+      openWhenDone,
       baseName,
       encryptFileNames,
       format,
@@ -525,6 +594,10 @@ export function CompressPage({
     null
   )
   const handleCancel = React.useCallback(async () => {
+    if (compressionQueue.getSnapshot().running) {
+      await compressionQueue.stop().catch(notifyCompressionError)
+      return
+    }
     if (!task?.running || cancelRequest.current === task.taskId) {
       return
     }
@@ -562,23 +635,59 @@ export function CompressPage({
   return (
     <CompressPageView
       presets={
-        <CompressionPresets
-          draft={draft}
-          disabled={busy || running || passwordCredentialBusy}
-          onApply={(preset) => {
-            if (isDraftLocked()) return
-            operationVersion.current += 1
-            onDraftChange((current) =>
-              draftWithCompressionPreset(current, preset)
-            )
-          }}
-        />
+        <div className="flex flex-wrap gap-2">
+          <CompressionQueuePanel
+            disabled={
+              busy ||
+              passwordCredentialBusy ||
+              (!compressionBatch.running &&
+                running &&
+                !compressionBatch.items.some(
+                  (item) =>
+                    item.state === "running" && item.taskId === task?.taskId
+                ))
+            }
+            onRun={async () => {
+              if (passwordError) throw new Error(passwordError)
+              if (
+                operationBusy.current ||
+                (runningRef.current &&
+                  !compressionQueue
+                    .getSnapshot()
+                    .items.some((item) => item.state === "running"))
+              )
+                throw new Error("已有压缩任务正在运行。")
+              await compressionQueue.run({
+                password: password || undefined,
+                usePermanentPassword:
+                  hasPermanentPassword && usePermanentPassword,
+              })
+              if (openWhenDone) await openCompletedCompressionBatch()
+            }}
+          />
+          <CompressionPresets
+            draft={draft}
+            disabled={
+              busy ||
+              running ||
+              compressionBatch.running ||
+              passwordCredentialBusy
+            }
+            onApply={(preset) => {
+              if (isDraftLocked()) return
+              operationVersion.current += 1
+              onDraftChange((current) =>
+                draftWithCompressionPreset(current, preset)
+              )
+            }}
+          />
+        </div>
       }
       referencePreview={referencePreview}
       referencePreferences={referencePreferences}
       draft={draft}
       dragOver={dragOver}
-      busy={busy}
+      busy={busy || compressionBatch.running}
       error={error}
       aiError={aiError}
       setAiError={setAiError}
@@ -620,6 +729,21 @@ export function CompressPage({
 
 function toErrorMessage(reason: unknown) {
   return reason instanceof Error ? reason.message : String(reason ?? "未知错误")
+}
+
+async function openCompletedCompressionBatch() {
+  const batch = compressionQueue.getSnapshot()
+  if (
+    batch.running ||
+    batch.error ||
+    batch.items.some(
+      (item) => item.state === "waiting" || item.state === "running"
+    )
+  )
+    return
+  const output = batch.items.findLast((item) => item.result?.success)?.result
+    ?.outputPath
+  if (output) await openPath(output)
 }
 
 function notifyCompressionError(reason: unknown) {

@@ -90,6 +90,9 @@ function sourceHarness(overrides) {
     },
     useEffect: effect,
     useLayoutEffect: effect,
+    useSyncExternalStore(_subscribe, getSnapshot) {
+      return getSnapshot()
+    },
   }
   const ui = new Proxy({}, { get: (_, key) => key })
   const jsx = (type, props, key) => ({ type, props, key })

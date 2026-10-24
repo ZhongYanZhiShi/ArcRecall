@@ -4,6 +4,9 @@ type OutputMode = "sibling" | "custom"
 type CompressionLevel = 0 | 1 | 3 | 5 | 7 | 9
 
 export type CompressionDraft = {
+  packagingMode?: "combined" | "separate"
+  batchNameTemplate?: string
+  verifyAfterCompression: boolean
   retryPasswordRequired?: boolean
   retryPrepared?: boolean
   sources: string[]
@@ -24,6 +27,9 @@ export type CompressionDraft = {
 
 export function createCompressionDraft(): CompressionDraft {
   return {
+    packagingMode: "combined",
+    batchNameTemplate: "{name}",
+    verifyAfterCompression: false,
     sources: [],
     outputMode: "sibling",
     outputDirectory: null,

@@ -12,6 +12,8 @@ export type TaskOperation =
   | "integrityCheck"
   | "batchIntegrityCheck"
 export type TaskRecord = {
+  compressionSucceeded?: boolean
+  compressionVerification?: import("./compression").CompressionTaskStatus["verification"]
   compression?: import("./compression-presets").CompressionRecordOptions | null
   operation?: TaskOperation
   sourcePaths?: string[]

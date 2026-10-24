@@ -57,12 +57,16 @@ export function CompressionTaskCard({
             )}
             <p className="text-xs font-semibold">
               {task.running
-                ? "正在压缩"
+                ? task.phase === "verifying"
+                  ? "正在校验归档"
+                  : "正在压缩"
                 : task.success
                   ? "压缩完成"
-                  : task.cancelled
-                    ? "已取消"
-                    : "压缩失败"}
+                  : task.compressionSucceeded
+                    ? "压缩完成，校验未通过"
+                    : task.cancelled
+                      ? "已取消"
+                      : "压缩失败"}
             </p>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">

@@ -131,6 +131,10 @@ export function CompressionPresets({
                 输出：{chosen.options.outputDirectory ?? "来源同级"}
                 <br />
                 命名：{chosen.nameTemplate}
+                <br />
+                {chosen.options.verifyAfterCompression
+                  ? "完成后校验"
+                  : "不自动校验"}
               </p>
             )}
             <div className="flex flex-wrap gap-2">
@@ -221,6 +225,7 @@ export function CompressionPresets({
                         nameTemplate: template,
                         openWhenDone: draft.openWhenDone,
                         options: {
+                          verifyAfterCompression: draft.verifyAfterCompression,
                           format: draft.format,
                           level: draft.level,
                           encryptFileNames: draft.encryptFileNames,

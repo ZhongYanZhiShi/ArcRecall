@@ -19,6 +19,7 @@ export async function verifyCompressionPresets({
     nameTemplate: "{name}-{date}",
     openWhenDone: false,
     options: {
+      verifyAfterCompression: true,
       format: "sevenZip",
       level: 1,
       encryptFileNames: true,
@@ -127,6 +128,8 @@ export async function verifyCompressionPresets({
   })
   assert.equal(records.length, 1)
   assert.equal(records[0].compression.passwordRequired, true)
+  assert.equal(records[0].compressionVerification, "passed")
+  assert.equal(records[0].compressionSucceeded, true)
   assert.deepEqual(records[0].compression.options, preset.options)
   assert.ok(!JSON.stringify(records).includes(password))
   const exported = await invoke("task_records_export", {

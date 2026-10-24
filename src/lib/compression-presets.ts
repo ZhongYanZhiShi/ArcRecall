@@ -3,6 +3,7 @@ import type { CompressionDraft } from "./compression-draft"
 import { isDesktopRuntime } from "./dictionary"
 
 export type CompressionOptions = {
+  verifyAfterCompression?: boolean
   format: CompressionDraft["format"]
   level: CompressionDraft["level"]
   encryptFileNames: boolean
@@ -53,11 +54,6 @@ export function draftWithCompressionPreset(
   preset: CompressionPreset,
   date = new Date()
 ): CompressionDraft {
-  const day = [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, "0"),
-    String(date.getDate()).padStart(2, "0"),
-  ].join("-")
   const sourceName = draft.sources[0]
     ?.replace(/[\\/]+$/, "")
     .split(/[\\/]/)
@@ -66,11 +62,27 @@ export function draftWithCompressionPreset(
   return {
     ...draft,
     ...preset.options,
+    verifyAfterCompression: preset.options.verifyAfterCompression ?? false,
     outputMode: preset.options.outputDirectory ? "custom" : "sibling",
-    baseName: preset.nameTemplate.replace(
-      /\{(name|date)\}/g,
-      (_, field: string) => (field === "name" ? name : day)
-    ),
+    baseName: renderCompressionName(preset.nameTemplate, name, date),
+    batchNameTemplate: preset.nameTemplate,
     openWhenDone: preset.openWhenDone,
   }
+}
+export function renderCompressionName(
+  template: string,
+  name: string,
+  date = new Date()
+): string {
+  const literal = template.replace(/\{(name|date)\}/g, "")
+  if (!template.trim() || template.length > 120 || /[{}\\/]/.test(literal))
+    throw new Error("命名规则仅支持 {name} 和 {date}，不能包含路径分隔符。")
+  const day = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-")
+  return template.replace(/\{(name|date)\}/g, (_, field: string) =>
+    field === "name" ? name : day
+  )
 }

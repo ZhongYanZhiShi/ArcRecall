@@ -7,6 +7,8 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompressionOptions {
+    #[serde(default)]
+    pub verify_after_compression: bool,
     pub format: CompressionFormat,
     pub level: u8,
     pub encrypt_file_names: bool,
@@ -184,6 +186,7 @@ mod tests {
         CompressionPreset {
             name: "资料压缩".into(),
             options: CompressionOptions {
+                verify_after_compression: false,
                 format: CompressionFormat::SevenZip,
                 level: 5,
                 encrypt_file_names: true,
