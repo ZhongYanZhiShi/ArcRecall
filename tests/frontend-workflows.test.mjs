@@ -2388,6 +2388,38 @@ test("统一记录按类型查询，检查重试防止重复提交并可取消",
   harness.hide()
 })
 
+test("压缩模板使用本地日期且不再次解释来源中的占位符，保留当前会话密码", () => {
+  const harness = sourceHarness({
+    "./dictionary": { isDesktopRuntime: () => false },
+    "@tauri-apps/api/core": {},
+  })
+  const { draftWithCompressionPreset } = harness.load(
+    "src/lib/compression-presets.ts"
+  )
+  const draft = {
+    sources: ["C:/资料/{date}.txt"],
+    baseName: "",
+    password: "session-only",
+    passwordConfirmation: "session-only",
+    useAiRename: false,
+  }
+  const preset = {
+    nameTemplate: "{name}-{date}",
+    options: {
+      format: "zip",
+      level: 5,
+      outputDirectory: null,
+      encryptFileNames: false,
+    },
+    openWhenDone: false,
+  }
+  const result = draftWithCompressionPreset(draft, preset, new Date(2026, 0, 2))
+  assert.equal(result.baseName, "{date}.txt-2026-01-02")
+  assert.equal(result.password, draft.password)
+  assert.equal(result.outputMode, "sibling")
+  assert.deepEqual(result.sources, draft.sources)
+})
+
 test("统一备份预览显示各类数据范围，取消不应用恢复", async () => {
   const calls = []
   const harness = sourceHarness({
@@ -2424,7 +2456,14 @@ test("统一备份预览显示各类数据范围，取消不应用恢复", async
     })
   button(render(), "从备份恢复").props.onClick()
   await settle()
-  assert.match(JSON.stringify(render()), /3 个预设、15 条任务记录及通用设置/)
+  assert.match(
+    JSON.stringify(render()),
+    /3 个处理预设、15 条任务记录及通用设置/
+  )
+  assert.match(
+    JSON.stringify(render()),
+    /旧版备份不含压缩预设，将保留当前压缩预设/
+  )
   find(render(), (node) => node.type === "AlertDialog").props.onOpenChange(
     false
   )

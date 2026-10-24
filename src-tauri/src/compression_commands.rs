@@ -146,8 +146,26 @@ pub(crate) async fn compression_start(
     ensure_no_active_archive_task(&state)?;
 
     let task_id = next_compression_task_id();
+    let compression_options = arc_recall_core::compression_presets::CompressionRecordOptions {
+        options: arc_recall_core::compression_presets::CompressionOptions {
+            format: request.format,
+            level: request.level,
+            encrypt_file_names: request.encrypt_file_names,
+            output_directory: request
+                .output_directory
+                .clone()
+                .filter(|p| !p.trim().is_empty()),
+        },
+        base_name: request.base_name.clone(),
+        password_required: request.use_permanent_password
+            || request.password.as_ref().is_some_and(|p| !p.is_empty()),
+    };
     let record_path = state.paths.root.join("task-records.db");
     let mut record = arc_recall_core::task_records::TaskRecord {
+        compression: compression_options
+            .validate()
+            .is_ok()
+            .then_some(compression_options),
         task_id: task_id.clone(),
         operation: arc_recall_core::task_records::TaskOperation::Compression,
         archive_path: request.sources.first().cloned().unwrap_or_default(),

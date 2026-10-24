@@ -83,6 +83,9 @@ jobs:
       - name: Test record search, exports and automatic backup management
         run: pnpm test:desktop:data
 
+      - name: Test compression presets, retry and backup persistence
+        run: pnpm test:desktop:compression
+
       - name: Upload UI test evidence
         if: always()
         uses: actions/upload-artifact@v4

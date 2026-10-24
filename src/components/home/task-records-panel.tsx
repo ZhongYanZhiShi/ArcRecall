@@ -60,7 +60,14 @@ const failures: Record<string, string> = {
   Other: "执行异常",
 }
 
-export function TaskRecordsPanel() {
+export function TaskRecordsPanel({
+  onPrepareCompression,
+}: {
+  onPrepareCompression?: (id: string) => Promise<void>
+}) {
+  const [compressionRetry, setCompressionRetry] = React.useState<string | null>(
+    null
+  )
   const [open, setOpen] = React.useState(false)
   const [rows, setRows] = React.useState<TaskRecord[]>([])
   const [operationFilter, setOperationFilter] = React.useState<
@@ -693,6 +700,52 @@ export function TaskRecordsPanel() {
                       </details>
                     )}
                     <div className="flex flex-wrap gap-2">
+                      {row.operation === "compression" &&
+                        row.compression &&
+                        onPrepareCompression && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy || row.state === "running"}
+                            onClick={() => setCompressionRetry(row.taskId)}
+                          >
+                            准备重新压缩
+                          </Button>
+                        )}
+                      {row.operation === "compression" && !row.compression && (
+                        <p className="text-xs text-muted-foreground">
+                          旧记录没有压缩参数，请到压缩页手动创建任务。
+                        </p>
+                      )}
+                      {compressionRetry === row.taskId &&
+                        onPrepareCompression && (
+                          <div className="w-full space-y-2 rounded-md border p-3">
+                            <p className="text-sm">
+                              将用此记录替换当前压缩草稿，不会自动开始。源文件会重新检查；密码需要重新填写。
+                            </p>
+                            <Button
+                              size="sm"
+                              disabled={busy}
+                              onClick={() =>
+                                void manage(async () => {
+                                  await onPrepareCompression(row.taskId)
+                                  setCompressionRetry(null)
+                                  setOpen(false)
+                                })
+                              }
+                            >
+                              确认替换草稿并打开压缩页
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={busy}
+                              onClick={() => setCompressionRetry(null)}
+                            >
+                              取消替换
+                            </Button>
+                          </div>
+                        )}
                       {row.operation !== "compression" && (
                         <Button
                           size="sm"

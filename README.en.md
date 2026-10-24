@@ -49,6 +49,13 @@ During dictionary recovery, 7-Zip shows the current candidate index and checked 
 - Process batches with cancellation, retry, and optional task queue persistence.
 - Save recovery history, export JSON / CSV reports, and back up dictionaries and history.
 - Create 7z / ZIP archives with optional passwords.
+- Save compression presets and naming templates, and prepare a new compression draft from task records.
+
+Compression presets store format, level, filename encryption, output directory, the open-on-completion option, and a naming template (up to 100 presets). Templates support `{name}` and the local `{date}`. Sources, passwords, credential references, and AI settings are excluded. Applying a preset checks that its output directory still exists; overwriting or deleting a preset requires confirmation.
+
+Compression records can replace the current draft after confirmation, without starting a task. Missing sources must be removed or reselected, and missing output directories must be reselected. Encrypted retries require a freshly entered and confirmed password; saved credentials are not used automatically. Existing output files are preserved with collision-safe naming. Older records without compression parameters cannot restore a draft. Retried drafts default to no AI naming and no automatic output-folder opening.
+
+New unified backups use version 2 and include compression presets, including automatic and pre-restore safety backups. Version 1 and legacy database restores preserve local compression presets. Restore previews show the compression preset count. Presets are stored in `compression-presets.db`.
 
 Supports detection, password verification, and recursive extraction for 7z, ZIP / ZIP64, and RAR3 / RAR5, with these limits:
 

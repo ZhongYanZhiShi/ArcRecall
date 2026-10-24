@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod backup;
 pub mod backup_management;
+pub mod compression_presets;
 pub mod dictionary;
 pub mod history;
 pub mod paths;

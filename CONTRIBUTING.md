@@ -58,6 +58,7 @@ cargo test --workspace --all-targets --all-features
 - 简单赋值、固定展示文案和路径拼接不必逐一测试；兼容性、输入边界和安全约束仍需覆盖。
 - 使用可重复的夹具和临时目录，不把依赖本机私人归档或历史数据库的诊断探针作为回归测试。
 - `pnpm test:ui` 验证渲染与交互；模拟 IPC 的浏览器测试不能替代 `pnpm test:desktop` 的原生集成验证。
+- `pnpm test:desktop:compression` 在真实 Tauri/WebView2 中验证压缩预设、历史重试、密码重新确认、输出冲突保留、备份恢复和重启持久化。
 
 执行 `pnpm install` 会启用提交前钩子。每次提交前，
 钩子都会执行 Oxfmt 和 `cargo fmt` 格式检查；如果检查失败，请先运行：

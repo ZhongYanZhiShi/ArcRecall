@@ -53,6 +53,10 @@ fn render(
             record.pending_archive_paths.clear();
             record.skipped_scan_directories.clear();
             record.dictionary_group = None;
+            if let Some(compression) = &mut record.compression {
+                compression.options.output_directory = None;
+                compression.base_name.clear();
+            }
             for item in &mut record.check_items {
                 item.path.clear();
             }
@@ -65,7 +69,7 @@ fn render(
         .map_err(|e| e.to_string()),
         ReportFormat::Csv => {
             let mut csv = String::from(
-                "\u{feff}taskId,operation,state,startedAtMs,elapsedMs,failureKind,archivePath,outputDirectory,outputPath,sourcePaths,selectedPaths,pendingArchivePaths,skippedScanDirectories,checkItems\r\n",
+                "\u{feff}taskId,operation,state,startedAtMs,elapsedMs,failureKind,archivePath,outputDirectory,outputPath,sourcePaths,selectedPaths,pendingArchivePaths,skippedScanDirectories,checkItems,compression\r\n",
             );
             for record in records {
                 let value = serde_json::to_value(record).map_err(|e| e.to_string())?;
@@ -84,6 +88,7 @@ fn render(
                     "pendingArchivePaths",
                     "skippedScanDirectories",
                     "checkItems",
+                    "compression",
                 ]
                 .iter()
                 .map(|key| {
@@ -147,6 +152,18 @@ mod tests {
     #[test]
     fn exports_redact_all_path_fields_and_escape_csv_formulas() {
         let record = TaskRecord {
+            compression: Some(
+                arc_recall_core::compression_presets::CompressionRecordOptions {
+                    options: arc_recall_core::compression_presets::CompressionOptions {
+                        format: arc_recall_core::CompressionFormat::SevenZip,
+                        level: 5,
+                        encrypt_file_names: false,
+                        output_directory: Some("private-source".into()),
+                    },
+                    base_name: "private-source".into(),
+                    password_required: true,
+                },
+            ),
             task_id: "=formula".into(),
             archive_path: "private-source".into(),
             source_paths: vec!["private-source".into()],

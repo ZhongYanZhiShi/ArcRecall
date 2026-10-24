@@ -24,6 +24,7 @@ import { BackupManagementPanel } from "./backup-management-panel"
 type RestorePreview = {
   unified: boolean
   presetCount: number
+  compressionPresetCount?: number | null
   taskRecordCount: number
   includesSettings: boolean
   token: string
@@ -77,7 +78,7 @@ export function DatabaseRestorePanel({
     <div className="flex flex-col gap-3">
       <p className="text-sm font-medium">统一数据备份与恢复</p>
       <p className="text-xs leading-relaxed text-muted-foreground">
-        包含候选字典、分组、恢复历史、处理预设、任务记录，以及更新、日志和解压设置。
+        包含候选字典、分组、恢复历史、处理预设、压缩预设、任务记录，以及更新、日志和解压设置。
         不包含待处理队列、引擎路径、AI
         配置与密钥或压缩默认密码。历史密码受创建备份的 Windows 账户保护。
       </p>
@@ -160,7 +161,7 @@ export function DatabaseRestorePanel({
               条候选、{preview?.historyCount ?? 0} 条历史（
               {preview?.passwordCount ?? 0} 条含密码）。
               {preview?.unified
-                ? `另含 ${preview.presetCount} 个预设、${preview.taskRecordCount} 条任务记录及通用设置，将一并替换当前对应数据。`
+                ? `另含 ${preview.presetCount} 个处理预设、${preview.taskRecordCount} 条任务记录及通用设置，将一并替换当前对应数据。${preview.compressionPresetCount == null ? "旧版备份不含压缩预设，将保留当前压缩预设。" : `包含 ${preview.compressionPresetCount} 个压缩预设，将替换当前压缩预设。`}`
                 : "这是旧版数据库备份，仅替换字典和历史；预设、任务记录与设置保持当前值。"}
               操作前自动创建完整安全备份；失败时回滚，恢复过程中退出应用将在下次启动时回滚。运行中的历史记录恢复后标记为中断。
             </AlertDialogDescription>

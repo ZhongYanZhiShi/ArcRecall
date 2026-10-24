@@ -4,6 +4,8 @@ type OutputMode = "sibling" | "custom"
 type CompressionLevel = 0 | 1 | 3 | 5 | 7 | 9
 
 export type CompressionDraft = {
+  retryPasswordRequired?: boolean
+  retryPrepared?: boolean
   sources: string[]
   outputMode: OutputMode
   outputDirectory: string | null

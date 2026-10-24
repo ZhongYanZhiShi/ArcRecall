@@ -34,6 +34,9 @@ import {
 } from "@/lib/compression-draft"
 import type { ByteStreamActivity } from "@/lib/byte-stream-motion"
 import { cn } from "@/lib/utils"
+import { prepareCompressionRetry } from "@/lib/compression-presets"
+import { getCompressionStatus } from "@/lib/compression"
+import { toast } from "sonner"
 
 const loadExtractPage = () => import("@/components/home/extract-page")
 const loadCompressPage = () => import("@/components/home/compress-page")
@@ -51,6 +54,7 @@ const CompressPage = dynamic<{
   onDraftChange: React.Dispatch<React.SetStateAction<CompressionDraft>>
   onOpenAiSettings: () => void
   onStreamActivityChange?: (activity: ByteStreamActivity) => void
+  onRegisterDraftGuard?: (guard: () => boolean) => void
 }>(() => loadCompressPage().then((module) => module.CompressPage), {
   loading: CompressPageLoading,
 })
@@ -121,6 +125,14 @@ export default function Page() {
   const [direction, setDirection] = React.useState<SlideDirection>(null)
   const [compressionDraft, setCompressionDraft] = React.useState(
     createCompressionDraft
+  )
+  const [compressionRevision, setCompressionRevision] = React.useState(0)
+  const compressionDraftGuard = React.useRef<() => boolean>(() => false)
+  const registerCompressionDraftGuard = React.useCallback(
+    (guard: () => boolean) => {
+      compressionDraftGuard.current = guard
+    },
+    []
   )
   const [settingsCategory, setSettingsCategory] =
     React.useState<SettingsCategory>("engine")
@@ -307,6 +319,8 @@ export default function Page() {
           {renderActivity(
             "compress",
             <CompressPage
+              key={compressionRevision}
+              onRegisterDraftGuard={registerCompressionDraftGuard}
               onStreamActivityChange={setCompressActivity}
               draft={compressionDraft}
               onDraftChange={setCompressionDraft}
@@ -317,7 +331,54 @@ export default function Page() {
             "dictionary",
             <DictionaryPage key={databaseRevision} />
           )}
-          {renderActivity("history", <HistoryPage key={databaseRevision} />)}
+          {renderActivity(
+            "history",
+            <HistoryPage
+              key={databaseRevision}
+              onPrepareCompression={async (id) => {
+                if (
+                  compressionDraftGuard.current() ||
+                  (await getCompressionStatus())?.running
+                ) {
+                  throw new Error("压缩任务正在运行，请等待完成后再替换草稿。")
+                }
+                const prepared = await prepareCompressionRetry(id)
+                if (compressionDraftGuard.current()) {
+                  throw new Error("压缩草稿正在处理，请等待完成后再重试。")
+                }
+                const compression = prepared.record.compression!
+                setCompressionDraft({
+                  ...createCompressionDraft(),
+                  ...compression.options,
+                  sources: prepared.record.sourcePaths ?? [],
+                  baseName: compression.baseName,
+                  outputMode: compression.options.outputDirectory
+                    ? "custom"
+                    : "sibling",
+                  outputDirectory: prepared.outputMissing
+                    ? null
+                    : compression.options.outputDirectory,
+                  retryPrepared: true,
+                  openWhenDone: false,
+                  retryPasswordRequired: compression.passwordRequired,
+                })
+                setCompressionRevision((current) => current + 1)
+                handleNavChange("compress")
+                if (prepared.missingSources.length || prepared.outputMissing) {
+                  toast.warning(
+                    `已准备草稿。${prepared.missingSources.length ? `${prepared.missingSources.length} 个来源不存在或无法访问，请移除并重新添加。` : ""}${prepared.outputMissing ? "输出目录已失效，请重新选择。" : ""}`,
+                    { duration: 10000 }
+                  )
+                } else {
+                  toast.success(
+                    compression.passwordRequired
+                      ? "已准备草稿，请重新输入并确认密码。"
+                      : "已准备草稿，请检查选项后开始压缩。"
+                  )
+                }
+              }}
+            />
+          )}
           {renderActivity("logs", <LogsPage />)}
           {renderActivity(
             "settings",

@@ -32,6 +32,8 @@ pub struct TaskCheckItem {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskRecord {
     #[serde(default)]
+    pub compression: Option<crate::compression_presets::CompressionRecordOptions>,
+    #[serde(default)]
     pub operation: TaskOperation,
     #[serde(default)]
     pub source_paths: Vec<String>,
@@ -68,6 +70,19 @@ impl TaskRecordStore {
 
     pub fn save(&self, record: &TaskRecord) -> Result<(), String> {
         self.save_owned(record, None)
+    }
+
+    pub fn find(&self, id: &str) -> Result<Option<TaskRecord>, String> {
+        use rusqlite::OptionalExtension;
+        let json: Option<String> = self
+            .0
+            .query_row("SELECT record FROM task_records WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(|e| e.to_string())?;
+        json.map(|json| serde_json::from_str(&json).map_err(|e| e.to_string()))
+            .transpose()
     }
 
     pub fn save_for_session(&self, record: &TaskRecord, session: &Path) -> Result<(), String> {

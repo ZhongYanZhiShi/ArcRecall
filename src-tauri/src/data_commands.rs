@@ -27,6 +27,7 @@ pub(crate) struct DatabaseRestorePreview {
     token: String,
     unified: bool,
     preset_count: usize,
+    compression_preset_count: Option<usize>,
     task_record_count: usize,
     includes_settings: bool,
     #[serde(flatten)]
@@ -87,6 +88,9 @@ pub(crate) async fn database_restore_preview(
                 token,
                 unified: contents.is_some(),
                 preset_count: contents.as_ref().map_or(0, |data| data.presets.len()),
+                compression_preset_count: contents
+                    .as_ref()
+                    .and_then(|data| data.compression_presets.as_ref().map(Vec::len)),
                 task_record_count: contents.as_ref().map_or(0, |data| data.records.len()),
                 includes_settings: contents.is_some(),
                 info,

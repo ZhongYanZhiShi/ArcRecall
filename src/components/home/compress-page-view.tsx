@@ -131,6 +131,7 @@ const LEVEL_OPTIONS = LEVELS.map((item) => ({
 const COUNT_FORMATTER = new Intl.NumberFormat("zh-CN")
 
 type CompressPageViewProps = {
+  presets?: React.ReactNode
   referencePreview: AiReferencePreviewController
   referencePreferences: CompressionNamingPreferencesController
   draft: CompressionDraft
@@ -171,6 +172,7 @@ type CompressPageViewProps = {
 }
 
 export function CompressPageView({
+  presets,
   referencePreview,
   referencePreferences,
   draft,
@@ -335,7 +337,7 @@ export function CompressPageView({
         data-testid="compress-page"
         className="pb-5"
       >
-        <WorkbenchPageHeader title="压缩" />
+        <WorkbenchPageHeader title="压缩" actions={presets} />
         <div className="byte-compress-stage">
           <Card
             size="sm"
@@ -996,7 +998,9 @@ export function CompressPageView({
                     <Field className="gap-1.5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <FieldLabel htmlFor="compression-password">
-                          密码（可选）
+                          {draft.retryPasswordRequired
+                            ? "密码（重新输入）"
+                            : "密码（可选）"}
                         </FieldLabel>
                         <span className="text-xs text-muted-foreground">
                           系统凭据保存 · 不写入日志

@@ -93,7 +93,11 @@ type RevealedPassword = {
   expiresAt: number
 }
 
-export function HistoryPage() {
+export function HistoryPage({
+  onPrepareCompression,
+}: {
+  onPrepareCompression?: (id: string) => Promise<void>
+}) {
   const [result, setResult] = React.useState<RecoveryHistoryListResult | null>(
     null
   )
@@ -397,7 +401,7 @@ export function HistoryPage() {
           description="回看归档层级、恢复密码与输出位置。"
           actions={
             <>
-              <TaskRecordsPanel />
+              <TaskRecordsPanel onPrepareCompression={onPrepareCompression} />
               <Button
                 size="sm"
                 variant="outline"

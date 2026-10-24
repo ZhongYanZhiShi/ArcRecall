@@ -1,6 +1,7 @@
 //! Versioned portable data backup. Live queues and OS credentials are deliberately excluded.
 use crate::{
     AppPaths, AppSettings, DatabaseRestoreInfo, DictionaryCandidateStore, SettingsStore,
+    compression_presets::{CompressionPreset, CompressionPresetStore},
     processing_presets::{ProcessingPreset, ProcessingPresetStore},
     settings::{LoggingSettings, RecoverySettings},
     task_records::{TaskRecord, TaskRecordStore},
@@ -47,25 +48,37 @@ impl PortableSettings {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BackupContents {
     pub version: u32,
+    #[serde(default)]
+    pub compression_presets: Option<Vec<CompressionPreset>>,
     pub presets: Vec<ProcessingPreset>,
     pub records: Vec<TaskRecord>,
     pub settings: PortableSettings,
 }
 impl BackupContents {
     fn validate(&self) -> Result<(), String> {
-        if self.version != 1 {
+        if !matches!(self.version, 1 | 2)
+            || (self.version == 2 && self.compression_presets.is_none())
+            || (self.version == 1 && self.compression_presets.is_some())
+        {
             return Err("不支持此备份版本，请使用匹配版本的 ArcRecall。".into());
         }
         if !self.settings.logging.has_valid_disk_limit() {
             return Err("备份的日志设置无效。".into());
         }
         let temp = tempfile::tempdir().map_err(|e| e.to_string())?;
+        if let Some(presets) = &self.compression_presets {
+            CompressionPresetStore::open(&temp.path().join("compression.db"))?
+                .replace_all(presets)?;
+        }
         let mut presets = ProcessingPresetStore::open(&temp.path().join("presets.db"))?;
         for preset in &self.presets {
             presets.save(preset, false)?;
         }
         let mut ids = std::collections::HashSet::new();
         for record in &self.records {
+            if let Some(options) = &record.compression {
+                options.validate()?;
+            }
             if record.task_id.is_empty()
                 || !ids.insert(&record.task_id)
                 || !matches!(
@@ -89,7 +102,10 @@ pub fn create(
     destination: &Path,
 ) -> Result<u64, String> {
     let contents = BackupContents {
-        version: 1,
+        version: 2,
+        compression_presets: Some(
+            CompressionPresetStore::open(&paths.root.join("compression-presets.db"))?.list()?,
+        ),
         presets: ProcessingPresetStore::open(&paths.root.join("processing-presets.db"))?.list()?,
         records: TaskRecordStore::open(&paths.root.join("task-records.db"))?.all()?,
         settings: PortableSettings::from_settings(&settings.load().map_err(|e| e.to_string())?),
@@ -190,6 +206,10 @@ fn apply(
     }
     if let Some(contents) = contents {
         contents.settings.apply(settings)?;
+        if let Some(presets) = &contents.compression_presets {
+            CompressionPresetStore::open(&paths.root.join("compression-presets.db"))?
+                .replace_all(presets)?;
+        }
         ProcessingPresetStore::open(&paths.root.join("processing-presets.db"))?
             .replace_all(&contents.presets)?;
         TaskRecordStore::open(&paths.root.join("task-records.db"))?
@@ -283,6 +303,23 @@ mod tests {
         (paths, dictionary, settings)
     }
     fn seed(paths: &AppPaths, dictionary: &DictionaryCandidateStore, settings: &SettingsStore) {
+        CompressionPresetStore::open(&paths.root.join("compression-presets.db"))
+            .unwrap()
+            .save(
+                &CompressionPreset {
+                    name: "资料压缩".into(),
+                    options: crate::compression_presets::CompressionOptions {
+                        format: crate::CompressionFormat::SevenZip,
+                        level: 5,
+                        encrypt_file_names: false,
+                        output_directory: None,
+                    },
+                    name_template: "{name}".into(),
+                    open_when_done: false,
+                },
+                false,
+            )
+            .unwrap();
         dictionary.add_candidates(["candidate"]).unwrap();
         dictionary.assign_group("测试分组", &[1]).unwrap();
         ProcessingPresetStore::open(&paths.root.join("processing-presets.db"))
@@ -313,6 +350,61 @@ mod tests {
         settings
             .update_preferences(SettingsUpdate::AutoUpdate(false))
             .unwrap();
+    }
+
+    #[test]
+    fn compression_presets_round_trip_and_old_versions_preserve_local_presets() {
+        let temp = tempfile::tempdir().unwrap();
+        let (paths, dictionary, settings) = setup(temp.path());
+        let preset = CompressionPreset {
+            name: "资料打包".into(),
+            options: crate::compression_presets::CompressionOptions {
+                format: crate::CompressionFormat::SevenZip,
+                level: 5,
+                encrypt_file_names: false,
+                output_directory: None,
+            },
+            name_template: "{name}-{date}".into(),
+            open_when_done: false,
+        };
+        let mut store =
+            CompressionPresetStore::open(&paths.root.join("compression-presets.db")).unwrap();
+        store.save(&preset, false).unwrap();
+        let backup = paths.exports.join("compression.arcrecall");
+        create(&paths, &dictionary, &settings, &backup).unwrap();
+        let snapshot = paths.root.join("snapshot.db");
+        let (_, contents) = prepare(&backup, &snapshot).unwrap();
+        let mut contents = contents.unwrap();
+        assert_eq!(contents.version, 2);
+        assert_eq!(
+            contents.compression_presets.as_ref().unwrap()[0].name,
+            preset.name
+        );
+        store.replace_all(&[]).unwrap();
+        restore(
+            &paths,
+            &dictionary,
+            &settings,
+            &snapshot,
+            Some(&contents),
+            &paths.exports.join("safety.arcrecall"),
+        )
+        .unwrap();
+        assert_eq!(store.list().unwrap().len(), 1);
+        contents.compression_presets = None;
+        assert!(contents.validate().is_err());
+        contents.version = 1;
+        contents.validate().unwrap();
+        restore(
+            &paths,
+            &dictionary,
+            &settings,
+            &snapshot,
+            Some(&contents),
+            &paths.exports.join("legacy-safety.arcrecall"),
+        )
+        .unwrap();
+        assert_eq!(store.list().unwrap().len(), 1);
     }
 
     #[test]
@@ -430,6 +522,7 @@ mod tests {
         let (_, contents) = prepare(&source, &snapshot).unwrap();
         let mut contents = contents.unwrap();
         contents.presets.clear();
+        contents.compression_presets = Some(vec![]);
         contents.records.clear();
         contents.settings.auto_update = true;
         let conn = Connection::open(&snapshot).unwrap();
@@ -444,6 +537,14 @@ mod tests {
             &paths.exports.join("safety.arcrecall"),
         );
         assert!(result.unwrap_err().contains("已还原原有数据"));
+        assert_eq!(
+            CompressionPresetStore::open(&paths.root.join("compression-presets.db"))
+                .unwrap()
+                .list()
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(dictionary.count().unwrap(), 1);
         assert!(!settings.load().unwrap().auto_update);
         assert_eq!(
@@ -485,7 +586,19 @@ mod tests {
             .replace_all(&[])
             .unwrap();
         dictionary.add_candidates(["partial-write"]).unwrap();
+        CompressionPresetStore::open(&paths.root.join("compression-presets.db"))
+            .unwrap()
+            .replace_all(&[])
+            .unwrap();
         rollback_pending(&paths, &dictionary, &settings).unwrap();
+        assert_eq!(
+            CompressionPresetStore::open(&paths.root.join("compression-presets.db"))
+                .unwrap()
+                .list()
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(dictionary.count().unwrap(), 1);
         assert!(!settings.load().unwrap().auto_update);
         assert_eq!(

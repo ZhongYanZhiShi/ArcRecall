@@ -1,5 +1,7 @@
 mod backup_management_commands;
+mod compression_preset_commands;
 mod planning_commands;
+use compression_preset_commands::*;
 mod record_management_commands;
 use backup_management_commands::{backup_management_get, backup_policy_save, backup_run_now};
 use record_management_commands::*;
@@ -503,6 +505,11 @@ pub fn run() {
             archive_batch_check_status,
             archive_batch_check_export,
             processing_presets_list,
+            compression_presets_list,
+            compression_retry_prepare,
+            compression_preset_save,
+            compression_preset_delete,
+            compression_preset_apply,
             processing_preset_save,
             processing_preset_delete,
             processing_preset_apply,

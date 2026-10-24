@@ -6,6 +6,8 @@ import type { ByteStreamActivity } from "@/lib/byte-stream-motion"
 import { toast } from "sonner"
 
 import { CompressPageView } from "@/components/home/compress-page-view"
+import { CompressionPresets } from "@/components/home/compression-presets"
+import { draftWithCompressionPreset } from "@/lib/compression-presets"
 import {
   generateAiArchiveName,
   listAiProfiles,
@@ -49,11 +51,13 @@ export function CompressPage({
   onDraftChange,
   onOpenAiSettings,
   onStreamActivityChange,
+  onRegisterDraftGuard,
 }: {
   draft: CompressionDraft
   onDraftChange: React.Dispatch<React.SetStateAction<CompressionDraft>>
   onOpenAiSettings: () => void
   onStreamActivityChange?: (activity: ByteStreamActivity) => void
+  onRegisterDraftGuard?: (guard: () => boolean) => void
 }) {
   const {
     sources,
@@ -96,9 +100,9 @@ export function CompressPage({
       onError: (reason) => setError(toErrorMessage(reason)),
     })
   React.useEffect(() => {
-    onStreamActivityChange?.(running ? "running" : "idle")
+    onStreamActivityChange?.(running || busy ? "running" : "idle")
     return () => onStreamActivityChange?.("idle")
-  }, [running, onStreamActivityChange])
+  }, [running, busy, onStreamActivityChange])
   const openedTasks = React.useRef(new Set<string>())
   const archiveNamesAwaitingCompletion = React.useRef(new Set<string>())
   const operationBusy = React.useRef(false)
@@ -107,6 +111,11 @@ export function CompressPage({
     () => operationBusy.current || runningRef.current,
     [runningRef]
   )
+  React.useLayoutEffect(() => {
+    // Keep this guard registered while Activity hides the page: asynchronous
+    // naming and credential work can still own the draft while effects pause.
+    onRegisterDraftGuard?.(() => operationBusy.current)
+  }, [onRegisterDraftGuard])
   const referencePreferences = useCompressionNamingPreferences(
     draft,
     onDraftChange,
@@ -161,7 +170,7 @@ export function CompressPage({
         }
         setHasPermanentPassword(status.hasPassword)
         if (!permanentPasswordInitialized.current || !status.hasPassword) {
-          setUsePermanentPassword(status.hasPassword)
+          setUsePermanentPassword(status.hasPassword && !draft.retryPrepared)
         }
         permanentPasswordInitialized.current = true
       })
@@ -178,7 +187,7 @@ export function CompressPage({
     return () => {
       disposed = true
     }
-  }, [])
+  }, [draft.retryPrepared])
 
   const handleSavePermanentPassword = React.useCallback(async () => {
     if (isDraftLocked()) return
@@ -395,6 +404,10 @@ export function CompressPage({
         return
       setPasswordValidationRequested(true)
       if (passwordError) return
+      if (draft.retryPasswordRequired && !password) {
+        setError("原任务使用了密码，请重新输入密码并确认后再压缩。")
+        return
+      }
       if (sources.length === 0) {
         setError("请先添加至少一个文件或文件夹。")
         return
@@ -481,6 +494,7 @@ export function CompressPage({
     },
     [
       activeAiProfile,
+      draft.retryPasswordRequired,
       baseName,
       encryptFileNames,
       format,
@@ -547,6 +561,19 @@ export function CompressPage({
 
   return (
     <CompressPageView
+      presets={
+        <CompressionPresets
+          draft={draft}
+          disabled={busy || running || passwordCredentialBusy}
+          onApply={(preset) => {
+            if (isDraftLocked()) return
+            operationVersion.current += 1
+            onDraftChange((current) =>
+              draftWithCompressionPreset(current, preset)
+            )
+          }}
+        />
+      }
       referencePreview={referencePreview}
       referencePreferences={referencePreferences}
       draft={draft}

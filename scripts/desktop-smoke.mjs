@@ -558,6 +558,29 @@ async function verifyAiFileReference() {
   }
 }
 
+if (process.argv.includes("--compression-presets-only")) {
+  try {
+    await launch()
+    const { verifyCompressionPresets } =
+      await import("./desktop-compression-presets.mjs")
+    const preset = await verifyCompressionPresets({
+      invoke,
+      page,
+      data,
+      evidence,
+      password,
+    })
+    await close()
+    await launch()
+    assert.deepEqual(await invoke("compression_presets_list"), [preset])
+    assert.deepEqual(errors, [])
+  } finally {
+    await close(false)
+  }
+  console.log(`Compression preset evidence: ${evidence}`)
+  process.exit(0)
+}
+
 if (process.argv.includes("--data-management-only")) {
   try {
     await launch()
