@@ -114,14 +114,9 @@ pub(crate) async fn task_record_delete(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
-    let maintenance = Arc::clone(&state.data_maintenance);
-    let path = state.paths.root.join("task-records.db");
-    tauri::async_runtime::spawn_blocking(move || {
-        let _guard = maintenance.lock().map_err(|e| e.to_string())?;
-        TaskRecordStore::open(&path)?.delete(&id)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    crate::record_management_commands::delete_records(&state, vec![id])
+        .await
+        .map(|_| ())
 }
 
 #[tauri::command]

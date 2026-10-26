@@ -98,17 +98,8 @@ impl TaskRecordStore {
             )
             .optional()
             .map_err(|e| e.to_string())?;
-        row.map(|(json, state)| {
-            let mut record: TaskRecord = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-            record.state = state;
-            if record.state == "interrupted"
-                && record.compression_verification == Some(CompressionVerification::Running)
-            {
-                record.compression_verification = Some(CompressionVerification::Interrupted);
-            }
-            Ok(record)
-        })
-        .transpose()
+        row.map(|(json, state)| query::decode_record(&json, state))
+            .transpose()
     }
 
     pub fn save_for_session(&self, record: &TaskRecord, session: &Path) -> Result<(), String> {
@@ -254,6 +245,21 @@ mod tests {
         assert_eq!(all.len(), 205);
         assert_eq!(all[0].task_id, "task-204");
         assert_eq!(all[204].task_id, "task-000");
+        for record in store.search(&TaskRecordQuery::default(), 0, 100).unwrap() {
+            let found = store.find(&record.task_id).unwrap().unwrap();
+            let exported = all
+                .iter()
+                .find(|row| row.task_id == record.task_id)
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(&found).unwrap(),
+                serde_json::to_value(&record).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_value(&found).unwrap(),
+                serde_json::to_value(exported).unwrap()
+            );
+        }
         assert!(all.iter().all(|row| row.compression_verification
             == Some(CompressionVerification::Interrupted)
             && row.check_items[0].state == "interrupted"));

@@ -73,6 +73,27 @@ export async function verifyDataManagement({
     "PASS: native record search, JSON/CSV export, UI filters and confirmed bulk deletion preserve source files"
   )
 
+  const successful = await invoke("task_records_search", {
+    query: { text: basename(archive), state: "success" },
+    skip: 0,
+  })
+  assert.equal(successful.length, 1)
+  await invoke("task_record_delete", { id: successful[0].taskId })
+  await invoke("task_record_delete", { id: successful[0].taskId })
+  assert.equal(
+    (
+      await invoke("task_records_search", {
+        query: { text: basename(archive) },
+        skip: 0,
+      })
+    ).length,
+    0
+  )
+  await access(archive)
+  console.log(
+    "PASS: native single-record deletion is idempotent and preserves source files"
+  )
+
   const manual = await invoke("data_backup")
   const policy = {
     enabled: false,

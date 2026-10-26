@@ -24,16 +24,32 @@ pub(crate) async fn task_records_delete(
     state: State<'_, AppState>,
     ids: Vec<String>,
 ) -> Result<usize, String> {
-    let path = state.paths.root.join("task-records.db");
-    let maintenance = state.data_maintenance.clone();
-    let lease = state.lifecycle.begin()?;
-    tauri::async_runtime::spawn_blocking(move || {
+    delete_records(&state, ids).await
+}
+
+pub(crate) async fn delete_records(state: &AppState, ids: Vec<String>) -> Result<usize, String> {
+    start_delete_records(
+        state.paths.root.join("task-records.db"),
+        state.data_maintenance.clone(),
+        &state.lifecycle,
+        ids,
+    )?
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn start_delete_records(
+    path: std::path::PathBuf,
+    maintenance: std::sync::Arc<std::sync::Mutex<()>>,
+    lifecycle: &std::sync::Arc<crate::task_lifecycle::TaskLifecycle>,
+    ids: Vec<String>,
+) -> Result<tauri::async_runtime::JoinHandle<Result<usize, String>>, String> {
+    let lease = lifecycle.begin()?;
+    Ok(tauri::async_runtime::spawn_blocking(move || {
         let _lease = lease;
         let _guard = maintenance.lock().map_err(|e| e.to_string())?;
         TaskRecordStore::open(&path)?.delete_many(&ids)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    }))
 }
 fn render(
     mut records: Vec<arc_recall_core::task_records::TaskRecord>,
@@ -151,6 +167,44 @@ pub(crate) async fn task_records_export(
 mod tests {
     use super::*;
     use arc_recall_core::task_records::{TaskCheckItem, TaskRecord};
+    #[test]
+    fn deletion_blocks_updates_and_shutdown_waits_even_if_caller_is_dropped() {
+        use std::sync::{Arc, Mutex, mpsc};
+        use std::time::Duration;
+        for ids in [
+            vec!["first".to_string()],
+            vec!["first".to_string(), "second".to_string()],
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("records.db");
+            let store = TaskRecordStore::open(&path).unwrap();
+            for id in &ids {
+                store
+                    .save(&TaskRecord {
+                        task_id: id.clone(),
+                        ..Default::default()
+                    })
+                    .unwrap();
+            }
+            let lifecycle = Arc::new(crate::task_lifecycle::TaskLifecycle::default());
+            let maintenance = Arc::new(Mutex::new(()));
+            let guard = maintenance.lock().unwrap();
+            let worker = start_delete_records(path, maintenance.clone(), &lifecycle, ids).unwrap();
+            assert!(lifecycle.reserve_update().is_err());
+            drop(worker);
+            lifecycle.request_shutdown();
+            let (tx, rx) = mpsc::channel();
+            let waiter = std::thread::spawn(move || {
+                lifecycle.wait_until_finished();
+                tx.send(()).unwrap();
+            });
+            assert!(rx.recv_timeout(Duration::from_millis(30)).is_err());
+            drop(guard);
+            rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            waiter.join().unwrap();
+            assert!(store.all().unwrap().is_empty());
+        }
+    }
     #[test]
     fn exports_redact_all_path_fields_and_escape_csv_formulas() {
         let record = TaskRecord {
