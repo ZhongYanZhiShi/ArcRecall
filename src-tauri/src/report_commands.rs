@@ -1,7 +1,7 @@
 use crate::AppState;
+use crate::report_support::{ReportFormat, csv_cell, write_report};
 use arc_recall_core::{ArchiveFormat, RecoveryComputeMode};
 use serde::{Deserialize, Serialize};
-use std::{fs, io::Write};
 use tauri::State;
 
 #[derive(Deserialize, Serialize)]
@@ -67,24 +67,6 @@ struct ReportPaths {
     pending: Vec<String>,
     unscanned: Vec<String>,
 }
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum ReportFormat {
-    Json,
-    Csv,
-}
-
-pub(crate) fn csv_cell(value: &str) -> String {
-    // Quoting alone does not prevent spreadsheet formulas.
-    let unsafe_start = value.trim_start().starts_with(['=', '+', '-', '@'])
-        || value.starts_with(['\t', '\r', '\n']);
-    format!(
-        "\"{}{}\"",
-        if unsafe_start { "'" } else { "" },
-        value.replace('"', "\"\"")
-    )
-}
-
 fn render_report(report: &RecoveryReport, format: &ReportFormat) -> Result<String, String> {
     if report.version != 1 {
         return Err("不支持的报告版本。".into());
@@ -148,34 +130,9 @@ pub(crate) async fn recovery_report_export(
         if content.len() > 4 * 1024 * 1024 {
             return Err("报告过大。".into());
         }
-        fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-        let suffix = match format {
-            ReportFormat::Json => ".json",
-            ReportFormat::Csv => ".csv",
-        };
-        let mut file = tempfile::Builder::new()
-            .prefix("recovery-report-")
-            .suffix(suffix)
-            .tempfile_in(root)
-            .map_err(|e| e.to_string())?;
-        file.write_all(content.as_bytes())
-            .map_err(|e| e.to_string())?;
-        file.as_file().sync_all().map_err(|e| e.to_string())?;
-        let (_, path) = file.keep().map_err(|e| e.to_string())?;
+        let path = write_report(&root, "recovery-report-", &format, &content)?;
         Ok(path.to_string_lossy().into_owned())
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn csv_handles_formulas_quotes_commas_unicode_and_newlines() {
-        assert_eq!(csv_cell("=1+1"), "\"'=1+1\"");
-        assert_eq!(csv_cell("  @SUM(1)"), "\"'  @SUM(1)\"");
-        assert_eq!(csv_cell("\tvalue"), "\"'\tvalue\"");
-        assert_eq!(csv_cell("中文,\"a\"\nnext"), "\"中文,\"\"a\"\"\nnext\"");
-    }
 }

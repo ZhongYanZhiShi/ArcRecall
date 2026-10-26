@@ -1,13 +1,14 @@
-use crate::AppState;
+use crate::{
+    AppState,
+    report_support::{ReportFormat, csv_cell, write_report},
+};
 use arc_recall_core::{
     CancellationToken,
     tools::{ArchiveActionRequest, analyze_archive, path_for_display, run_archive_action},
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{
     collections::{HashMap, HashSet},
-    fs,
-    io::Write,
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex},
     time::Instant,
@@ -507,13 +508,6 @@ pub(crate) fn archive_batch_check_status(
     snapshot(&state.batch_check).filter(|batch| batch.id == id)
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum BatchReportFormat {
-    Json,
-    Csv,
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BatchReport<'a> {
@@ -537,19 +531,9 @@ struct ReportItem<'a> {
     checked_at_ms: Option<u64>,
 }
 
-fn csv_cell(value: &str) -> String {
-    let unsafe_start = value.trim_start().starts_with(['=', '+', '-', '@'])
-        || value.starts_with(['\t', '\r', '\n']);
-    format!(
-        "\"{}{}\"",
-        if unsafe_start { "'" } else { "" },
-        value.replace('"', "\"\"")
-    )
-}
-
 fn render_report(
     batch: &BatchCheckStatus,
-    format: &BatchReportFormat,
+    format: &ReportFormat,
     include_paths: bool,
 ) -> Result<String, String> {
     if batch.running {
@@ -576,8 +560,8 @@ fn render_report(
             .collect(),
     };
     match format {
-        BatchReportFormat::Json => serde_json::to_string_pretty(&report).map_err(|e| e.to_string()),
-        BatchReportFormat::Csv => {
+        ReportFormat::Json => serde_json::to_string_pretty(&report).map_err(|e| e.to_string()),
+        ReportFormat::Csv => {
             let mut rows = vec!["\u{feff}version,batchId,generatedAtMs,cancelled,index,state,message,elapsedMs,checkedAtMs,scope".to_string()];
             if include_paths {
                 rows[0].push_str(",path");
@@ -618,7 +602,7 @@ fn render_report(
 pub(crate) async fn archive_batch_check_export(
     state: State<'_, AppState>,
     id: String,
-    format: BatchReportFormat,
+    format: ReportFormat,
     include_paths: bool,
 ) -> Result<String, String> {
     let batch = snapshot(&state.batch_check)
@@ -632,20 +616,7 @@ pub(crate) async fn archive_batch_check_export(
         if content.len() > 4 * 1024 * 1024 {
             return Err("报告过大。".into());
         }
-        fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-        let suffix = match format {
-            BatchReportFormat::Json => ".json",
-            BatchReportFormat::Csv => ".csv",
-        };
-        let mut file = tempfile::Builder::new()
-            .prefix("batch-check-report-")
-            .suffix(suffix)
-            .tempfile_in(root)
-            .map_err(|e| e.to_string())?;
-        file.write_all(content.as_bytes())
-            .map_err(|e| e.to_string())?;
-        file.as_file().sync_all().map_err(|e| e.to_string())?;
-        let (_, path) = file.keep().map_err(|e| e.to_string())?;
+        let path = write_report(&root, "batch-check-report-", &format, &content)?;
         Ok(path_for_display(&path))
     })
     .await
@@ -655,6 +626,7 @@ pub(crate) async fn archive_batch_check_export(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn batch(paths: &[&str]) -> SharedBatch {
         Arc::new(Mutex::new(Some(BatchCheckStatus {
@@ -737,7 +709,7 @@ mod tests {
                 .unwrap()
                 .contains("SECRET_MARKER")
         );
-        for format in [BatchReportFormat::Json, BatchReportFormat::Csv] {
+        for format in [ReportFormat::Json, ReportFormat::Csv] {
             assert!(
                 !render_report(&result, &format, true)
                     .unwrap()
@@ -841,19 +813,17 @@ mod tests {
     #[test]
     fn report_omits_paths_by_default_and_neutralizes_csv_formulas() {
         let shared = batch(&["=sensitive-path.zip", "中文,\"file\"\nnext.zip"]);
-        assert!(
-            render_report(&snapshot(&shared).unwrap(), &BatchReportFormat::Json, false).is_err()
-        );
+        assert!(render_report(&snapshot(&shared).unwrap(), &ReportFormat::Json, false).is_err());
         let result = run_checks(&shared, &CancellationToken::default(), |_| Ok(()));
-        let json = render_report(&result, &BatchReportFormat::Json, false).unwrap();
+        let json = render_report(&result, &ReportFormat::Json, false).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["version"], 1);
         assert!(parsed["items"][0].get("path").is_none());
         assert!(parsed["items"][0].get("sourcePaths").is_none());
         assert!(!json.contains("sensitive-path"));
-        let csv = render_report(&result, &BatchReportFormat::Csv, false).unwrap();
+        let csv = render_report(&result, &ReportFormat::Csv, false).unwrap();
         assert!(!csv.contains("sensitive-path"));
-        let csv = render_report(&result, &BatchReportFormat::Csv, true).unwrap();
+        let csv = render_report(&result, &ReportFormat::Csv, true).unwrap();
         assert!(csv.contains("\"'=sensitive-path.zip\""));
         assert!(csv.contains("\"中文,\"\"file\"\"\nnext.zip\""));
         for formula in ["@SUM(A1)", "  +123", "\t=2", "-2"] {

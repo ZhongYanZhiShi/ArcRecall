@@ -22,6 +22,7 @@ mod logging;
 mod queue_journal;
 mod recovery_commands;
 mod report_commands;
+mod report_support;
 mod task_coordination;
 mod task_lifecycle;
 mod update_commands;

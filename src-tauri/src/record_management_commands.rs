@@ -1,9 +1,8 @@
 use crate::{
     AppState,
-    report_commands::{ReportFormat, csv_cell},
+    report_support::{ReportFormat, csv_cell, write_report},
 };
 use arc_recall_core::task_records::{TaskRecordQuery, TaskRecordStore};
-use std::io::Write;
 use tauri::State;
 
 #[tauri::command]
@@ -144,20 +143,7 @@ pub(crate) async fn task_records_export(
         if content.len() > 64 * 1024 * 1024 {
             return Err("报告超过 64 MiB，请缩小查询范围。".into());
         }
-        std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-        let suffix = match format {
-            ReportFormat::Json => ".json",
-            ReportFormat::Csv => ".csv",
-        };
-        let mut file = tempfile::Builder::new()
-            .prefix("task-records-")
-            .suffix(suffix)
-            .tempfile_in(root)
-            .map_err(|e| e.to_string())?;
-        file.write_all(content.as_bytes())
-            .map_err(|e| e.to_string())?;
-        file.as_file().sync_all().map_err(|e| e.to_string())?;
-        let (_, path) = file.keep().map_err(|e| e.to_string())?;
+        let path = write_report(&root, "task-records-", &format, &content)?;
         Ok(path.to_string_lossy().into_owned())
     })
     .await
