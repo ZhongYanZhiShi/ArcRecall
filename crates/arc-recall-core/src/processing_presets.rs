@@ -15,6 +15,40 @@ pub struct ProcessingPreset {
     pub open_when_done: bool,
 }
 
+impl ProcessingPreset {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.trim() != self.name
+            || self.name.is_empty()
+            || self.name.chars().count() > 80
+            || self.name.chars().any(char::is_control)
+        {
+            return Err("预设名称需为 1–80 个可见字符。".into());
+        }
+        if self
+            .output_directory
+            .as_ref()
+            .is_some_and(|p| p.is_empty() || !Path::new(p).is_absolute())
+        {
+            return Err("自定义输出位置必须是绝对路径。".into());
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn validate_presets(presets: &[ProcessingPreset]) -> Result<(), String> {
+    if presets.len() > 100 {
+        return Err("最多保存 100 个预设，请先删除不再使用的预设。".into());
+    }
+    let mut names = std::collections::HashSet::new();
+    for preset in presets {
+        preset.validate()?;
+        if !names.insert(&preset.name) {
+            return Err("同名预设已存在，请确认覆盖。".into());
+        }
+    }
+    Ok(())
+}
+
 pub struct ProcessingPresetStore(Connection);
 impl ProcessingPresetStore {
     pub fn open(path: &Path) -> Result<Self, String> {
@@ -38,20 +72,7 @@ impl ProcessingPresetStore {
         .collect()
     }
     pub fn save(&mut self, preset: &ProcessingPreset, overwrite: bool) -> Result<(), String> {
-        if preset.name.trim() != preset.name
-            || preset.name.is_empty()
-            || preset.name.chars().count() > 80
-            || preset.name.chars().any(char::is_control)
-        {
-            return Err("预设名称需为 1–80 个可见字符。".into());
-        }
-        if preset
-            .output_directory
-            .as_ref()
-            .is_some_and(|p| p.is_empty() || !Path::new(p).is_absolute())
-        {
-            return Err("自定义输出位置必须是绝对路径。".into());
-        }
+        preset.validate()?;
         let tx = self.0.transaction().map_err(|e| e.to_string())?;
         let exists: bool = tx
             .query_row(
@@ -74,12 +95,7 @@ impl ProcessingPresetStore {
         tx.commit().map_err(|e| e.to_string())
     }
     pub fn replace_all(&mut self, presets: &[ProcessingPreset]) -> Result<(), String> {
-        // Validate with exactly the same rules as normal saves before modifying this store.
-        let temp = tempfile::tempdir().map_err(|e| e.to_string())?;
-        let mut validation = Self::open(&temp.path().join("presets.db"))?;
-        for preset in presets {
-            validation.save(preset, false)?;
-        }
+        validate_presets(presets)?;
         let tx = self.0.transaction().map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM processing_presets", [])
             .map_err(|e| e.to_string())?;
@@ -105,6 +121,46 @@ impl ProcessingPresetStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn invalid_replacements_preserve_saved_presets() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = ProcessingPresetStore::open(&temp.path().join("presets.db")).unwrap();
+        let preset = ProcessingPreset {
+            name: "资料预设".into(),
+            output_directory: None,
+            recursive: true,
+            compute_mode: RecoveryComputeMode::CpuOnly,
+            dictionary_group: None,
+            open_when_done: false,
+        };
+        store.save(&preset, false).unwrap();
+        for name in ["", " 空白", "控制\n字符", &"名".repeat(81)] {
+            let mut invalid = preset.clone();
+            invalid.name = name.into();
+            assert!(store.replace_all(&[invalid]).is_err());
+        }
+        let mut invalid = preset.clone();
+        invalid.output_directory = Some("相对目录".into());
+        assert!(store.replace_all(&[invalid]).is_err());
+        assert!(
+            store
+                .replace_all(&[preset.clone(), preset.clone()])
+                .is_err()
+        );
+        let presets: Vec<_> = (0..101)
+            .map(|index| ProcessingPreset {
+                name: format!("预设-{index:03}"),
+                ..preset.clone()
+            })
+            .collect();
+        assert!(store.replace_all(&presets).is_err());
+        assert_eq!(store.list().unwrap()[0].name, preset.name);
+        store.replace_all(&presets[..100]).unwrap();
+        assert_eq!(store.list().unwrap().len(), 100);
+        let mut absolute = presets[0].clone();
+        absolute.output_directory = Some(temp.path().to_string_lossy().into_owned());
+        store.save(&absolute, true).unwrap();
+    }
     #[test]
     fn presets_survive_restart_and_require_explicit_overwrite() {
         let temp = tempfile::tempdir().unwrap();

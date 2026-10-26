@@ -98,6 +98,20 @@ impl CompressionRecordOptions {
     }
 }
 
+pub(crate) fn validate_presets(presets: &[CompressionPreset]) -> Result<(), String> {
+    let mut names = std::collections::HashSet::new();
+    if presets.len() > 100 {
+        return Err("压缩预设超过 100 个。".into());
+    }
+    for preset in presets {
+        preset.validate()?;
+        if !names.insert(&preset.name) {
+            return Err("压缩预设名称重复。".into());
+        }
+    }
+    Ok(())
+}
+
 pub struct CompressionPresetStore(Connection);
 impl CompressionPresetStore {
     pub fn open(path: &Path) -> Result<Self, String> {
@@ -152,16 +166,7 @@ impl CompressionPresetStore {
         Ok(())
     }
     pub fn replace_all(&mut self, presets: &[CompressionPreset]) -> Result<(), String> {
-        let mut names = std::collections::HashSet::new();
-        if presets.len() > 100 {
-            return Err("压缩预设超过 100 个。".into());
-        }
-        for preset in presets {
-            preset.validate()?;
-            if !names.insert(&preset.name) {
-                return Err("压缩预设名称重复。".into());
-            }
-        }
+        validate_presets(presets)?;
         let tx = self.0.transaction().map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM compression_presets", [])
             .map_err(|e| e.to_string())?;

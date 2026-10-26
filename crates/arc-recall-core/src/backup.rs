@@ -79,15 +79,10 @@ impl BackupContents {
         if !self.settings.logging.has_valid_disk_limit() {
             return Err("备份的日志设置无效。".into());
         }
-        let temp = tempfile::tempdir().map_err(|e| e.to_string())?;
         if let Some(presets) = &self.compression_presets {
-            CompressionPresetStore::open(&temp.path().join("compression.db"))?
-                .replace_all(presets)?;
+            crate::compression_presets::validate_presets(presets)?;
         }
-        let mut presets = ProcessingPresetStore::open(&temp.path().join("presets.db"))?;
-        for preset in &self.presets {
-            presets.save(preset, false)?;
-        }
+        crate::processing_presets::validate_presets(&self.presets)?;
         let mut ids = std::collections::HashSet::new();
         for record in &self.records {
             if let Some(options) = &record.compression {
