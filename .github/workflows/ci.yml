@@ -39,6 +39,9 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare WebView2 runtime
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/prepare-native-test-runtime.ps1 -InstallIfMissing
+
       - name: Verify frontend formatting
         run: pnpm format:check
 
@@ -118,6 +121,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
+      - name: Prepare WebView2 runtime
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/prepare-native-test-runtime.ps1 -InstallIfMissing
       - name: Build isolated native test application
         run: |
           $env:CARGO_TARGET_DIR = Join-Path (Get-Location) "target/native-e2e"
