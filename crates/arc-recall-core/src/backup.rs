@@ -17,6 +17,20 @@ use std::{
 const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
 const MARKER: &str = "data-restore-pending.json";
 
+/// Kept separate from the marker: removing or replacing the marker must never
+/// release ownership while another process is starting or restoring data.
+fn lock_restore(paths: &AppPaths) -> Result<fs::File, String> {
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(paths.root.join("data-restore.lock"))
+        .map_err(|e| format!("无法打开数据恢复锁：{e}"))?;
+    lock.lock().map_err(|e| format!("无法锁定数据恢复：{e}"))?;
+    Ok(lock)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PortableSettings {
@@ -229,6 +243,7 @@ pub fn restore(
     contents: Option<&BackupContents>,
     safety_backup: &Path,
 ) -> Result<DatabaseRestoreInfo, String> {
+    let _ownership = lock_restore(paths)?;
     if paths.root.join(MARKER).exists() {
         return Err("上次恢复尚未完成，请重启应用以还原安全备份。".into());
     }
@@ -252,7 +267,7 @@ pub fn restore(
             })?;
             Ok(info)
         }
-        Err(error) => match rollback_pending(paths, dictionary, settings) {
+        Err(error) => match rollback_pending_locked(paths, dictionary, settings) {
             Ok(()) => Err(format!("恢复失败，已还原原有数据：{error}")),
             Err(_) => Err(format!(
                 "恢复失败且自动回滚未完成，请重启应用。安全备份：{}",
@@ -263,6 +278,15 @@ pub fn restore(
 }
 
 pub fn rollback_pending(
+    paths: &AppPaths,
+    dictionary: &DictionaryCandidateStore,
+    settings: &SettingsStore,
+) -> Result<(), String> {
+    let _ownership = lock_restore(paths)?;
+    rollback_pending_locked(paths, dictionary, settings)
+}
+
+fn rollback_pending_locked(
     paths: &AppPaths,
     dictionary: &DictionaryCandidateStore,
     settings: &SettingsStore,
@@ -588,6 +612,65 @@ mod tests {
             1
         );
         assert!(!paths.root.join(MARKER).exists());
+    }
+
+    #[test]
+    fn startup_waits_for_another_process_to_finish_restoring() {
+        const CHILD_ROOT: &str = "ARC_RECALL_RESTORE_LOCK_TEST_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let (paths, dictionary, settings) = setup(Path::new(&root));
+            fs::write(paths.root.join("child-ready"), b"ready").unwrap();
+            rollback_pending(&paths, &dictionary, &settings).unwrap();
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let (paths, dictionary, settings) = setup(temp.path());
+        seed(&paths, &dictionary, &settings);
+        let safety = paths.exports.join("safety.arcrecall");
+        create(&paths, &dictionary, &settings, &safety).unwrap();
+        let owner = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(paths.root.join("data-restore.lock"))
+            .unwrap();
+        owner.lock().unwrap();
+        fs::write(
+            paths.root.join(MARKER),
+            serde_json::to_vec(&safety).unwrap(),
+        )
+        .unwrap();
+        dictionary.add_candidates(["restored-candidate"]).unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "backup::tests::startup_waits_for_another_process_to_finish_restoring",
+            ])
+            .env(CHILD_ROOT, &paths.root);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let mut child = command.spawn().unwrap();
+        let started = std::time::Instant::now();
+        while !paths.root.join("child-ready").exists() && started.elapsed().as_secs() < 10 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let waited = child.try_wait().unwrap().is_none();
+        // Successful restoration removes the marker before releasing ownership.
+        let preserved = paths.root.join(MARKER).exists() && dictionary.count().unwrap() == 2;
+        let _ = fs::remove_file(paths.root.join(MARKER));
+        drop(owner);
+        let status = child.wait().unwrap();
+        assert!(paths.root.join("child-ready").exists());
+        assert!(waited, "startup must wait for the active restore owner");
+        assert!(preserved, "startup must not roll back an active restore");
+        assert!(status.success());
+        assert_eq!(dictionary.count().unwrap(), 2);
     }
 
     #[test]
