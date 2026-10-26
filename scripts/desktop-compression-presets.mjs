@@ -141,6 +141,16 @@ export async function verifyCompressionPresets({
   assert.ok(!report.includes(directory) && !report.includes(password))
   assert.equal(JSON.parse(report).records[0].compression.baseName, "")
   await page.getByRole("button", { name: "历史", exact: true }).click()
+  await invoke("settings_update", {
+    update: {
+      kind: "compressionNaming",
+      value: {
+        ...(await invoke("settings_get")).compressionNaming,
+        useAiRename: true,
+        useAiFileReference: true,
+      },
+    },
+  })
   await page.getByRole("button", { name: "任务记录", exact: true }).click()
   const panel = page.getByRole("dialog", { name: "任务记录与重试" })
   await panel.getByRole("button", { name: "准备重新压缩", exact: true }).click()
@@ -152,6 +162,18 @@ export async function verifyCompressionPresets({
     records[0].compression.baseName
   )
   await expect(page.locator("#compression-password")).toHaveValue("")
+  await page
+    .getByRole("button", { name: "AI 命名 · 未开启", exact: true })
+    .click()
+  await expect(
+    page.getByRole("switch", { name: "使用 AI 优化名称", exact: true })
+  ).not.toBeChecked()
+  // Stored defaults remain enabled; only this historical retry overrides them.
+  assert.equal(
+    (await invoke("settings_get")).compressionNaming.useAiRename,
+    true
+  )
+  await page.keyboard.press("Escape")
   await page.getByRole("button", { name: "开始压缩", exact: true }).click()
   await expect(
     page.getByText("原任务使用了密码，请重新输入密码并确认后再压缩。", {

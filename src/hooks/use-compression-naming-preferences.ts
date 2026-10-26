@@ -50,9 +50,14 @@ export function useCompressionNamingPreferences(
         if (settings.compressionNaming) {
           const preferences = {
             ...settings.compressionNaming,
-            useAiRename: settings.compressionNaming.useAiRename ?? false,
+            // A historical retry requires a fresh choice to use AI, even when
+            // new archives normally inherit enabled naming preferences.
+            useAiRename:
+              !draft.retryPrepared &&
+              (settings.compressionNaming.useAiRename ?? false),
             useAiFileReference:
-              settings.compressionNaming.useAiFileReference ?? false,
+              !draft.retryPrepared &&
+              (settings.compressionNaming.useAiFileReference ?? false),
           }
           latest.current = preferences
           onDraftChange((current) => ({
@@ -73,7 +78,7 @@ export function useCompressionNamingPreferences(
     return () => {
       disposed = true
     }
-  }, [loadVersion, onDraftChange])
+  }, [draft.retryPrepared, loadVersion, onDraftChange])
 
   const save = React.useCallback((preferences: CompressionNamingSettings) => {
     latest.current = preferences

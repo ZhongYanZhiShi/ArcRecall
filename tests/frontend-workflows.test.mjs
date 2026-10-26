@@ -2512,6 +2512,49 @@ test("压缩模板使用本地日期且不再次解释来源中的占位符，�
   assert.deepEqual(result.sources, draft.sources)
 })
 
+test("历史重压缩加载偏好后仍关闭 AI，显式开启才更新偏好", async () => {
+  const writes = []
+  const harness = sourceHarness({
+    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/settings": {
+      getSettings: async () => ({
+        compressionNaming: {
+          useAiRename: true,
+          useAiFileReference: true,
+          selectedExtensions: ["md"],
+          customExtensions: [],
+        },
+      }),
+      updateSettings: async (update) => writes.push(update),
+    },
+  })
+  let draft = {
+    ...harness.load("src/lib/compression-draft.ts").createCompressionDraft(),
+    retryPrepared: true,
+  }
+  const change = (update) => {
+    draft = update(draft)
+  }
+  const { useCompressionNamingPreferences } = harness.load(
+    "src/hooks/use-compression-naming-preferences.ts"
+  )
+  const render = () =>
+    harness.render(() =>
+      useCompressionNamingPreferences(draft, change, () => false)
+    )
+  render()
+  await settle()
+  assert.equal(draft.useAiRename, false)
+  assert.equal(draft.useAiFileReference, false)
+  assert.equal(draft.aiReferenceExtensions, "md")
+  assert.equal(writes.length, 0)
+  render().setEnabled("useAiRename", true)
+  await settle()
+  assert.equal(draft.useAiRename, true)
+  assert.equal(writes.at(-1).value.useAiFileReference, false)
+  harness.hide()
+})
+
 test("统一备份预览显示各类数据范围，取消不应用恢复", async () => {
   const calls = []
   const harness = sourceHarness({
