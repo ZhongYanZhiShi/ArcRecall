@@ -513,17 +513,12 @@ mod tests {
     use crate::credential_protection::{protect_history_password, unprotect_history_password};
     use arc_recall_core::{RecoveryHistoryRecord, RecoveryHistoryStore};
 
-    #[test]
-    fn backup_command_blocks_updates_and_shutdown_until_native_worker_finishes() {
+    fn test_state(directory: &Path) -> AppState {
         use crate::logging::LogStore;
         use crate::task_lifecycle::{RecoverySession, TaskLifecycle};
         use arc_recall_core::{AppPaths, SettingsStore};
         use std::sync::atomic::AtomicBool;
-        use std::time::{Duration, Instant};
-        use tauri::Manager;
-
-        let directory = tempfile::tempdir().unwrap();
-        let paths = AppPaths::from_root(directory.path());
+        let paths = AppPaths::from_root(directory);
         paths.ensure_dirs().unwrap();
         let dictionary = Arc::new(Mutex::new(
             DictionaryCandidateStore::open(&paths.database).unwrap(),
@@ -534,7 +529,7 @@ mod tests {
             .add_candidates(["backup-fixture"])
             .unwrap();
         let lifecycle = Arc::new(TaskLifecycle::default());
-        let state = AppState {
+        AppState {
             queue_journal: Arc::new(Mutex::new(crate::queue_journal::QueueJournal::new(
                 paths.root.join("recovery-queue.json"),
             ))),
@@ -546,7 +541,7 @@ mod tests {
             logger: Arc::new(LogStore::new(&paths.logs).unwrap()),
             recovery_session: RecoverySession::create(&paths.temp).unwrap(),
             paths,
-            resource_dir: directory.path().to_path_buf(),
+            resource_dir: directory.to_path_buf(),
             dictionary: Arc::clone(&dictionary),
             dictionary_imports: crate::dictionary_imports::DictionaryImports::default(),
             prepared_restore: Mutex::new(None),
@@ -558,7 +553,18 @@ mod tests {
             lifecycle: Arc::clone(&lifecycle),
             exit_ready: AtomicBool::new(false),
             seven_zip_cache: Arc::new(Mutex::new(None)),
-        };
+        }
+    }
+
+    #[test]
+    fn backup_command_blocks_updates_and_shutdown_until_native_worker_finishes() {
+        use std::time::{Duration, Instant};
+        use tauri::Manager;
+
+        let directory = tempfile::tempdir().unwrap();
+        let state = test_state(directory.path());
+        let lifecycle = Arc::clone(&state.lifecycle);
+        let dictionary = Arc::clone(&state.dictionary);
         // Only the window runtime is mocked; the command, worker, lifecycle and SQLite are real.
         let app = tauri::test::mock_builder()
             .manage(state)
@@ -603,6 +609,130 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn completed_archive_workers_keep_shutdown_waiting_until_final_records_are_saved() {
+        use arc_recall_core::task_records::TaskRecordStore;
+        use std::os::windows::process::CommandExt;
+        use std::time::{Duration, Instant};
+        use tauri::Manager;
+
+        let executable = std::env::var_os("ARC_RECALL_TEST_7ZIP")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("C:/Program Files/7-Zip/7z.exe"));
+        assert!(executable.exists(), "native regression requires 7-Zip");
+        for batch in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let state = test_state(directory.path());
+            let tools = state.paths.tools.join("7zip/26.02");
+            std::fs::create_dir_all(&tools).unwrap();
+            std::fs::copy(&executable, tools.join("7z.exe")).unwrap();
+            std::fs::copy(executable.with_file_name("7z.dll"), tools.join("7z.dll")).unwrap();
+            let source = directory.path().join("归档内容.txt");
+            let archive = directory.path().join("测试归档.7z");
+            std::fs::write(&source, "native finalization fixture").unwrap();
+            assert!(
+                std::process::Command::new(&executable)
+                    .creation_flags(0x08000000)
+                    .args(["a", "-t7z"])
+                    .arg(&archive)
+                    .arg(&source)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+            let lifecycle = Arc::clone(&state.lifecycle);
+            let cache = Arc::clone(&state.seven_zip_cache);
+            // Delay engine preparation so we can hold the finalization mutex.
+            let cache_guard = cache.lock().unwrap();
+            let app = tauri::test::mock_builder()
+                .manage(state)
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+            let handle = app.handle().clone();
+            let task = tauri::async_runtime::spawn(async move {
+                if batch {
+                    crate::batch_check_commands::archive_batch_check_run(
+                        handle.state(),
+                        "finalization".into(),
+                        vec![archive.to_string_lossy().into_owned()],
+                        None,
+                        None,
+                    )
+                    .await
+                    .map(|_| ())
+                } else {
+                    crate::workflow_commands::archive_action_run(
+                        handle.state(),
+                        "finalization".into(),
+                        arc_recall_core::tools::ArchiveActionRequest {
+                            path: archive,
+                            password: None,
+                            selected_paths: None,
+                            output_parent: None,
+                        },
+                    )
+                    .await
+                    .map(|_| ())
+                }
+            });
+            let state = app.state::<AppState>();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let finalization_guard = loop {
+                let guard = state.archive_action.lock().unwrap();
+                if guard.is_some() {
+                    break guard;
+                }
+                drop(guard);
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            let workspace = state.recovery_session.directory().to_path_buf();
+            drop(cache_guard);
+            // A completed batch exposes its terminal status before final persistence.
+            // For a single action the tiny real archive completes within the deadline.
+            std::thread::sleep(Duration::from_millis(500));
+            if batch {
+                while serde_json::to_value(state.batch_check.lock().unwrap().as_ref().unwrap())
+                    .unwrap()["running"]
+                    == true
+                {
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+            assert_eq!(
+                std::fs::read_dir(&workspace).unwrap().count(),
+                1,
+                "worker workspace must already be cleaned"
+            );
+            assert!(lifecycle.request_shutdown());
+            let waiting = Arc::clone(&lifecycle);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let shutdown = std::thread::spawn(move || {
+                waiting.wait_until_finished();
+                sender.send(()).unwrap();
+            });
+            let premature = receiver.recv_timeout(Duration::from_millis(100)).is_ok();
+            drop(finalization_guard);
+            tauri::async_runtime::block_on(task).unwrap().unwrap();
+            if !premature {
+                receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+            shutdown.join().unwrap();
+            assert!(
+                !premature,
+                "shutdown released before final record persistence (batch={batch})"
+            );
+            let records = TaskRecordStore::open(&directory.path().join("task-records.db"))
+                .unwrap()
+                .all()
+                .unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].state, "success");
+        }
     }
 
     #[test]

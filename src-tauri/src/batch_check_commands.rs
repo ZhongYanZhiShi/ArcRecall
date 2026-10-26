@@ -300,7 +300,8 @@ pub(crate) async fn archive_batch_check_run(
     password: Option<String>,
     retry_failed: Option<bool>,
 ) -> Result<BatchCheckStatus, String> {
-    let lease = state.lifecycle.begin()?;
+    // Retain ownership through the final record save after the worker returns.
+    let lease = Arc::new(state.lifecycle.begin()?);
     let _reservation = crate::task_coordination::TaskStartReservation::acquire(
         &state.archive_task_starting,
         "已有归档操作正在运行，请先等待完成或取消。",
@@ -354,8 +355,9 @@ pub(crate) async fn archive_batch_check_run(
             .prefix("batch-check-")
             .tempdir_in(state.recovery_session.directory())
             .map_err(|_| "无法创建检查工作目录，请检查磁盘空间和访问权限。".to_string())?;
+        let worker_lease = Arc::clone(&lease);
         tauri::async_runtime::spawn_blocking(move || {
-            let _lease = lease;
+            let _lease = worker_lease;
             // The workspace must drop before the lease allows shutdown cleanup.
             let workspace = workspace;
             if !retry_failed {

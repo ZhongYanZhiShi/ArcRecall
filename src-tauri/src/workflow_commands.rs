@@ -13,7 +13,9 @@ pub(crate) async fn archive_action_run(
     id: String,
     request: arc_recall_core::tools::ArchiveActionRequest,
 ) -> Result<arc_recall_core::tools::ArchiveActionResult, String> {
-    let lease = state.lifecycle.begin()?;
+    // The command owns final persistence; the worker also retains ownership
+    // so dropping an IPC future cannot release a still-running native task.
+    let lease = Arc::new(state.lifecycle.begin()?);
     let _reservation = crate::task_coordination::TaskStartReservation::acquire(
         &state.archive_task_starting,
         "已有归档操作正在运行，请先等待完成或取消。",
@@ -43,8 +45,9 @@ pub(crate) async fn archive_action_run(
             .prefix("archive-action-")
             .tempdir_in(state.recovery_session.directory())
             .map_err(|e| e.to_string())?;
+        let worker_lease = Arc::clone(&lease);
         tauri::async_runtime::spawn_blocking(move || {
-            let _lease = lease;
+            let _lease = worker_lease;
             arc_recall_core::tools::run_archive_action(
                 &request,
                 &seven_zip,
