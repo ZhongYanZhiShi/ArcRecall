@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core"
-import { isDesktopRuntime } from "./dictionary"
+import { isDesktopRuntime } from "./runtime"
 import { openRememberingDirectory } from "./file-dialog"
 
 export type ProcessingOptions = {

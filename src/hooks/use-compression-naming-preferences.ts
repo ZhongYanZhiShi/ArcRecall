@@ -6,7 +6,7 @@ import {
   parseAiReferenceExtensions,
   type CompressionDraft,
 } from "@/lib/compression-draft"
-import { isDesktopRuntime } from "@/lib/dictionary"
+import { isDesktopRuntime } from "@/lib/runtime"
 import {
   getSettings,
   updateSettings,

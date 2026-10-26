@@ -187,7 +187,6 @@ html.byte.light {
 }
 .byte-stream {
   --byte-ink: #246b62;
-  --byte-head: #3c8579;
   position: absolute;
   inset: 0;
   z-index: -1;
@@ -202,10 +201,8 @@ html.byte.light {
 }
 .byte.light .byte-stream {
   --byte-ink: #8ab3ac;
-  --byte-head: #75a299;
 }
-.byte-stream[data-paused="true"] .byte-stream-column,
-.byte-stream[data-paused="true"] .byte-stream-tape {
+.byte-stream[data-paused="true"] .byte-stream-column {
   animation-play-state: paused;
 }
 .byte-stream-field {
@@ -232,11 +229,6 @@ html.byte.light {
     linear-gradient(180deg, transparent, #000 5%, #000 95%, transparent);
   mask-composite: intersect;
 }
-.byte-stream-left {
-  left: 8px;
-  width: 24px;
-  opacity: 1;
-}
 .byte-stream-column {
   position: absolute;
   top: 0;
@@ -248,46 +240,12 @@ html.byte.light {
   height: 24px;
   color: var(--byte-ink);
 }
-.byte-stream [data-head] {
-  color: var(--byte-head);
-  font-weight: 700;
-}
-.byte-stream-ribbon {
-  position: absolute;
-  inset: auto 40px 2px;
-  height: 20px;
-  line-height: 20px;
-  overflow: hidden;
-  mask-image: linear-gradient(
-    90deg,
-    transparent,
-    #000 5%,
-    #000 85%,
-    transparent
-  );
-}
-.byte-stream-tape {
-  position: absolute;
-  left: -180px;
-  display: flex;
-  gap: 12px;
-  white-space: pre;
-  animation: byte-travel linear infinite;
-}
 @keyframes byte-fall {
   from {
     transform: translateY(-50%);
   }
   to {
     transform: translateY(0);
-  }
-}
-@keyframes byte-travel {
-  from {
-    transform: translateX(0);
-  }
-  to {
-    transform: translateX(calc(100vw + 180px));
   }
 }
 
@@ -323,7 +281,6 @@ html.byte.light {
 
 @media (min-width: 1200px) {
   .byte .byte-compress-stage {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 600px);
     max-height: 1000px;
   }
 }
@@ -452,7 +409,6 @@ html.byte.light {
   max-width: var(--byte-stage-width);
 }
 .byte [data-workbench="extract"] [aria-label="打开解压选项"] {
-  margin-top: 16px;
   border-block: 1px solid var(--border);
   padding: 12px 0;
 }
@@ -554,7 +510,6 @@ html.byte.light {
 }
 .byte [data-workbench="compress"] [data-slot="empty"] {
   border: 1px dashed var(--input);
-  max-height: 320px;
   background: color-mix(in oklab, var(--card) 85%, transparent);
 }
 .byte [data-workbench="compress"] [data-slot="empty-title"] {
@@ -571,7 +526,6 @@ html.byte.light {
 }
 .byte [data-workbench="logs"] [aria-label="日志概览"] {
   border-bottom: 1px solid var(--border);
-  gap: 16px;
 }
 .byte [data-workbench="logs"] [aria-label="日志概览"] > * {
   background: transparent;
@@ -604,17 +558,14 @@ html.byte.light {
 }
 .byte [data-workbench="settings"] [data-slot="tabs-list"] {
   justify-content: flex-start;
-  gap: 16px;
   border-bottom: 1px solid var(--border);
   border-radius: 0;
   background: transparent;
   height: auto;
   padding: 0;
-  margin-bottom: 16px;
 }
 .byte [data-workbench="settings"] [data-slot="tabs-trigger"] {
   flex: none;
-  height: 44px;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
@@ -729,10 +680,6 @@ html.byte.light {
   .byte-stream-field {
     top: 112px;
   }
-  .byte-stream-left {
-    left: 2px;
-    width: 14px;
-  }
   .byte-stream-right,
   .byte-app[data-active-page="extract"] .byte-stream-right {
     width: 14px;
@@ -747,9 +694,6 @@ html.byte.light {
   }
   .byte-stream {
     font-size: 10px;
-  }
-  .byte-stream-ribbon {
-    inset-inline: 20px;
   }
   .byte-dictionary-table th,
   .byte-dictionary-table td {
@@ -769,7 +713,6 @@ html.byte.light {
   }
   .byte [data-workbench="logs"] [aria-label="日志概览"] > * {
     align-items: flex-start;
-    padding: 8px 0;
   }
   .byte-metric-icon {
     display: none;
@@ -787,15 +730,9 @@ html.byte.light {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .byte-stream-column,
-  .byte-stream-tape {
-    animation: none;
-  }
   .byte-stream-column {
+    animation: none;
     top: 0;
-  }
-  .byte-stream-tape {
-    left: var(--byte-rest);
   }
 }
 
@@ -994,16 +931,12 @@ html.byte.light {
   [data-workbench="extract"][data-task-active="true"]
   [aria-label="打开解压选项"] {
   order: 20;
-  margin-top: 16px;
 }
 .byte
   [data-workbench="extract"][data-task-active="true"]
   .byte-archive-help
   > p {
   display: none;
-}
-.byte [data-workbench="extract"][data-task-active="true"] .byte-extract-stage {
-  gap: 16px;
 }
 .byte [data-workbench="extract"][data-task-active="true"] .byte-layer {
   padding-block: 12px;
@@ -1036,8 +969,6 @@ html.byte.light {
   [data-slot="card-footer"] {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-  padding-block: 16px;
 }
 .byte
   .byte-compress-stage
@@ -1064,7 +995,6 @@ html.byte.light {
 }
 .byte [data-slot="history-scroll-area"] article {
   padding: 16px 4px;
-  gap: 10px;
 }
 .byte [data-slot="history-scroll-area"] article h2 {
   font-size: 15px;
@@ -1826,17 +1756,13 @@ html.byte.light {
     height: 30px;
   }
   .byte-ai-actions {
-    position: sticky;
     bottom: 0;
     z-index: 2;
-    padding-block: 8px;
     background: var(--background);
     border-top: 1px solid var(--border);
   }
   .byte .byte-compress-stage {
     grid-template-columns: minmax(0, 0.65fr) minmax(0, 1.35fr);
-    height: calc(100dvh - 100px);
-    max-height: calc(100dvh - 100px);
     gap: 12px;
   }
   .byte .byte-compress-stage > [data-slot="card"] {

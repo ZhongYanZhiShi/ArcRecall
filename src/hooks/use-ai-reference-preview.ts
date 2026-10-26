@@ -6,7 +6,7 @@ import {
   previewAiArchiveReference,
   type AiReferencePreviewFile,
 } from "@/lib/ai"
-import { isDesktopRuntime } from "@/lib/dictionary"
+import { isDesktopRuntime } from "@/lib/runtime"
 import { compressionSourceIdentity } from "@/lib/compression-path"
 
 export type AiReferencePreviewController = {

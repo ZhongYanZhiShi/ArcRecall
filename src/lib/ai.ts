@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core"
 
-import { isDesktopRuntime } from "@/lib/dictionary"
+import { isDesktopRuntime } from "@/lib/runtime"
 
 export type AiProviderKind = "ollama" | "lmStudio" | "custom"
 

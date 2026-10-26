@@ -2,7 +2,12 @@
 
 import * as React from "react"
 import { toast } from "sonner"
-import { invoke } from "@tauri-apps/api/core"
+import {
+  previewDatabaseRestore,
+  discardDatabaseRestore,
+  applyDatabaseRestore,
+  type RestorePreview,
+} from "@/lib/backup"
 import { openRememberingDirectory } from "@/lib/file-dialog"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
@@ -17,22 +22,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { backupDatabase } from "@/lib/logging"
-import { isDesktopRuntime, isDictionaryImportRunning } from "@/lib/dictionary"
+import { isDictionaryImportRunning } from "@/lib/dictionary"
+import { isDesktopRuntime } from "@/lib/runtime"
 import { recoveryQueue } from "@/lib/recovery-queue-session"
 import { BackupManagementPanel } from "./backup-management-panel"
-
-type RestorePreview = {
-  unified: boolean
-  presetCount: number
-  compressionPresetCount?: number | null
-  taskRecordCount: number
-  includesSettings: boolean
-  token: string
-  candidateCount: number
-  historyCount: number
-  passwordCount: number
-  unreadablePasswordCount: number
-}
 
 export function DatabaseRestorePanel({
   onRestored,
@@ -69,9 +62,7 @@ export function DatabaseRestorePanel({
   const dismiss = () => {
     if (busy) return
     if (preview)
-      void invoke("database_restore_discard", { token: preview.token }).catch(
-        () => undefined
-      )
+      void discardDatabaseRestore(preview.token).catch(() => undefined)
     setPreview(null)
   }
   return (
@@ -118,10 +109,7 @@ export function DatabaseRestorePanel({
                 ],
               })
               if (typeof path !== "string") return
-              const next = await invoke<RestorePreview>(
-                "database_restore_preview",
-                { path }
-              )
+              const next = await previewDatabaseRestore(path)
               setPreview(next)
             })
           }
@@ -141,9 +129,7 @@ export function DatabaseRestorePanel({
         disabled={busy}
         onPreview={(path) =>
           run("preview", async () => {
-            setPreview(
-              await invoke<RestorePreview>("database_restore_preview", { path })
-            )
+            setPreview(await previewDatabaseRestore(path))
           })
         }
       />
@@ -186,10 +172,7 @@ export function DatabaseRestorePanel({
                     throw new Error(
                       "请先完成或停止字典导入与批次任务，再恢复数据。"
                     )
-                  const result = await invoke<{ safetyBackupPath: string }>(
-                    "database_restore_apply",
-                    { token: preview.token }
-                  )
+                  const result = await applyDatabaseRestore(preview.token)
                   setPreview(null)
                   setMessage(`恢复前的数据备份：${result.safetyBackupPath}`)
                   toast.success("数据恢复完成", { id: "database-action" })

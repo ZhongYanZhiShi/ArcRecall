@@ -3,8 +3,6 @@
  * 文件名和路径均为通用示例。
  */
 
-/** 解压流程的五个阶段，顺序即用户看到的处理顺序 */
-export const STAGES = ["识别", "校验", "尝试", "解包", "递归扫描"] as const
 export type { Layer, LayerState, Stage } from "./strata-model"
 import type { Layer, Stage } from "./strata-model"
 

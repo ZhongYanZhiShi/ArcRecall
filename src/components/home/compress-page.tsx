@@ -7,10 +7,8 @@ import { toast } from "sonner"
 
 import { CompressPageView } from "@/components/home/compress-page-view"
 import { CompressionPresets } from "@/components/home/compression-presets"
-import {
-  draftWithCompressionPreset,
-  renderCompressionName,
-} from "@/lib/compression-presets"
+import { draftWithCompressionPreset } from "@/lib/compression-presets"
+import { buildCompressionPlan } from "@/lib/compression-plan"
 import { compressionQueue } from "@/lib/compression-queue-session"
 import { CompressionQueuePanel } from "@/components/home/compression-queue-panel"
 import {
@@ -45,7 +43,7 @@ import {
   CompressionRenameError,
   startCompressionWithRename,
 } from "@/lib/compression-start"
-import { isDesktopRuntime } from "@/lib/dictionary"
+import { isDesktopRuntime } from "@/lib/runtime"
 import { openPath } from "@/lib/settings"
 import { useDesktopTask } from "@/hooks/use-desktop-task"
 import { useCompressionNamingPreferences } from "@/hooks/use-compression-naming-preferences"
@@ -71,14 +69,9 @@ export function CompressPage({
   )
   const {
     sources,
-    outputMode,
-    outputDirectory,
     baseName,
-    format,
-    level,
     password,
     passwordConfirmation,
-    encryptFileNames,
     openWhenDone,
     useAiRename,
     useAiFileReference,
@@ -425,71 +418,25 @@ export function CompressPage({
         return
       setPasswordValidationRequested(true)
       if (passwordError) return
-      if (draft.retryPasswordRequired && !password) {
-        setError("原任务使用了密码，请重新输入密码并确认后再压缩。")
+      let plan
+      try {
+        plan = buildCompressionPlan(
+          draft,
+          hasPermanentPassword && usePermanentPassword
+        )
+      } catch (reason) {
+        setError(toErrorMessage(reason))
         return
       }
-      if (sources.length === 0) {
-        setError("请先添加至少一个文件或文件夹。")
-        return
-      }
-      if (draft.packagingMode === "separate") {
-        if (outputMode === "custom" && !outputDirectory) {
-          setError("请选择自定义输出目录。")
-          return
-        }
-        if (
-          encryptFileNames &&
-          !password &&
-          !(hasPermanentPassword && usePermanentPassword)
-        ) {
-          setError("开启文件名加密前需要设置密码。")
-          return
-        }
+      if (plan.separate) {
         try {
-          compressionQueue.add(
-            sources.map((source) => ({
-              sources: [source],
-              baseName: renderCompressionName(
-                draft.batchNameTemplate ?? "{name}",
-                source
-                  .replace(/[\\/]+$/, "")
-                  .split(/[\\/]/)
-                  .pop() || "归档"
-              ),
-              outputDirectory: outputMode === "custom" ? outputDirectory : null,
-              format,
-              level,
-              encryptFileNames,
-              verifyAfterCompression: draft.verifyAfterCompression,
-            })),
-            Boolean(password || (hasPermanentPassword && usePermanentPassword))
-          )
+          compressionQueue.add(plan.requests, plan.passwordRequired)
           if (queueOnly) return
-          await compressionQueue.run({
-            password: password || undefined,
-            usePermanentPassword: hasPermanentPassword && usePermanentPassword,
-          })
+          await compressionQueue.run(plan.credentials)
           if (openWhenDone) await openCompletedCompressionBatch()
         } catch (reason) {
           setError(toErrorMessage(reason))
         }
-        return
-      }
-      if (!baseName.trim()) {
-        setError("请输入归档基础名称。")
-        return
-      }
-      if (
-        encryptFileNames &&
-        !password &&
-        !(hasPermanentPassword && usePermanentPassword)
-      ) {
-        setError("开启文件名加密前需要设置密码。")
-        return
-      }
-      if (outputMode === "custom" && !outputDirectory) {
-        setError("请选择自定义输出目录。")
         return
       }
       if (useAiRename && !skipAiRename && !activeAiProfile) {
@@ -531,17 +478,9 @@ export function CompressPage({
             onDraftChange((current) => ({ ...current, baseName: name })),
           start: (name) =>
             startCompression({
-              verifyAfterCompression: draft.verifyAfterCompression,
-              sources,
-              outputDirectory:
-                outputMode === "custom" ? outputDirectory : undefined,
+              ...plan.requests[0],
+              ...plan.credentials,
               baseName: name,
-              format,
-              level,
-              password: password || undefined,
-              usePermanentPassword:
-                hasPermanentPassword && usePermanentPassword,
-              encryptFileNames,
             }),
         })
         setTask(next)
@@ -559,20 +498,11 @@ export function CompressPage({
     },
     [
       activeAiProfile,
-      draft.retryPasswordRequired,
-      draft.verifyAfterCompression,
-      draft.packagingMode,
-      draft.batchNameTemplate,
+      draft,
       openWhenDone,
       baseName,
-      encryptFileNames,
-      format,
       hasPermanentPassword,
       isDraftLocked,
-      level,
-      outputDirectory,
-      outputMode,
-      password,
       passwordError,
       permanentPasswordReady,
       referencePreferences.ready,

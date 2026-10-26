@@ -86,9 +86,9 @@ import {
   deleteDictionaryCandidates,
   formatAddStatus,
   importDictionaryFile,
-  isDesktopRuntime,
   listDictionary,
 } from "@/lib/dictionary"
+import { isDesktopRuntime } from "@/lib/runtime"
 
 type StatusTone = "neutral" | "busy" | "ok" | "error"
 

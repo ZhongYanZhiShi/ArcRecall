@@ -776,27 +776,15 @@ function SummaryMetric({
   value,
   hint,
   icon,
-  tone = "default",
-  active = false,
-  onClick,
 }: {
   label: string
   value: string
   hint: React.ReactNode
   icon: React.ReactNode
-  tone?: "default" | "attention" | "danger"
-  active?: boolean
-  onClick?: () => void
 }) {
   const content = (
     <>
-      <span
-        className={cn(
-          "byte-metric-icon flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted/80 text-muted-foreground",
-          tone === "attention" && "bg-warning/10 text-warning-foreground",
-          tone === "danger" && "bg-destructive/10 text-destructive"
-        )}
-      >
+      <span className="byte-metric-icon flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted/80 text-muted-foreground">
         {icon}
       </span>
       <div className="min-w-0">
@@ -812,27 +800,10 @@ function SummaryMetric({
       </div>
     </>
   )
-  const className = cn(
-    "relative flex min-w-0 items-center gap-2.5 bg-card px-3 py-2.5 text-left",
-    tone === "danger" && "bg-destructive/[0.035]",
-    active &&
-      "after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-t-full after:bg-primary"
-  )
-
-  return onClick ? (
-    <button
-      type="button"
-      aria-pressed={active}
-      className={cn(
-        className,
-        "transition-colors outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-      )}
-      onClick={onClick}
-    >
+  return (
+    <div className="relative flex min-w-0 items-center gap-2.5 bg-card px-3 py-2.5 text-left">
       {content}
-    </button>
-  ) : (
-    <div className={className}>{content}</div>
+    </div>
   )
 }
 

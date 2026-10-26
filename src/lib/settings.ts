@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core"
 
-import { countDictionary, isDesktopRuntime } from "@/lib/dictionary"
+import { countDictionary } from "@/lib/dictionary"
+import { isDesktopRuntime } from "@/lib/runtime"
 import type { RecoveryComputeMode } from "@/lib/recovery"
 
 export type EngineSettings = {

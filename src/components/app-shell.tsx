@@ -1,6 +1,6 @@
 "use client"
 
-import { isTauri } from "@tauri-apps/api/core"
+import { isTauri } from "@/lib/runtime"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import * as React from "react"
 import type { ByteStreamActivity } from "@/lib/byte-stream-motion"

@@ -1,6 +1,8 @@
+import { renderCompressionName } from "./compression-naming.ts"
+export { renderCompressionName } from "./compression-naming.ts"
 import { invoke } from "@tauri-apps/api/core"
 import type { CompressionDraft } from "./compression-draft"
-import { isDesktopRuntime } from "./dictionary"
+import { isDesktopRuntime } from "./runtime"
 
 export type CompressionOptions = {
   verifyAfterCompression?: boolean
@@ -68,21 +70,4 @@ export function draftWithCompressionPreset(
     batchNameTemplate: preset.nameTemplate,
     openWhenDone: preset.openWhenDone,
   }
-}
-export function renderCompressionName(
-  template: string,
-  name: string,
-  date = new Date()
-): string {
-  const literal = template.replace(/\{(name|date)\}/g, "")
-  if (!template.trim() || template.length > 120 || /[{}\\/]/.test(literal))
-    throw new Error("命名规则仅支持 {name} 和 {date}，不能包含路径分隔符。")
-  const day = [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, "0"),
-    String(date.getDate()).padStart(2, "0"),
-  ].join("-")
-  return template.replace(/\{(name|date)\}/g, (_, field: string) =>
-    field === "name" ? name : day
-  )
 }

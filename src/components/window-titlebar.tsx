@@ -1,6 +1,6 @@
 "use client"
 
-import { isTauri } from "@tauri-apps/api/core"
+import { isTauri } from "@/lib/runtime"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { Copy, Minus, Square, X } from "lucide-react"
 import { useEffect, useState, useSyncExternalStore } from "react"

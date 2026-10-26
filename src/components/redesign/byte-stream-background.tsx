@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState, type CSSProperties } from "react"
-import { isTauri } from "@tauri-apps/api/core"
+import { isTauri } from "@/lib/runtime"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import {
   BYTE_STREAM_RATES,

@@ -1,33 +1,19 @@
 "use client"
 
 import * as React from "react"
-import { invoke } from "@tauri-apps/api/core"
+import {
+  getBackupOverview,
+  saveBackupPolicy,
+  runBackupNow,
+  type BackupPolicy,
+  type BackupOverview,
+} from "@/lib/backup"
+import { openPath } from "@/lib/settings"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { isDesktopRuntime } from "@/lib/dictionary"
+import { isDesktopRuntime } from "@/lib/runtime"
 import { openRememberingDirectory } from "@/lib/file-dialog"
 
-type Policy = {
-  enabled: boolean
-  directory: string | null
-  intervalHours: number
-  keepCount: number
-}
-type Overview = {
-  status: {
-    policy: Policy
-    lastAttemptMs: number | null
-    lastSuccessMs: number | null
-    lastError: string | null
-  }
-  entries: {
-    path: string
-    createdAtMs: number
-    byteCount: number
-    automatic: boolean
-    exists: boolean
-  }[]
-}
 export function BackupManagementPanel({
   disabled,
   onPreview,
@@ -35,8 +21,8 @@ export function BackupManagementPanel({
   disabled: boolean
   onPreview: (path: string) => Promise<void>
 }) {
-  const [data, setData] = React.useState<Overview | null>(null)
-  const [draft, setDraft] = React.useState<Policy | null>(null)
+  const [data, setData] = React.useState<BackupOverview | null>(null)
+  const [draft, setDraft] = React.useState<BackupPolicy | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [notice, setNotice] = React.useState<string | null>(null)
@@ -44,7 +30,7 @@ export function BackupManagementPanel({
   React.useEffect(() => {
     if (!isDesktopRuntime()) return
     let disposed = false
-    void invoke<Overview>("backup_management_get")
+    void getBackupOverview()
       .then((value) => {
         if (!disposed && value) {
           setData(value)
@@ -155,9 +141,7 @@ export function BackupManagementPanel({
               disabled={locked}
               onClick={() =>
                 void run(async () => {
-                  const next = await invoke<Overview>("backup_policy_save", {
-                    policy: draft,
-                  })
+                  const next = await saveBackupPolicy(draft)
                   setData(next)
                   setDraft(next.status.policy)
                   setNotice("自动备份设置已保存。")
@@ -183,10 +167,10 @@ export function BackupManagementPanel({
             onClick={() =>
               void run(async () => {
                 try {
-                  await invoke("backup_run_now")
+                  await runBackupNow()
                   setNotice("已按保存的设置完成备份与保留检查。")
                 } finally {
-                  setData(await invoke<Overview>("backup_management_get"))
+                  setData(await getBackupOverview())
                 }
               })
             }
@@ -201,7 +185,7 @@ export function BackupManagementPanel({
         disabled={locked}
         onClick={() =>
           void run(async () => {
-            const next = await invoke<Overview>("backup_management_get")
+            const next = await getBackupOverview()
             setData(next)
             if (!draft) setDraft(next.status.policy)
           })
@@ -242,9 +226,7 @@ export function BackupManagementPanel({
                 size="sm"
                 variant="ghost"
                 disabled={locked || !entry.exists}
-                onClick={() =>
-                  void run(() => invoke("open_path", { path: entry.path }))
-                }
+                onClick={() => void run(() => openPath(entry.path))}
               >
                 定位备份
               </Button>

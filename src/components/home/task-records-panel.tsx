@@ -1,7 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { invoke } from "@tauri-apps/api/core"
+import { runBatchCheck } from "@/lib/batch-integrity"
+import { openPath } from "@/lib/settings"
+import { buildRecordRetryPlan } from "@/lib/task-record-retry"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,6 +18,8 @@ import {
 import {
   listTaskRecords,
   deleteTaskRecord,
+  deleteTaskRecords,
+  exportTaskRecords,
   type TaskRecord,
   type TaskOperation,
   type TaskRecordQuery,
@@ -145,25 +149,23 @@ export function TaskRecordsPanel({
     operation.current = true
     setBusy(true)
     try {
-      if (selected.operation && selected.operation !== "recovery") {
+      const plan = buildRecordRetryPlan(selected, paths, root, {
+        password,
+        output,
+        group,
+      })
+      if (plan.kind !== "recovery") {
         const id = crypto.randomUUID()
         setActiveAction(id)
-        if (selected.operation === "batchIntegrityCheck") {
-          await invoke("archive_batch_check_run", {
-            id,
-            paths,
-            password: password || null,
-            retryFailed: false,
-          })
+        if (plan.kind === "batch") {
+          await runBatchCheck(id, plan.paths, plan.password)
         } else {
           await runArchiveAction(
             id,
-            selected.archivePath,
-            password,
-            selected.operation === "selectiveExtraction"
-              ? (selected.selectedPaths ?? [])
-              : null,
-            output
+            plan.path,
+            plan.password,
+            plan.selectedPaths,
+            plan.output
           )
         }
         setPassword("")
@@ -175,15 +177,7 @@ export function TaskRecordsPanel({
       await recoveryQueueJournal.initialize()
       if (!recoveryQueueJournal.getSnapshot().ready)
         throw new Error("队列设置正在保存，请稍后重试。")
-      recoveryQueue.enqueue(paths, {
-        recursive: selected.recursive,
-        computeMode: selected.computeMode,
-        dictionaryGroup: group,
-        knownPassword: password || null,
-        ...(root && !output && selected.outputDirectory
-          ? { exactOutputDirectory: selected.outputDirectory }
-          : { outputDirectory: output }),
-      })
+      recoveryQueue.enqueue(plan.paths, plan.options)
       await recoveryQueueJournal.flush()
       setPassword("")
       setSelected(null)
@@ -336,7 +330,7 @@ export function TaskRecordsPanel({
                 />
                 导出包含路径
               </label>
-              {["json", "csv"].map((format) => (
+              {(["json", "csv"] as const).map((format) => (
                 <Button
                   key={format}
                   variant="outline"
@@ -344,11 +338,11 @@ export function TaskRecordsPanel({
                   disabled={busy}
                   onClick={() =>
                     void manage(async () => {
-                      const path = await invoke<string>("task_records_export", {
+                      const path = await exportTaskRecords(
                         query,
                         format,
-                        includePaths,
-                      })
+                        includePaths
+                      )
                       setExportPath(path)
                       toast.success("已导出全部匹配记录。")
                     })
@@ -402,10 +396,7 @@ export function TaskRecordsPanel({
                   disabled={busy}
                   onClick={() =>
                     void manage(async () => {
-                      const count = await invoke<number>(
-                        "task_records_delete",
-                        { ids: checked }
-                      )
+                      const count = await deleteTaskRecords(checked)
                       setChecked([])
                       setConfirmDelete(false)
                       setSelected(null)
@@ -433,9 +424,7 @@ export function TaskRecordsPanel({
                   variant="link"
                   size="sm"
                   onClick={() =>
-                    void invoke("open_path", { path: exportPath }).catch((e) =>
-                      setError(String(e))
-                    )
+                    void openPath(exportPath).catch((e) => setError(String(e)))
                   }
                 >
                   定位报告

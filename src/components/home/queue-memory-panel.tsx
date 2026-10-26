@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { Button } from "@/components/ui/button"
-import { isDesktopRuntime } from "@/lib/dictionary"
+import { isDesktopRuntime } from "@/lib/runtime"
 import { recoveryQueueJournal } from "@/lib/recovery-queue-session"
 
 export function QueueMemoryPanel({ disabled }: { disabled: boolean }) {

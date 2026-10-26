@@ -4,7 +4,7 @@ import * as React from "react"
 import { toast } from "sonner"
 import { invoke } from "@tauri-apps/api/core"
 
-import { isDesktopRuntime } from "@/lib/dictionary"
+import { isDesktopRuntime } from "@/lib/runtime"
 import { updateSettings } from "@/lib/settings"
 
 type UpdateStatus = {

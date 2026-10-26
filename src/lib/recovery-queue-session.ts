@@ -8,7 +8,7 @@ import {
 import { createRecoveryQueue } from "@/lib/recovery-queue"
 import { createQueueJournal, type Journal } from "@/lib/queue-journal"
 import { invoke } from "@tauri-apps/api/core"
-import { isDesktopRuntime } from "@/lib/dictionary"
+import { isDesktopRuntime } from "@/lib/runtime"
 
 export const recoveryQueue = createRecoveryQueue({
   analyze: analyzeArchive,

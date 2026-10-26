@@ -8,7 +8,8 @@ import {
   ExtractPageView,
   type OutputMode,
 } from "@/components/home/extract-page-view"
-import { countDictionary, isDesktopRuntime } from "@/lib/dictionary"
+import { countDictionary } from "@/lib/dictionary"
+import { isDesktopRuntime } from "@/lib/runtime"
 import {
   analyzeArchive,
   cancelRecovery,

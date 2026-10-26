@@ -1,11 +1,7 @@
+import { sourceHarness } from "./helpers/source-harness.mjs"
 import assert from "node:assert/strict"
-import fs from "node:fs"
-import path from "node:path"
 import test from "node:test"
-import { fileURLToPath } from "node:url"
-import ts from "typescript"
 
-const root = fileURLToPath(new URL("../", import.meta.url))
 const deferred = () => {
   let resolve
   const promise = new Promise((done) => {
@@ -15,159 +11,6 @@ const deferred = () => {
 }
 const settle = async () => {
   for (let i = 0; i < 8; i += 1) await Promise.resolve()
-}
-
-// Execute the real event handlers and JSX with only React's lifecycle and IPC
-// replaced. These regressions do not start Tauri, a browser, or write user data.
-function sourceHarness(overrides) {
-  const notifications = []
-  const slots = []
-  const pendingEffects = []
-  let cursor = 0
-  const same = (a, b) =>
-    a && b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]))
-  const effect = (setup, deps) => {
-    const index = cursor++
-    const previous = slots[index]
-    if (!previous || previous.hidden || !same(previous.deps, deps)) {
-      pendingEffects.push(() => {
-        previous?.cleanup?.()
-        slots[index] = { deps, cleanup: setup(), effect: true }
-      })
-    }
-  }
-  const memo = (compute, deps) => {
-    const index = cursor++
-    if (!slots[index] || !same(slots[index].deps, deps))
-      slots[index] = { value: compute(), deps }
-    return slots[index].value
-  }
-  const React = {
-    // This harness tests handlers, not React's render scheduling.
-    memo(component) {
-      return component
-    },
-    createContext() {
-      return { Provider: "ContextProvider" }
-    },
-    useSyncExternalStore(_subscribe, getSnapshot) {
-      return getSnapshot()
-    },
-    useState(initial) {
-      const index = cursor++
-      if (!(index in slots))
-        slots[index] = {
-          value: typeof initial === "function" ? initial() : initial,
-        }
-      return [
-        slots[index].value,
-        (next) => {
-          slots[index].value =
-            typeof next === "function" ? next(slots[index].value) : next
-        },
-      ]
-    },
-    useRef(initial) {
-      const index = cursor++
-      if (!(index in slots)) slots[index] = { current: initial }
-      return slots[index]
-    },
-    useMemo: memo,
-    useCallback(fn, deps) {
-      return memo(() => fn, deps)
-    },
-    forwardRef(render) {
-      return (props) => render(props, props.ref)
-    },
-    useImperativeHandle(ref, create, deps) {
-      effect(() => {
-        if (!ref) return
-        ref.current = create()
-        return () => {
-          ref.current = null
-        }
-      }, deps)
-    },
-    useEffect: effect,
-    useLayoutEffect: effect,
-    useSyncExternalStore(_subscribe, getSnapshot) {
-      return getSnapshot()
-    },
-  }
-  const ui = new Proxy({}, { get: (_, key) => key })
-  const jsx = (type, props, key) => ({ type, props, key })
-  const modules = new Map()
-  const mocks = {
-    sonner: {
-      toast: Object.fromEntries(
-        ["success", "error", "info", "warning"].map((type) => [
-          type,
-          (message) => notifications.push({ type, message }),
-        ])
-      ),
-    },
-    react: React,
-    "react/jsx-runtime": { jsx, jsxs: jsx },
-    "@/lib/utils": { cn: () => "" },
-    "@tauri-apps/api/core": {
-      invoke: async (command) => {
-        if (command === "recovery_queue_load")
-          return { version: 1, enabled: false, items: [] }
-        if (command === "recovery_queue_save") return
-        throw new Error(`Unexpected command: ${command}`)
-      },
-    },
-    ...overrides,
-  }
-  function load(relative) {
-    if (modules.has(relative)) return modules.get(relative)
-    const source = fs.readFileSync(path.join(root, relative), "utf8")
-    const code = ts.transpileModule(source, {
-      compilerOptions: {
-        jsx: ts.JsxEmit.ReactJSX,
-        module: ts.ModuleKind.CommonJS,
-        target: ts.ScriptTarget.ES2022,
-      },
-    }).outputText
-    const compiledModule = { exports: {} }
-    new Function("require", "module", "exports", code)(
-      (name) => {
-        if (name in mocks) return mocks[name]
-        if (name.startsWith("@/lib/")) return load(`src/${name.slice(2)}.ts`)
-        if (name.startsWith("@/hooks/")) return load(`src/${name.slice(2)}.ts`)
-        if (name === "@/components/home/ai-settings-draft")
-          return load("src/components/home/ai-settings-draft.ts")
-        if (name === "@/components/home/compress-page-view")
-          return load("src/components/home/compress-page-view.tsx")
-        if (name === "@/components/home/log-presentation")
-          return load("src/components/home/log-presentation.ts")
-        return ui
-      },
-      compiledModule,
-      compiledModule.exports
-    )
-    modules.set(relative, compiledModule.exports)
-    return compiledModule.exports
-  }
-  return {
-    notifications,
-    load,
-    render(Component, props = {}) {
-      cursor = 0
-      const tree = Component(props)
-      pendingEffects.splice(0).forEach((run) => run())
-      return tree
-    },
-    hide() {
-      for (const slot of slots) {
-        if (slot?.effect) {
-          slot.cleanup?.()
-          slot.cleanup = undefined
-          slot.hidden = true
-        }
-      }
-    },
-  }
 }
 
 test("字典导入会话覆盖编码预检和所有批次，失败或取消均释放会话", async () => {
@@ -336,7 +179,7 @@ test("自动更新启动与定时检查不会自动安装，重复操作不会�
   const checking = deferred()
   let pending = false
   const harness = sourceHarness({
-    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/settings": {},
     "@tauri-apps/api/core": {
       invoke: async (command, args) => {
@@ -392,7 +235,7 @@ test("关闭自动更新后每次重启仍检查并提示新版本，不自动�
   const checks = []
   for (let launch = 0; launch < 2; launch += 1) {
     const harness = sourceHarness({
-      "@/lib/dictionary": { isDesktopRuntime: () => true },
+      "@/lib/runtime": { isDesktopRuntime: () => true },
       "@/lib/settings": {},
       "@tauri-apps/api/core": {
         invoke: async (command, args) => {
@@ -432,7 +275,7 @@ test("更新状态读取失败不重复通知，轮询恢复后仍能提示新�
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] })
   let failStatus = true
   const harness = sourceHarness({
-    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/settings": {},
     "@tauri-apps/api/core": {
       invoke: async (command) => {
@@ -470,7 +313,7 @@ test("自动更新偏好保存失败时不开始下载，安装失败保留已�
   const calls = []
   const ready = { phase: "ready", version: "0.2.0", autoUpdate: false }
   const harness = sourceHarness({
-    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/settings": {
       updateSettings: async () => {
         throw new Error("disk full")
@@ -512,29 +355,20 @@ test("自动更新偏好保存失败时不开始下载，安装失败保留已�
   )
 })
 
-test("恢复数据库后重建字典和历史视图，保留其他工作台状态", (t) => {
+test("恢复数据库后重建字典和历史视图，保留其他工作台状态", async (t) => {
   const previousWindow = globalThis.window
   globalThis.window = {
     matchMedia: () => ({ matches: true }),
     requestIdleCallback: () => 1,
     cancelIdleCallback: () => {},
   }
-  const names = [
-    "ExtractPage",
-    "CompressPage",
-    "DictionaryPage",
-    "HistoryPage",
-    "LogsPage",
-    "SettingsPage",
-  ]
-  const harness = sourceHarness({
-    "next/dynamic": { default: () => names.shift(), __esModule: true },
-  })
+  const harness = sourceHarness({})
   t.after(() => {
     harness.hide()
     globalThis.window = previousWindow
   })
   const Page = harness.load("src/app/page.tsx").default
+  await harness.resolveImports()
   const view = (tree, name) => find(tree, (node) => node.type === name)
   let tree = harness.render(Page)
   for (const nav of ["dictionary", "history", "compress", "settings"]) {
@@ -583,8 +417,8 @@ test("批次接收全部拖入和粘贴路径，恢复启动期间拒绝并发�
         },
       }),
     },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/dictionary": {
-      isDesktopRuntime: () => true,
       countDictionary: async () => 0,
     },
     "@/lib/recovery": {
@@ -722,8 +556,8 @@ test("数据库恢复必须先预览确认，并阻止不可解密密码的恢�
           return { safetyBackupPath: "C:\\safety.db" }
         },
       },
+      "@/lib/runtime": { isDesktopRuntime: () => true },
       "@/lib/dictionary": {
-        isDesktopRuntime: () => true,
         isDictionaryImportRunning: () => false,
       },
       "@/lib/recovery-queue-session": {
@@ -857,7 +691,7 @@ test("保存 John / Perl 后刷新界面和共享能力缓存", async (t) => {
       },
     },
     "@tauri-apps/plugin-dialog": {},
-    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/settings": {
       getFullEngineBundleStatus: async () => ({}),
       getHashcatStatus: async () => ({}),
@@ -922,7 +756,7 @@ test("AI 准备阶段锁住实际输入、拖放和异步文件选择结果", as
         },
       }),
     },
-    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/ai": {
       listAiProfiles: async () => ({
         profiles: [{ id: "local", name: "local" }],
@@ -1080,7 +914,7 @@ test("参考文件预览跟随来源和后缀变化，忽略迟到结果，支�
     truncated: false,
   })
   const harness = sourceHarness({
-    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/ai": {
       previewAiArchiveReference: (request) => {
         calls.push(request)
@@ -1148,7 +982,7 @@ test("参考文件默认全选，按路径区分重名文件，刷新和切换�
   let locked = false
   let extensions = "md"
   const harness = sourceHarness({
-    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/ai": {
       previewAiArchiveReference: async () => {
         calls += 1
@@ -1211,7 +1045,7 @@ test("后缀标签先读取再编辑，连续修改顺序保存且重新显示�
   let loads = 0
   let locked = false
   const harness = sourceHarness({
-    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/settings": {
       getSettings: () => {
         loads += 1
@@ -1309,7 +1143,7 @@ test("后缀标签读取失败不覆盖保存内容，读取与保存失败都�
   let failSave = true
   let writes = 0
   const harness = sourceHarness({
-    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/settings": {
       getSettings: async () => {
         if (failLoad) throw new Error("unreadable")
@@ -1375,7 +1209,7 @@ test("返回压缩页保留永久密码选择，凭据删除后取消使用", as
   let hasPassword = true
   const starts = []
   const harness = sourceHarness({
-    "@/lib/dictionary": { isDesktopRuntime: () => false },
+    "@/lib/runtime": { isDesktopRuntime: () => false },
     "@/lib/ai": { listAiProfiles: async () => ({ profiles: [] }) },
     "@/lib/compression": {
       getPermanentCompressionPasswordStatus: async () => ({ hasPassword }),
@@ -1428,7 +1262,7 @@ test("新密码未确认时阻止压缩与永久保存，确认时保留空格",
   const starts = []
   const saves = []
   const harness = sourceHarness({
-    "@/lib/dictionary": { isDesktopRuntime: () => false },
+    "@/lib/runtime": { isDesktopRuntime: () => false },
     "@/lib/ai": { listAiProfiles: async () => ({ profiles: [] }) },
     "@/lib/compression": {
       getPermanentCompressionPasswordStatus: async () => ({
@@ -1936,7 +1770,7 @@ test("放弃 AI 草稿立即清除密钥和提示词更改，重新读取失败�
     renamePrompt: "已保存提示词",
   }
   const harness = sourceHarness({
-    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@tauri-apps/api/core": {
       invoke: async (command) => {
         assert.equal(command, "ai_profiles_list")
@@ -1990,24 +1824,14 @@ test("放弃 AI 草稿立即清除密钥和提示词更改，重新读取失败�
   assert.equal(dirtyStates.at(-1), true)
 })
 
-test("工作台与设置分类的放弃操作在导航前调用草稿清除接口", (t) => {
+test("工作台与设置分类的放弃操作在导航前调用草稿清除接口", async (t) => {
   const previousWindow = globalThis.window
   globalThis.window = {
     matchMedia: () => ({ matches: true }),
     requestIdleCallback: () => 1,
     cancelIdleCallback() {},
   }
-  const names = [
-    "ExtractPage",
-    "CompressPage",
-    "DictionaryPage",
-    "HistoryPage",
-    "LogsPage",
-    "SettingsPage",
-  ]
-  const pageHarness = sourceHarness({
-    "next/dynamic": { default: () => names.shift(), __esModule: true },
-  })
+  const pageHarness = sourceHarness({})
   const settingsHarness = sourceHarness({})
   t.after(() => {
     pageHarness.hide()
@@ -2015,6 +1839,7 @@ test("工作台与设置分类的放弃操作在导航前调用草稿清除接�
     globalThis.window = previousWindow
   })
   const Page = pageHarness.load("src/app/page.tsx").default
+  await pageHarness.resolveImports()
   let tree = pageHarness.render(Page)
   const shell = () => find(tree, (node) => node.type === "AppShell")
   shell().props.onNavChange("settings")
@@ -2074,8 +1899,8 @@ test("批次在页面隐藏期间换任务并完成，返回页面恢复最新�
     "@tauri-apps/api/webview": {
       getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }),
     },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/dictionary": {
-      isDesktopRuntime: () => true,
       countDictionary: async () => 0,
     },
     "@/lib/settings": { getSettings: async () => ({}) },
@@ -2208,8 +2033,8 @@ test("批次轮询保留选中详情，新任务密码默认隐藏且执行状�
     "@tauri-apps/api/webview": {
       getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }),
     },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/dictionary": {
-      isDesktopRuntime: () => true,
       countDictionary: async () => 0,
     },
     "@/lib/settings": { getSettings: async () => ({}) },
@@ -2482,7 +2307,7 @@ test("统一记录按类型查询，检查重试防止重复提交并可取消",
 
 test("压缩模板使用本地日期且不再次解释来源中的占位符，保留当前会话密码", () => {
   const harness = sourceHarness({
-    "./dictionary": { isDesktopRuntime: () => false },
+    "./runtime": { isDesktopRuntime: () => false },
     "@tauri-apps/api/core": {},
   })
   const { draftWithCompressionPreset } = harness.load(
@@ -2515,7 +2340,7 @@ test("压缩模板使用本地日期且不再次解释来源中的占位符，�
 test("历史重压缩加载偏好后仍关闭 AI，显式开启才更新偏好", async () => {
   const writes = []
   const harness = sourceHarness({
-    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/settings": {
       getSettings: async () => ({
         compressionNaming: {
@@ -2644,7 +2469,7 @@ test("统一备份预览显示各类数据范围，取消不应用恢复", async
     "@/lib/file-dialog": {
       openRememberingDirectory: async () => "C:/备份.arcrecall",
     },
-    "@/lib/dictionary": { isDesktopRuntime: () => true },
+    "@/lib/runtime": { isDesktopRuntime: () => true },
     "@/lib/recovery-queue-session": {},
     "@/lib/logging": {},
     "@tauri-apps/api/core": {

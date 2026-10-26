@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core"
 
 import { createAsyncRefreshCache } from "@/lib/async-refresh-cache"
-import { isDesktopRuntime } from "@/lib/dictionary"
+import { isDesktopRuntime } from "@/lib/runtime"
 import { openRememberingDirectory } from "@/lib/file-dialog"
 
 export type ArchiveFormat = "sevenZip" | "zip" | "rar3" | "rar5"

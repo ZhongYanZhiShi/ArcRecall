@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core"
 import {
-  isDesktopRuntime,
   type DictionaryCandidateQuery,
   type DictionaryListResult,
 } from "./dictionary"
+import { isDesktopRuntime } from "./runtime"
 
 export type TaskOperation =
   | "recovery"
@@ -90,6 +90,16 @@ export function listTaskRecords(
 }
 export function deleteTaskRecord(id: string): Promise<void> {
   return invoke("task_record_delete", { id })
+}
+export function deleteTaskRecords(ids: string[]): Promise<number> {
+  return invoke("task_records_delete", { ids })
+}
+export function exportTaskRecords(
+  query: TaskRecordQuery,
+  format: "json" | "csv",
+  includePaths: boolean
+): Promise<string> {
+  return invoke("task_records_export", { query, format, includePaths })
 }
 export function previewArchive(
   path: string,

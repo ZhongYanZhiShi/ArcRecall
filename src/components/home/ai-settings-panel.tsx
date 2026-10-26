@@ -4,7 +4,6 @@ import { FullText } from "@/components/home/full-text"
 import { WorkbenchDetails } from "./workbench-details"
 
 import {
-  Bot,
   Check,
   CircleAlert,
   KeyRound,
@@ -77,7 +76,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -378,64 +376,34 @@ export const AiSettingsPanel = React.forwardRef<
             }
             aria-label="已保存 AI 配置"
           >
-            {settings === null ? (
-              <div
-                className="flex flex-col gap-2 p-1"
-                aria-label="正在读取 AI 配置"
-                aria-busy="true"
+            {settings.profiles.map((profile) => (
+              <Button
+                key={profile.id}
+                type="button"
+                variant={draft.id === profile.id ? "secondary" : "ghost"}
+                disabled={busy}
+                aria-pressed={draft.id === profile.id}
+                onClick={() => requestDraftAction({ type: "select", profile })}
+                className="h-auto w-full min-w-0 justify-start text-left"
               >
-                {[0, 1, 2].map((item) => (
-                  <div key={item} className="flex items-center gap-2">
-                    <Skeleton className="size-8 shrink-0" />
-                    <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                      <Skeleton className="h-3 w-2/3" />
-                      <Skeleton className="h-2.5 w-full" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : settings.profiles.length === 0 ? (
-              <Empty className="gap-2 border px-3 py-4">
-                <EmptyHeader className="gap-1">
-                  <EmptyMedia variant="icon">
-                    <Bot />
-                  </EmptyMedia>
-                  <EmptyTitle>尚无 AI 配置</EmptyTitle>
-                  <EmptyDescription>填写并保存模型服务配置。</EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            ) : (
-              settings.profiles.map((profile) => (
-                <Button
-                  key={profile.id}
-                  type="button"
-                  variant={draft.id === profile.id ? "secondary" : "ghost"}
-                  disabled={busy}
-                  aria-pressed={draft.id === profile.id}
-                  onClick={() =>
-                    requestDraftAction({ type: "select", profile })
-                  }
-                  className="h-auto w-full min-w-0 justify-start text-left"
-                >
-                  <Server data-icon="inline-start" />
-                  <span className="min-w-0 flex-1">
-                    <FullText
-                      text={profile.name}
-                      focusable={false}
-                      className="text-sm font-medium"
-                    />
-                    <FullText
-                      text={`${AI_PROVIDER_DEFAULTS[profile.provider].label}${profile.model ? ` · ${profile.model}` : ""}`}
-                      focusable={false}
-                      className="mt-0.5 text-xs text-muted-foreground"
-                    />
-                  </span>
-                  {settings.activeProfileId === profile.id ? (
-                    <Check aria-label="当前配置" data-icon="inline-end" />
-                  ) : null}
-                </Button>
-              ))
-            )}
+                <Server data-icon="inline-start" />
+                <span className="min-w-0 flex-1">
+                  <FullText
+                    text={profile.name}
+                    focusable={false}
+                    className="text-sm font-medium"
+                  />
+                  <FullText
+                    text={`${AI_PROVIDER_DEFAULTS[profile.provider].label}${profile.model ? ` · ${profile.model}` : ""}`}
+                    focusable={false}
+                    className="mt-0.5 text-xs text-muted-foreground"
+                  />
+                </span>
+                {settings.activeProfileId === profile.id ? (
+                  <Check aria-label="当前配置" data-icon="inline-end" />
+                ) : null}
+              </Button>
+            ))}
           </aside>
 
           <FieldGroup
