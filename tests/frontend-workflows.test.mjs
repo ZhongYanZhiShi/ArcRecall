@@ -2555,6 +2555,50 @@ test("历史重压缩加载偏好后仍关闭 AI，显式开启才更新偏好",
   harness.hide()
 })
 
+test("归档预览切页后完成或失败均解除忙碌，并可重新读取", async () => {
+  for (const fail of [false, true]) {
+    let resolve, reject
+    const pending = new Promise((done, failed) => {
+      resolve = done
+      reject = failed
+    })
+    let reads = 0
+    const result = {
+      entries: [],
+      totalEntries: 0,
+      totalBytes: 0,
+      truncated: false,
+    }
+    const harness = sourceHarness({
+      "@/lib/workflows": {
+        previewArchive: () =>
+          ++reads === 1 ? pending : Promise.resolve(result),
+      },
+    })
+    const { ArchivePreviewButton } = harness.load(
+      "src/components/home/archive-preview.tsx"
+    )
+    const render = () =>
+      harness.render(ArchivePreviewButton, {
+        path: "C:/测试归档.zip",
+        password: "",
+        disabled: false,
+      })
+    button(render(), "预览内容").props.onClick()
+    find(render(), (node) => node.type === "Sheet").props.onOpenChange(false)
+    harness.hide()
+    if (fail) reject(new Error("读取失败"))
+    else resolve(result)
+    await settle()
+    assert.equal(button(render(), "预览内容").props.disabled, false)
+    button(render(), "预览内容").props.onClick()
+    await settle()
+    assert.equal(reads, 2)
+    assert.equal(button(render(), "重新读取").props.disabled, false)
+    harness.hide()
+  }
+})
+
 test("统一备份预览显示各类数据范围，取消不应用恢复", async () => {
   const calls = []
   const harness = sourceHarness({

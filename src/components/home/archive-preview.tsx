@@ -41,17 +41,9 @@ export function ArchivePreviewButton({
   const [cancelling, setCancelling] = React.useState(false)
   const actionId = React.useRef<string | null>(null)
   const working = React.useRef(false)
-  const version = React.useRef(0)
-  React.useEffect(
-    () => () => {
-      version.current++
-    },
-    []
-  )
   async function load() {
     if (working.current) return
     working.current = true
-    const request = ++version.current
     setOpen(true)
     setBusy(true)
     setError(null)
@@ -62,12 +54,14 @@ export function ArchivePreviewButton({
     setPage(0)
     try {
       const next = await previewArchive(path, password)
-      if (request === version.current) setResult(next)
+      // Activity preserves this archive's state while hidden. Its in-flight
+      // request must settle that state too; working prevents overlapping loads.
+      setResult(next)
     } catch (reason) {
-      if (request === version.current) setError(String(reason))
+      setError(String(reason))
     } finally {
       working.current = false
-      if (request === version.current) setBusy(false)
+      setBusy(false)
     }
   }
   async function execute(kind: "check" | "extract") {
