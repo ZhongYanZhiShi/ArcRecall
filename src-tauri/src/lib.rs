@@ -14,6 +14,7 @@ mod clipboard_security;
 mod compression_commands;
 mod credential_protection;
 mod data_commands;
+mod dictionary_imports;
 mod engine_commands;
 mod history_commands;
 mod history_support;
@@ -52,8 +53,9 @@ use compression_commands::{
 };
 use data_commands::{
     data_backup, database_backup, database_info, database_restore_apply, database_restore_discard,
-    database_restore_preview, dictionary_add, dictionary_count, dictionary_delete, dictionary_list,
-    settings_get, settings_update,
+    database_restore_preview, dictionary_add, dictionary_count, dictionary_delete,
+    dictionary_import_begin, dictionary_import_finish, dictionary_list, settings_get,
+    settings_update,
 };
 use engine_commands::{
     recovery_capabilities, tool_full_bundle_install, tool_full_bundle_status,
@@ -83,6 +85,7 @@ struct AppState {
     paths: AppPaths,
     resource_dir: PathBuf,
     dictionary: Arc<Mutex<DictionaryCandidateStore>>,
+    dictionary_imports: dictionary_imports::DictionaryImports,
     prepared_restore: Mutex<Option<data_commands::PreparedDatabaseRestore>>,
     history: Arc<Mutex<RecoveryHistoryStore>>,
     settings: Arc<Mutex<SettingsStore>>,
@@ -468,6 +471,7 @@ pub fn run() {
                 prepared_restore: Mutex::new(None),
                 resource_dir,
                 dictionary: Arc::new(Mutex::new(dictionary)),
+                dictionary_imports: dictionary_imports::DictionaryImports::default(),
                 history: Arc::new(Mutex::new(history)),
                 settings: Arc::new(Mutex::new(settings)),
                 data_maintenance: Arc::new(Mutex::new(())),
@@ -536,6 +540,8 @@ pub fn run() {
             dictionary_list,
             dictionary_count,
             dictionary_add,
+            dictionary_import_begin,
+            dictionary_import_finish,
             dictionary_delete,
             history_list,
             history_reveal_password,
@@ -599,6 +605,7 @@ fn request_app_shutdown(app: &AppHandle) -> bool {
         return false;
     }
     if state.lifecycle.request_shutdown() {
+        state.dictionary_imports.cancel_all();
         let app = app.clone();
         std::thread::spawn(move || {
             let state = app.state::<AppState>();

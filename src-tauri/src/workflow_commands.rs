@@ -142,6 +142,7 @@ pub(crate) async fn dictionary_group_assign(
     ids: Vec<i64>,
     remove: Option<bool>,
 ) -> Result<(), String> {
+    let lease = state.lifecycle.begin()?;
     let name = name.trim().to_string();
     if name.is_empty()
         || name.chars().count() > 80
@@ -152,6 +153,7 @@ pub(crate) async fn dictionary_group_assign(
     }
     let store = state.dictionary.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _lease = lease;
         let store = store.lock().map_err(|e| e.to_string())?;
         if remove.unwrap_or(false) {
             store.remove_group_members(&name, &ids)
@@ -169,8 +171,10 @@ pub(crate) async fn dictionary_group_delete(
     state: State<'_, AppState>,
     name: String,
 ) -> Result<(), String> {
+    let lease = state.lifecycle.begin()?;
     let store = state.dictionary.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _lease = lease;
         store
             .lock()
             .map_err(|e| e.to_string())?

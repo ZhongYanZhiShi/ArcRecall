@@ -170,6 +170,95 @@ function sourceHarness(overrides) {
   }
 }
 
+test("字典导入会话覆盖编码预检和所有批次，失败或取消均释放会话", async () => {
+  const previousWindow = globalThis.window
+  globalThis.window = { __TAURI_INTERNALS__: {} }
+  try {
+    for (const scenario of [
+      "success",
+      "cancel",
+      "invalid",
+      "failure",
+      "paste",
+    ]) {
+      const calls = []
+      let active = false
+      const controller = new AbortController()
+      const harness = sourceHarness({
+        "@tauri-apps/api/core": {
+          invoke: async (command, args) => {
+            calls.push(command)
+            if (command === "dictionary_import_begin") {
+              assert.equal(active, false)
+              active = true
+              return "import-session"
+            }
+            assert.equal(active, true)
+            if (command === "dictionary_import_finish") {
+              assert.equal(args.id, "import-session")
+              active = false
+              return
+            }
+            assert.equal(command, "dictionary_add")
+            assert.equal(args.importId, "import-session")
+            if (scenario === "failure") throw new Error("写入失败")
+            return {
+              submittedCount: args.candidates.length,
+              addedCount: args.candidates.length,
+              duplicateCount: 0,
+              invalidCount: 0,
+            }
+          },
+        },
+      })
+      const dictionary = harness.load("src/lib/dictionary.ts")
+      const rows = Array.from({ length: 5000 }, (_, i) => `candidate-${i}`)
+      const run =
+        scenario === "paste"
+          ? dictionary.addDictionaryCandidates(rows)
+          : dictionary.importDictionaryFile(
+              new File(
+                [
+                  scenario === "invalid"
+                    ? new Uint8Array([0xff, 0xfe, 0x61])
+                    : rows.join("\n"),
+                ],
+                "测试字典.txt"
+              ),
+              {
+                signal: controller.signal,
+                onProgress(progress) {
+                  assert.equal(
+                    active,
+                    true,
+                    "preflight must already own a native session"
+                  )
+                  if (scenario === "cancel" && progress.phase === "validating")
+                    controller.abort()
+                },
+              }
+            )
+      if (["success", "paste"].includes(scenario)) {
+        assert.equal((await run).addedCount, 5000)
+        assert.equal(
+          calls.filter((call) => call === "dictionary_add").length,
+          2
+        )
+      } else await assert.rejects(run)
+      assert.equal(calls[0], "dictionary_import_begin")
+      assert.equal(calls.at(-1), "dictionary_import_finish")
+      assert.equal(
+        calls.filter((call) => call === "dictionary_import_begin").length,
+        1
+      )
+      assert.equal(dictionary.isDictionaryImportRunning(), false)
+      assert.equal(active, false)
+    }
+  } finally {
+    globalThis.window = previousWindow
+  }
+})
+
 test("文件夹选择不重放不可用的历史路径，文件选择仍记住父目录", async () => {
   const previousWindow = globalThis.window
   const reads = []

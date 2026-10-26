@@ -127,7 +127,7 @@ pub(crate) async fn database_restore_apply(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<DatabaseRestoreResult, String> {
-    let lease = state.lifecycle.begin()?;
+    let lease = state.lifecycle.reserve_idle_maintenance()?;
     let _reservation = crate::task_coordination::TaskStartReservation::acquire(
         &state.archive_task_starting,
         "当前有归档或数据维护操作，请稍后恢复。",
@@ -217,7 +217,7 @@ pub(crate) struct DatabaseBackupResult {
 pub(crate) async fn data_backup(
     state: State<'_, AppState>,
 ) -> Result<DatabaseBackupResult, String> {
-    let lease = state.lifecycle.begin()?;
+    let lease = state.lifecycle.reserve_idle_maintenance()?;
     let _reservation = crate::task_coordination::TaskStartReservation::acquire(
         &state.archive_task_starting,
         "请等待当前归档或数据维护操作完成后再备份。",
@@ -316,12 +316,31 @@ pub(crate) async fn dictionary_count(state: State<'_, AppState>) -> Result<u64, 
 }
 
 #[tauri::command]
+pub(crate) fn dictionary_import_begin(state: State<'_, AppState>) -> Result<String, String> {
+    state.dictionary_imports.begin(&state.lifecycle)
+}
+
+#[tauri::command]
+pub(crate) fn dictionary_import_finish(state: State<'_, AppState>, id: String) {
+    state.dictionary_imports.finish(&id);
+}
+
+#[tauri::command]
 pub(crate) async fn dictionary_add(
     state: State<'_, AppState>,
     candidates: Vec<String>,
     group: Option<String>,
+    import_id: Option<String>,
 ) -> Result<DictionaryCandidateAddSummary, String> {
+    let lease = match import_id {
+        Some(id) => state.dictionary_imports.batch(&id)?,
+        None => Arc::new(state.lifecycle.begin()?),
+    };
     let result = run_dictionary(Arc::clone(&state.dictionary), move |store| {
+        let _lease = lease;
+        if _lease.cancellation.is_cancelled() {
+            return Err("字典导入已取消。".into());
+        }
         store
             .add_candidates_to_group(candidates, group.as_deref())
             .map_err(|error| error.to_string())
@@ -364,8 +383,10 @@ pub(crate) async fn dictionary_delete(
     state: State<'_, AppState>,
     ids: Vec<i64>,
 ) -> Result<u64, String> {
+    let lease = state.lifecycle.begin()?;
     let requested_count = ids.len();
     let result = run_dictionary(Arc::clone(&state.dictionary), move |store| {
+        let _lease = lease;
         store.delete(&ids).map_err(|error| error.to_string())
     })
     .await;
@@ -527,6 +548,7 @@ mod tests {
             paths,
             resource_dir: directory.path().to_path_buf(),
             dictionary: Arc::clone(&dictionary),
+            dictionary_imports: crate::dictionary_imports::DictionaryImports::default(),
             prepared_restore: Mutex::new(None),
             recovery_task: Mutex::new(None),
             compression_task: Mutex::new(None),

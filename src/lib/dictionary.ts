@@ -134,7 +134,8 @@ export async function countDictionary(): Promise<number> {
 
 export async function addDictionaryCandidates(
   candidates: string[],
-  group?: string | null
+  group?: string | null,
+  importId?: string
 ): Promise<DictionaryCandidateAddSummary> {
   if (candidates.length === 0) {
     return EMPTY_SUMMARY
@@ -143,16 +144,33 @@ export async function addDictionaryCandidates(
     return memoryStore.add(candidates)
   }
 
+  const ownsSession = importId === undefined
+  const session = importId ?? (await invoke<string>("dictionary_import_begin"))
   let summary = EMPTY_SUMMARY
-  for (let i = 0; i < candidates.length; i += DICTIONARY_BATCH_SIZE) {
-    const batch = candidates.slice(i, i + DICTIONARY_BATCH_SIZE)
-    const part = await invoke<DictionaryCandidateAddSummary>("dictionary_add", {
-      candidates: batch,
-      group: group ?? null,
-    })
-    summary = mergeSummary(summary, part)
+  if (ownsSession) activeDictionaryImports += 1
+  try {
+    for (let i = 0; i < candidates.length; i += DICTIONARY_BATCH_SIZE) {
+      const batch = candidates.slice(i, i + DICTIONARY_BATCH_SIZE)
+      const part = await invoke<DictionaryCandidateAddSummary>(
+        "dictionary_add",
+        {
+          candidates: batch,
+          group: group ?? null,
+          importId: session,
+        }
+      )
+      summary = mergeSummary(summary, part)
+    }
+    return summary
+  } finally {
+    if (ownsSession) {
+      try {
+        await invoke("dictionary_import_finish", { id: session })
+      } finally {
+        activeDictionaryImports -= 1
+      }
+    }
   }
-  return summary
 }
 
 export async function deleteDictionaryCandidates(
@@ -180,9 +198,12 @@ export async function importDictionaryFile(
   const encoder = new TextEncoder()
   let processedBytes = 0
   let batchBytes = 0
+  let importId: string | undefined
   activeDictionaryImports += 1
 
   try {
+    if (isDesktopRuntime())
+      importId = await invoke<string>("dictionary_import_begin")
     const encoding = await detectDictionaryEncoding(file, options)
     const report = () =>
       options.onProgress?.({
@@ -195,7 +216,7 @@ export async function importDictionaryFile(
     const flush = async () => {
       options.signal?.throwIfAborted()
       if (batch.length === 0) return
-      const part = await addDictionaryCandidates(batch, options.group)
+      const part = await addDictionaryCandidates(batch, options.group, importId)
       summary = mergeSummary(summary, part)
       batch = []
       batchBytes = 0
@@ -310,7 +331,17 @@ export async function importDictionaryFile(
       options.signal?.aborted === true
     )
   } finally {
-    activeDictionaryImports -= 1
+    try {
+      if (importId) await invoke("dictionary_import_finish", { id: importId })
+    } catch (reason) {
+      throw new DictionaryImportError(
+        reason,
+        summary,
+        options.signal?.aborted ?? false
+      )
+    } finally {
+      activeDictionaryImports -= 1
+    }
   }
 }
 
