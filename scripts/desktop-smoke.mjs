@@ -12,6 +12,7 @@ import {
   readdir,
   access,
   unlink,
+  realpath,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -29,7 +30,9 @@ const sevenZip =
   process.env.ARC_RECALL_TEST_7ZIP ?? "C:/Program Files/7-Zip/7z.exe"
 await access(binary)
 await access(sevenZip)
-const root = await mkdtemp(join(tmpdir(), "arc-recall-desktop-e2e-"))
+const root = await realpath(
+  await mkdtemp(join(tmpdir(), "arc-recall-desktop-e2e-"))
+)
 const evidence = resolve(
   process.env.ARC_RECALL_TEST_EVIDENCE ?? "test-results/native"
 )
@@ -79,6 +82,7 @@ const invoke = (command, args = {}) =>
   )
 async function launch() {
   motionWindowHandle = null
+  let startupOutput = ""
   const server = createServer().listen(0, "127.0.0.1")
   await once(server, "listening")
   const port = server.address().port
@@ -91,13 +95,19 @@ async function launch() {
       WEBVIEW2_USER_DATA_FOLDER: join(root, `webview-${port}`),
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
     },
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
   })
+  const captureStartup = (chunk) => {
+    startupOutput = (startupOutput + chunk.toString()).slice(-16 * 1024)
+  }
+  child.stdout.on("data", captureStartup)
+  child.stderr.on("data", captureStartup)
   child.on("error", (error) => errors.push(error.message))
   let ready = false
-  for (let i = 0; i < 150; i++) {
+  // Cold hosted Windows images can take longer to initialize WebView2.
+  for (let i = 0; i < 450; i++) {
     if (child.exitCode !== null)
-      throw new Error(`Desktop exited: ${child.exitCode}`)
+      throw new Error(`Desktop exited: ${child.exitCode}\n${startupOutput}`)
     try {
       ready = (await fetch(`http://127.0.0.1:${port}/json/version`)).ok
     } catch {
@@ -106,7 +116,13 @@ async function launch() {
     if (ready) break
     await delay(200)
   }
-  assert.ok(ready, "WebView2 CDP did not start")
+  if (!ready) {
+    await writeFile(join(evidence, "startup-failure.txt"), startupOutput)
+  }
+  assert.ok(
+    ready,
+    `WebView2 CDP did not start within 90 seconds\n${startupOutput}`
+  )
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
   const context = browser.contexts()[0]
   page =

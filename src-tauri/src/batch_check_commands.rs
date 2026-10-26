@@ -674,7 +674,10 @@ mod tests {
             .collect::<Vec<_>>();
         let grouped = group_volume_paths(&paths, &CancellationToken::default());
         assert_eq!(grouped.len(), 2);
-        assert_eq!(grouped[0].path, path_for_display(&first));
+        assert_eq!(
+            fs::canonicalize(&grouped[0].path).unwrap(),
+            fs::canonicalize(&first).unwrap()
+        );
         assert_eq!(grouped[0].source_paths, paths[..2]);
         assert_eq!(grouped[1].path, path_for_display(&missing));
         assert_eq!(grouped[1].source_paths, [path_for_display(&missing)]);
