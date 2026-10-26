@@ -919,6 +919,11 @@ Section Uninstall
     SetShellVarContext current
     RmDir /r "$APPDATA\${BUNDLEID}"
     RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
+    ; Keep in sync with AppPaths::APP_DATA_FOLDER_NAME (core paths.rs).
+    ; The bundle-id directories above contain WebView data, not the database.
+    ${If} $LOCALAPPDATA != ""
+      RmDir /r "$LOCALAPPDATA\ArcRecall"
+    ${EndIf}
   ${EndIf}
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
