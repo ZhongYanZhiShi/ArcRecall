@@ -130,7 +130,7 @@ test("状态读取失败暂停并保留任务 ID，继续不会重复启动", as
   assert.equal(queue.getSnapshot().items[0].state, "success")
 })
 
-test("队列容量和无效批次不会部分加入，完成项可清理后重新导入", () => {
+test("队列容量和无效批次不会部分加入，完成项可清理后重新导入", async () => {
   const queue = createCompressionQueue({
     start: async () => finished("unused"),
     status: async (id) => finished(id),
@@ -147,6 +147,13 @@ test("队列容量和无效批次不会部分加入，完成项可清理后重�
   )
   assert.throws(() => queue.add([request("额外")], false), /200/)
   assert.equal(queue.getSnapshot().items.length, 200)
+  await queue.run()
+  assert.ok(queue.getSnapshot().items.every((item) => item.state === "success"))
+  queue.clearFinished()
+  assert.equal(queue.getSnapshot().items.length, 0)
+  queue.add([request("资料-0")], false)
+  await queue.run()
+  assert.equal(queue.getSnapshot().items[0].state, "success")
 })
 
 test("原生任务确认不存在时暂停剩余队列，允许明确重新排队而不自动重复", async () => {

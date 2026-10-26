@@ -1,6 +1,13 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdtemp, mkdir, readFile, writeFile, access } from "node:fs/promises"
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  writeFile,
+  access,
+  rm,
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -25,6 +32,7 @@ test(
       return
     }
     const root = await mkdtemp(join(tmpdir(), "arcrecall-uninstall-test-"))
+    t.after(() => rm(root, { recursive: true, force: true, maxRetries: 3 }))
     const template = await readFile("src-tauri/windows/installer.nsi", "utf8")
     const paths = await readFile("crates/arc-recall-core/src/paths.rs", "utf8")
     const dataName = paths.match(/APP_DATA_FOLDER_NAME: &str = "([^"]+)"/)[1]

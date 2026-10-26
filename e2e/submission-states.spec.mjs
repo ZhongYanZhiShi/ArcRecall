@@ -1,3 +1,4 @@
+import { mockDictionaryImportSessions } from "./helpers/dictionary-session.mjs"
 import { test, expect } from "@playwright/test"
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
@@ -64,6 +65,7 @@ async function setup(page, theme, width) {
       },
     }
   })
+  await mockDictionaryImportSessions(page)
 }
 
 async function dismissNotices(page) {
@@ -343,6 +345,9 @@ for (const theme of ["dark", "light"])
       ).toBeInViewport({ ratio: 1 })
       await screenshot(page, `${prefix}-dictionary-pending`)
       await reject(page, dialog.getByRole("status"))
+      expect(
+        await page.evaluate(() => window.dictionaryImportSessions.size)
+      ).toBe(0)
       await expect(input).toHaveValue("测试候选一\n测试候选二")
       await expect(dialog.getByText(/输入内容已保留/)).toBeVisible()
       await expect(
@@ -364,6 +369,15 @@ for (const theme of ["dark", "light"])
       )
       await expect(input).toHaveValue("")
       await expect(dialog.getByRole("status")).toContainText("批量新增完成")
+      expect(
+        await page.evaluate(() => window.dictionaryImportSessions.size)
+      ).toBe(0)
+      expect(await page.evaluate(() => window.dictionaryImportCalls)).toEqual([
+        "dictionary_import_begin",
+        "dictionary_import_finish",
+        "dictionary_import_begin",
+        "dictionary_import_finish",
+      ])
       await screenshot(page, `${prefix}-dictionary-success`)
     })
 

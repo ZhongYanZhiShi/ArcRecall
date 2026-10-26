@@ -260,3 +260,49 @@ test("预设校验失败会保留等待项原选项并显示错误", async ({ pa
   await expect(dialog.getByRole("alert")).toContainText("预设输出目录不存在")
   expect(await page.evaluate(() => window.queueSaves.length)).toBe(0)
 })
+
+test("隐藏解压页期间队列继续更新，返回后订阅显示完成状态且不重复启动", async ({
+  page,
+}) => {
+  const panel = await setup(page)
+  await panel
+    .getByRole("button", { name: "按顺序处理 3 项", exact: true })
+    .click()
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.queueCalls.filter((call) => call.command === "recovery_start")
+            .length
+      )
+    )
+    .toBe(1)
+  const nav = page.getByRole("navigation")
+  await nav.getByRole("button", { name: "压缩", exact: true }).click()
+  await expect(panel).not.toBeVisible()
+  await page.evaluate(() => {
+    window.queueFinishTasks = true
+  })
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.queueCalls.filter((call) => call.command === "recovery_start")
+            .length
+      )
+    )
+    .toBe(3)
+  await nav.getByRole("button", { name: "解压", exact: true }).click()
+  await expect(
+    panel.getByRole("button", { name: "暂无待处理任务", exact: true })
+  ).toBeVisible()
+  for (let index = 0; index < 3; index++)
+    await expect(panel.locator("ol > li").nth(index)).toContainText("已完成")
+  expect(
+    await page.evaluate(
+      () =>
+        window.queueCalls.filter((call) => call.command === "recovery_start")
+          .length
+    )
+  ).toBe(3)
+})

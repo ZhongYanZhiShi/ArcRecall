@@ -1826,7 +1826,7 @@ fn real_seven_zip_recovers_a_large_pe_overlay_recursively() {
 }
 
 #[test]
-fn recursively_uses_dictionary_once_for_different_nested_password() {
+fn recursively_reuses_dictionary_for_two_different_nested_passwords() {
     let Some(seven_zip) = locate_seven_zip() else {
         eprintln!("skip: 7z.exe not found");
         return;
@@ -1844,12 +1844,22 @@ fn recursively_uses_dictionary_once_for_different_nested_password() {
         &inner_archive,
         &payload,
     );
+    let second_password = "second-nested-pass";
+    let second_archive = dir.path().join("dictionary-second.7z");
+    create_encrypted_archive(
+        &seven_zip,
+        "-t7z",
+        second_password,
+        &second_archive,
+        &payload,
+    );
     let outer_archive = dir.path().join("plain-outer.7z");
     create_plain_archive(&seven_zip, &outer_archive, &inner_archive);
+    create_plain_archive(&seven_zip, &outer_archive, &second_archive);
     let dictionary_path = dir.path().join("nested.dict");
     fs::write(
         &dictionary_path,
-        format!("wrong-one\n{nested_password}\nwrong-two\n"),
+        format!("wrong-one\n{nested_password}\n{second_password}\nwrong-two\n"),
     )
     .unwrap();
     let output_directory = dir.path().join("dictionary-recursive-out");
@@ -1857,7 +1867,7 @@ fn recursively_uses_dictionary_once_for_different_nested_password() {
         archive_path: outer_archive,
         output_directory: output_directory.clone(),
         dictionary_path: dictionary_path.clone(),
-        dictionary_count: 3,
+        dictionary_count: 4,
         known_password: None,
         work_directory: dir.path().join("dictionary-recursive-work"),
     };
@@ -1879,7 +1889,7 @@ fn recursively_uses_dictionary_once_for_different_nested_password() {
             preparation_count.set(preparation_count.get() + 1);
             Ok(RecoveryDictionary {
                 path: dictionary_path,
-                candidate_count: 3,
+                candidate_count: 4,
             })
         },
         |_| {},
@@ -1888,12 +1898,27 @@ fn recursively_uses_dictionary_once_for_different_nested_password() {
 
     assert!(result.root.success, "{}", result.root.message);
     assert_eq!(preparation_count.get(), 1);
-    assert_eq!(result.extracted_nested_archives, 1);
+    assert_eq!(result.extracted_nested_archives, 2);
     assert!(
         result
             .recovered_passwords
             .iter()
             .any(|password| password == nested_password)
+    );
+    assert!(
+        result
+            .recovered_passwords
+            .iter()
+            .any(|password| password == second_password)
+    );
+    assert_eq!(
+        fs::read_to_string(
+            output_directory
+                .join("dictionary-second")
+                .join("different-password.txt")
+        )
+        .unwrap(),
+        "nested-dictionary-ok"
     );
     assert_eq!(
         fs::read_to_string(

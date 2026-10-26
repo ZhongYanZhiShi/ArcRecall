@@ -1,3 +1,4 @@
+import { mockDictionaryImportSessions } from "./helpers/dictionary-session.mjs"
 import { test, expect } from "@playwright/test"
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
@@ -59,6 +60,7 @@ async function setup(page, theme, width) {
       },
     }
   })
+  await mockDictionaryImportSessions(page)
 }
 async function dismiss(page) {
   const close = page.getByRole("button", { name: "关闭通知", exact: true })
