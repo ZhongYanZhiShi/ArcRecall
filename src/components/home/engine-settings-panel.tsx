@@ -122,12 +122,14 @@ export function EngineSettingsPanel() {
   )
 
   const refreshEngine = React.useCallback(async () => {
-    const [bundle, status, john, recovery] = await Promise.all([
+    const [bundle, status, john, recovery, settings] = await Promise.all([
       getFullEngineBundleStatus(),
       getHashcatStatus(),
       getJohnPerlStatus(),
       refreshRecoveryCapabilities(),
+      getSettings(),
     ])
+    setAppSettings(settings)
     applyEngineStatus({
       fullBundle: bundle,
       hashcat: status,

@@ -261,7 +261,7 @@ export const SettingsPage = React.forwardRef<
               keepMounted={visitedCategories.includes("engine")}
               className="mt-0 outline-none"
             >
-              <EngineSettingsPanel />
+              <EngineSettingsPanel key={dataRevision} />
             </TabsContent>
             <TabsContent
               value="app"

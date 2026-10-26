@@ -2599,6 +2599,45 @@ test("归档预览切页后完成或失败均解除忙碌，并可重新读取",
   }
 })
 
+test("重新探测会同步恢复后的解压设置，普通切页保留输入", async () => {
+  let settings = {
+    recovery: { flattenOutputDirectories: false, scanMaxFilesPerDirectory: 10 },
+  }
+  const harness = sourceHarness({
+    "@/lib/settings": {
+      getSettings: async () => structuredClone(settings),
+      getFullEngineBundleStatus: async () => ({}),
+      getHashcatStatus: async () => ({}),
+      getJohnPerlStatus: async () => ({}),
+    },
+    "@/lib/recovery": {
+      getRecoveryCapabilities: async () => ({}),
+      refreshRecoveryCapabilities: async () => ({}),
+    },
+  })
+  const { EngineSettingsPanel } = harness.load(
+    "src/components/home/engine-settings-panel.tsx"
+  )
+  const card = () =>
+    find(
+      harness.render(EngineSettingsPanel),
+      (node) => node.type === "DefaultRecoveryCard"
+    ).props
+  card()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await settle()
+  card().onScanLimitChange("25")
+  harness.hide()
+  assert.equal(card().scanLimitValue, "25")
+  settings = {
+    recovery: { flattenOutputDirectories: true, scanMaxFilesPerDirectory: 0 },
+  }
+  card().onRefresh()
+  await settle()
+  assert.equal(card().appSettings.recovery.flattenOutputDirectories, true)
+  harness.hide()
+})
+
 test("统一备份预览显示各类数据范围，取消不应用恢复", async () => {
   const calls = []
   const harness = sourceHarness({
