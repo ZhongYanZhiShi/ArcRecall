@@ -1,5 +1,21 @@
 use super::*;
 
+pub(super) fn decode_record(json: &str, state: String) -> Result<TaskRecord, String> {
+    let mut record: TaskRecord = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    record.state = state;
+    if record.state == "interrupted" {
+        if record.compression_verification == Some(CompressionVerification::Running) {
+            record.compression_verification = Some(CompressionVerification::Interrupted);
+        }
+        for item in &mut record.check_items {
+            if matches!(item.state.as_str(), "waiting" | "checking") {
+                item.state = "interrupted".into();
+            }
+        }
+    }
+    Ok(record)
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskRecordQuery {
@@ -73,21 +89,7 @@ impl TaskRecordStore {
             .map_err(|e| e.to_string())?;
         rows.map(|row| {
             let (json, state) = row.map_err(|e| e.to_string())?;
-            let mut record: TaskRecord = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-            record.state = state;
-            if record.state == "interrupted" {
-                if record.compression_verification == Some(super::CompressionVerification::Running)
-                {
-                    record.compression_verification =
-                        Some(super::CompressionVerification::Interrupted);
-                }
-                for item in &mut record.check_items {
-                    if matches!(item.state.as_str(), "waiting" | "checking") {
-                        item.state = "interrupted".into();
-                    }
-                }
-            }
-            Ok(record)
+            decode_record(&json, state)
         })
         .collect()
     }

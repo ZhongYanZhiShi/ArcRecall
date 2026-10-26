@@ -79,6 +79,7 @@ impl TaskRecordStore {
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| e.to_string())?;
         conn.execute_batch("PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS task_records (id TEXT PRIMARY KEY, started INTEGER NOT NULL, state TEXT NOT NULL, record TEXT NOT NULL, owner_session TEXT);").map_err(|e| e.to_string())?;
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS task_records_started_id ON task_records(started DESC, id DESC);").map_err(|e| e.to_string())?;
         Ok(Self(conn))
     }
 
@@ -142,15 +143,22 @@ impl TaskRecordStore {
     }
 
     pub fn all(&self) -> Result<Vec<TaskRecord>, String> {
-        let mut result = Vec::new();
-        loop {
-            let page = self.list(result.len() as u32, false)?;
-            let done = page.len() < 100;
-            result.extend(page);
-            if done {
-                return Ok(result);
-            }
-        }
+        // A single SQLite read snapshot avoids re-scanning OFFSET pages and
+        // cannot skip or duplicate rows if another connection writes records.
+        let mut statement = self
+            .0
+            .prepare("SELECT record,state FROM task_records ORDER BY started DESC,id DESC")
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.map(|row| {
+            let (json, state) = row.map_err(|e| e.to_string())?;
+            query::decode_record(&json, state)
+        })
+        .collect()
     }
 
     pub fn replace_all(&mut self, records: &[TaskRecord]) -> Result<(), String> {
@@ -221,6 +229,46 @@ impl TaskRecordStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ordered_history_uses_an_index_and_full_reads_preserve_ties_and_interrupted_states() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TaskRecordStore::open(&temp.path().join("records.db")).unwrap();
+        for index in 0..205 {
+            store
+                .save(&TaskRecord {
+                    task_id: format!("task-{index:03}"),
+                    started_at_ms: 1,
+                    state: "interrupted".into(),
+                    compression_verification: Some(CompressionVerification::Running),
+                    check_items: vec![TaskCheckItem {
+                        path: "测试归档.zip".into(),
+                        state: "checking".into(),
+                        elapsed_ms: 0,
+                        checked_at_ms: None,
+                    }],
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let all = store.all().unwrap();
+        assert_eq!(all.len(), 205);
+        assert_eq!(all[0].task_id, "task-204");
+        assert_eq!(all[204].task_id, "task-000");
+        assert!(all.iter().all(|row| row.compression_verification
+            == Some(CompressionVerification::Interrupted)
+            && row.check_items[0].state == "interrupted"));
+        let mut query = store.0.prepare("EXPLAIN QUERY PLAN SELECT record,state FROM task_records ORDER BY started DESC,id DESC LIMIT 100").unwrap();
+        let plan: Vec<String> = query
+            .query_map([], |row| row.get(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            plan.iter().all(|line| !line.contains("TEMP B-TREE")),
+            "{plan:?}"
+        );
+    }
+
     #[test]
     fn interrupted_records_survive_restart_and_can_be_removed() {
         let temp = tempfile::tempdir().unwrap();
