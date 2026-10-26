@@ -558,6 +558,36 @@ async function verifyAiFileReference() {
   }
 }
 
+if (process.argv.includes("--improvements-only")) {
+  try {
+    await launch()
+    const { verifyImprovements } = await import("./desktop-improvements.mjs")
+    await verifyImprovements({
+      page,
+      invoke,
+      pastePaths,
+      archive,
+      data,
+      evidence,
+    })
+    await close()
+    await launch()
+    assert.equal(
+      (await invoke("settings_get")).recovery.scanMaxFilesPerDirectory,
+      0
+    )
+    await invoke("data_backup")
+    assert.deepEqual(errors, [])
+    console.log(
+      "PASS: real close and restart completes with an unfinished browser import session"
+    )
+  } finally {
+    await close(false)
+  }
+  console.log(`Improvement evidence: ${evidence}`)
+  process.exit(0)
+}
+
 if (process.argv.includes("--batch-compression-only")) {
   try {
     await launch()

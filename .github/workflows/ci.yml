@@ -89,6 +89,9 @@ jobs:
       - name: Test batch compression and automatic verification
         run: pnpm test:desktop:batch-compression
 
+      - name: Test restore refresh, preview navigation and native import lifecycle
+        run: pnpm test:desktop:improvements
+
       - name: Upload UI test evidence
         if: always()
         uses: actions/upload-artifact@v4

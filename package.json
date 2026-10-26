@@ -36,6 +36,7 @@
     "test:desktop:data": "node scripts/desktop-smoke.mjs --data-management-only",
     "test:desktop:compression": "node scripts/desktop-smoke.mjs --compression-presets-only",
     "test:desktop:batch-compression": "node scripts/desktop-smoke.mjs --batch-compression-only",
+    "test:desktop:improvements": "node scripts/desktop-smoke.mjs --improvements-only",
     "test:desktop:lifecycle": "node scripts/desktop-smoke.mjs --lifecycle-only --with-retries"
   },
   "dependencies": {
