@@ -118,6 +118,19 @@ async function launch() {
   }
   if (!ready) {
     await writeFile(join(evidence, "startup-failure.txt"), startupOutput)
+    const diagnostics = spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        `Get-Process -Id ${child.pid} | Select-Object ProcessName,Responding,MainWindowTitle,MainWindowHandle | ConvertTo-Json; Get-CimInstance Win32_Process -Filter 'ParentProcessId = ${child.pid}' | Select-Object Name,ProcessId,CommandLine | ConvertTo-Json`,
+      ],
+      { windowsHide: true, encoding: "utf8", timeout: 10_000 }
+    )
+    await writeFile(
+      join(evidence, "startup-processes.txt"),
+      `${diagnostics.stdout ?? ""}\n${diagnostics.stderr ?? ""}`
+    )
   }
   assert.ok(
     ready,
