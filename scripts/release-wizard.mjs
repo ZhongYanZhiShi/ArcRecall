@@ -23,6 +23,17 @@ const VERSION_FILES = [
   "Cargo.lock",
 ]
 
+export function appendInstallationGuide(notes) {
+  const guide = readFileSync(
+    path.join(ROOT, ".github/release-notes/installation.md"),
+    "utf8"
+  )
+    .replaceAll("\r\n", "\n")
+    .trim()
+  const body = notes.replaceAll("\r\n", "\n").trimEnd()
+  return body.endsWith(guide) ? `${body}\n` : `${body}\n\n${guide}\n`
+}
+
 export function suggestedVersion(current) {
   versionFromTag(`v${current}`)
   const [stable, prerelease] = current.split("-")
@@ -192,6 +203,7 @@ export async function releaseWizard(options, dependencies = {}) {
     notes = `${lines.join("\n")}\n`
   }
   if (!notes.trim()) throw new Error("更新说明不能为空。")
+  if (!resume) notes = appendInstallationGuide(notes)
   // Fetch only main; refuse to publish a branch that is behind or has diverged.
   run("git", ["fetch", "--no-tags", "origin", "main"])
   try {

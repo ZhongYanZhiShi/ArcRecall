@@ -182,7 +182,14 @@ test("回车采用建议版本，提交并推送 main 和标签，默认交给�
   )
   assert.equal(
     readFileSync(path.join(f.root, ".github/release-notes/v0.1.2.md"), "utf8"),
-    "- 修复导入失败\n- 改善压缩速度\n"
+    "- 修复导入失败\n- 改善压缩速度\n\n" +
+      readFileSync(
+        new URL("../.github/release-notes/installation.md", import.meta.url),
+        "utf8"
+      )
+        .replaceAll("\r\n", "\n")
+        .trim() +
+      "\n"
   )
   assert.equal(f.git(["rev-list", "--count", "HEAD"]), "2")
   assert.deepEqual(
