@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ArcRecall · 更新</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="main.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <svg viewBox="96 32 320 448" aria-hidden="true">
+          <path
+            d="M178 464L126 464A14 14 0 0 1 112 450L112 192A144 144 0 0 1 400 192L400 450A14 14 0 0 1 386 464L334 464L286 329.6A74 74 0 1 0 226 329.6Z"
+            fill="currentColor"
+          />
+          <circle cx="256" cy="262" r="30" class="key" />
+        </svg>
+        <span>ARCRECALL</span><span id="version"></span>
+      </header>
+      <h1 id="heading">正在准备更新</h1>
+      <p id="message" role="status" aria-live="polite">
+        更新窗口已打开，正在连接更新进程。
+      </p>
+      <ol aria-label="更新阶段">
+        <li data-phase="waiting">关闭应用</li>
+        <li data-phase="installing">安装新版</li>
+        <li data-phase="starting">启动新版</li>
+      </ol>
+      <div id="error" role="alert" hidden></div>
+      <p id="hint">本机设置、字典和历史记录会保留。完成后自动打开新版。</p>
+      <footer>
+        <button id="close" type="button" hidden>关闭更新窗口</button>
+        <button id="retry" type="button" hidden>重试</button>
+      </footer>
+    </main>
+  </body>
+</html>

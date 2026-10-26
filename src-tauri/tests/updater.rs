@@ -8,6 +8,63 @@ const PAYLOAD: &[u8] = include_bytes!("fixtures/updater/payload.txt");
 const PUBLIC_KEY: &str = include_str!("fixtures/updater/public-key.txt");
 const SIGNATURE: &str = include_str!("fixtures/updater/payload.txt.sig");
 
+#[path = "../src/update_cache.rs"]
+mod update_cache;
+
+// Public test vectors from tauri-plugin-updater 2.14.0 offline_tests (payload: `test`).
+const VERSIONED_KEY: &str = include_str!("fixtures/updater/versioned-public-key.txt");
+const VERSIONED_SIGNATURE: &str = include_str!("fixtures/updater/versioned-payload.sig");
+
+fn cached_manifest() -> serde_json::Value {
+    serde_json::json!({ "version": "2.0.0", "notes": "离线更新说明", "platforms": {
+        "test-target": { "url": "https://example.invalid/package", "signature": VERSIONED_SIGNATURE }
+    }})
+}
+
+#[test]
+fn cached_package_survives_restart_and_rejects_changed_bytes_or_version() {
+    for changed in ["none", "bytes", "version", "missing", "obsolete"] {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = cached_manifest();
+        update_cache::save_cached(directory.path(), &manifest, b"test").unwrap();
+        // Exercise replacement too, including Windows atomic-file behavior.
+        update_cache::save_cached(directory.path(), &manifest, b"test").unwrap();
+        match changed {
+            "bytes" => std::fs::write(directory.path().join("package.bin"), b"changed").unwrap(),
+            "missing" => std::fs::remove_file(directory.path().join("package.bin")).unwrap(),
+            "version" | "obsolete" => {
+                let mut manifest = manifest.clone();
+                manifest["version"] = serde_json::json!(if changed == "version" {
+                    "9.0.0"
+                } else {
+                    "0.0.1"
+                });
+                std::fs::write(
+                    directory.path().join("release.json"),
+                    serde_json::to_vec(&manifest).unwrap(),
+                )
+                .unwrap();
+            }
+            _ => {}
+        }
+        let (_app, native) = native_updater_with_key("https://example.invalid", VERSIONED_KEY);
+        let result = update_cache::restore_cached(&native, directory.path());
+        if changed == "none" {
+            let (update, bytes) = result.unwrap().unwrap();
+            assert_eq!(bytes, b"test");
+            assert_eq!(update.version, "2.0.0");
+        } else {
+            if changed == "obsolete" {
+                assert!(result.unwrap().is_none());
+            } else {
+                assert!(result.is_err());
+            }
+            assert!(!directory.path().join("release.json").exists());
+            assert!(!directory.path().join("package.bin").exists());
+        }
+    }
+}
+
 // Real loopback HTTP and signature verification; only the window runtime is mocked.
 // Never execute an installer or use the production signing key in these tests.
 fn server(
@@ -68,11 +125,21 @@ fn native_updater(
     tauri::App<tauri::test::MockRuntime>,
     tauri_plugin_updater::Updater,
 ) {
+    native_updater_with_key(endpoint, PUBLIC_KEY)
+}
+
+fn native_updater_with_key(
+    endpoint: &str,
+    public_key: &str,
+) -> (
+    tauri::App<tauri::test::MockRuntime>,
+    tauri_plugin_updater::Updater,
+) {
     let mut context = tauri::test::mock_context(tauri::test::noop_assets());
     context.config_mut().plugins.0.insert(
         "updater".into(),
         serde_json::json!({
-            "pubkey": PUBLIC_KEY.trim(),
+            "pubkey": public_key.trim(),
             "endpoints": [endpoint],
             "dangerousInsecureTransportProtocol": true
         }),

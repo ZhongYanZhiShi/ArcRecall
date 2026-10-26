@@ -21,6 +21,11 @@ pub(crate) struct TaskLifecycle {
 }
 
 impl TaskLifecycle {
+    pub(crate) fn update_blocked(&self) -> bool {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.closing || state.updating || !state.tasks.is_empty()
+    }
+
     pub(crate) fn begin(self: &Arc<Self>) -> Result<TaskLease, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.closing {
@@ -233,11 +238,15 @@ mod tests {
     #[test]
     fn update_requires_idle_app_and_excludes_new_tasks_until_released() {
         let lifecycle = Arc::new(TaskLifecycle::default());
+        assert!(!lifecycle.update_blocked());
         let task = lifecycle.begin().unwrap();
+        assert!(lifecycle.update_blocked());
         assert!(lifecycle.reserve_update().is_err());
         assert!(!task.cancellation.is_cancelled());
         drop(task);
+        assert!(!lifecycle.update_blocked());
         let update = lifecycle.reserve_update().unwrap();
+        assert!(lifecycle.update_blocked());
         assert!(lifecycle.begin().is_err());
         assert!(lifecycle.reserve_update().is_err());
         drop(update);

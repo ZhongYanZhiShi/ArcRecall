@@ -1,5 +1,8 @@
 use std::sync::{Mutex, atomic::AtomicBool};
 use std::time::Duration;
+#[path = "update_cache.rs"]
+mod cache;
+use cache::{restore_cached, save_cached};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
@@ -20,6 +23,9 @@ pub(crate) struct UpdateStatus {
     total_bytes: Option<u64>,
     last_checked: Option<u64>,
     error: Option<String>,
+    install_blocked: bool,
+    cached: bool,
+    cache_warning: Option<String>,
 }
 
 #[derive(Default)]
@@ -105,6 +111,7 @@ pub(crate) fn app_update_status(
         .load()
         .map_err(|e| e.to_string())?
         .auto_update;
+    status.install_blocked = state.lifecycle.update_blocked();
     if status.phase.is_empty() {
         status.phase = "idle";
     }
@@ -143,6 +150,27 @@ pub(crate) async fn app_update_check(
     }
     if !configured(&app) {
         return Err("此构建尚未配置更新签名，或当前平台没有可用的更新通道。".into());
+    }
+    // Restore offline before contacting the server. The plugin binds cached metadata
+    // to the signed version and uses the current application's trusted public key.
+    if let Ok(directory) = app.path().app_cache_dir()
+        && let Ok(Some((update, bytes))) = restore_cached(
+            &app.updater().map_err(|e| e.to_string())?,
+            &directory.join("update"),
+        )
+    {
+        updater.change(|pending| {
+            pending.status.phase = "ready";
+            pending.status.version = Some(update.version.clone());
+            pending.status.notes = update.body.clone();
+            pending.status.downloaded_bytes = bytes.len() as u64;
+            pending.status.total_bytes = Some(bytes.len() as u64);
+            pending.status.cached = true;
+            pending.status.error = None;
+            pending.update = Some(update);
+            pending.bytes = Some(bytes);
+        });
+        return Ok(());
     }
     updater.change(|pending| {
         pending.status.phase = "checking";
@@ -186,7 +214,7 @@ pub(crate) async fn app_update_check(
                 .update
                 .is_some()
         {
-            download(&updater).await?;
+            download(&app, &updater).await?;
         }
         Ok::<_, String>(())
     }
@@ -197,7 +225,7 @@ pub(crate) async fn app_update_check(
     result
 }
 
-async fn download(updater: &AppUpdater) -> Result<(), String> {
+async fn download(app: &AppHandle, updater: &AppUpdater) -> Result<(), String> {
     let mut update = updater
         .pending
         .lock()
@@ -212,6 +240,7 @@ async fn download(updater: &AppUpdater) -> Result<(), String> {
         pending.status.error = None;
         pending.status.downloaded_bytes = 0;
         pending.status.total_bytes = None;
+        pending.status.cache_warning = None;
     });
     let bytes = update
         .download(
@@ -225,15 +254,38 @@ async fn download(updater: &AppUpdater) -> Result<(), String> {
         )
         .await
         .map_err(|e| format!("下载或签名校验失败，请重试：{e}"))?;
+    // The independent helper must be able to authenticate version metadata too.
+    // Reject legacy signatures before offering installation, not after handoff.
+    let native = app.updater().map_err(|e| e.to_string())?;
+    let restored = native
+        .restore_update(update.raw_json.clone())
+        .map_err(|e| format!("更新包缺少可验证的版本信息，请使用正式安装包更新：{e}"))?
+        .ok_or("该版本已不需要更新。")?;
+    restored.verify(&bytes).map_err(|e| e.to_string())?;
+    let cache_result = (|| {
+        let directory = app
+            .path()
+            .app_cache_dir()
+            .map_err(|e| e.to_string())?
+            .join("update");
+        save_cached(&directory, &update.raw_json, &bytes).map_err(|e| e.to_string())
+    })();
     updater.change(|pending| {
         pending.bytes = Some(bytes);
         pending.status.phase = "ready";
+        pending.status.cached = cache_result.is_ok();
+        pending.status.cache_warning = cache_result
+            .err()
+            .map(|_| "更新包仅在本次运行中可用；关闭应用后需要重新下载。".into());
     });
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) async fn app_update_download(updater: State<'_, AppUpdater>) -> Result<(), String> {
+pub(crate) async fn app_update_download(
+    app: AppHandle,
+    updater: State<'_, AppUpdater>,
+) -> Result<(), String> {
     let _reservation = TaskStartReservation::acquire(&updater.busy, "正在处理更新，请稍候。")?;
     if updater
         .pending
@@ -244,7 +296,7 @@ pub(crate) async fn app_update_download(updater: State<'_, AppUpdater>) -> Resul
     {
         return Ok(());
     }
-    let result = download(&updater).await;
+    let result = download(&app, &updater).await;
     if let Err(error) = &result {
         updater.fail(error.clone());
     }
@@ -252,28 +304,63 @@ pub(crate) async fn app_update_download(updater: State<'_, AppUpdater>) -> Resul
 }
 
 #[tauri::command]
-pub(crate) async fn app_update_install(app: AppHandle) -> Result<(), String> {
+pub(crate) async fn app_update_install(
+    app: AppHandle,
+    theme: Option<String>,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let updater = app.state::<AppUpdater>();
         let _reservation = TaskStartReservation::acquire(&updater.busy, "正在处理更新，请稍候。")?;
         let state = app.state::<AppState>();
         let _idle = state.lifecycle.reserve_update()?;
-        let mut pending = updater.pending.lock().map_err(|e| e.to_string())?;
-        let update = pending.update.clone().ok_or("请先检查更新。")?;
-        let bytes = pending.bytes.as_ref().ok_or("请先下载更新。")?;
-        // install() launches the Windows installer and exits this process on success.
-        // The lifecycle reservation prevents new archive tasks racing this call.
-        if let Err(error) = update.install(bytes) {
+        let (update, bytes) = {
+            let mut pending = updater.pending.lock().map_err(|e| e.to_string())?;
+            let update = pending.update.clone().ok_or("请先检查更新。")?;
+            let bytes = pending.bytes.take().ok_or("请先下载更新。")?;
+            pending.status.phase = "installing";
+            pending.status.error = None;
+            (update, bytes)
+        };
+        #[cfg(windows)]
+        let result = crate::update_helper::prepare(
+            &app,
+            &update,
+            &bytes,
+            theme.as_deref().unwrap_or("dark"),
+        );
+        #[cfg(not(windows))]
+        let result = {
+            let _ = theme;
+            Err::<(), String>("此平台尚不支持独立更新窗口。".into())
+        };
+        if let Err(error) = result {
+            let mut pending = updater.pending.lock().map_err(|e| e.to_string())?;
+            pending.bytes = Some(bytes);
+            pending.status.phase = "ready";
             pending.status.error = Some(format!("安装更新失败：{error}"));
             return Err(format!("安装更新失败：{error}"));
         }
+        // Close starts before releasing the maintenance lease: no task can enter the gap.
+        state.lifecycle.request_shutdown();
         state
             .exit_ready
             .store(true, std::sync::atomic::Ordering::Release);
-        app.restart();
+        app.exit(0);
+        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub(crate) fn app_update_started(app: AppHandle) -> Result<(), String> {
+    #[cfg(windows)]
+    return crate::update_helper::acknowledge_start(&app);
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

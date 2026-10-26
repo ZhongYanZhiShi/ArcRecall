@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils"
 import { prepareCompressionRetry } from "@/lib/compression-presets"
 import { getCompressionStatus } from "@/lib/compression"
 import { toast } from "sonner"
+import { useAppUpdate } from "@/components/update-provider"
 
 const loadExtractPage = () => import("@/components/home/extract-page")
 const loadCompressPage = () => import("@/components/home/compress-page")
@@ -141,6 +142,26 @@ export default function Page() {
   const [settingsCategoryRequestId, setSettingsCategoryRequestId] =
     React.useState(0)
   const [settingsAiDirty, setSettingsAiDirty] = React.useState(false)
+  const [settingsAppDirty, setSettingsAppDirty] = React.useState(false)
+  const { setInstallGuard } = useAppUpdate()
+  React.useEffect(() => {
+    const category = settingsAiDirty ? "ai" : "app"
+    setInstallGuard(
+      settingsAiDirty || settingsAppDirty
+        ? {
+            reason: settingsAiDirty
+              ? "AI 模型或重命名提示词有未保存的更改。"
+              : "日志磁盘上限有未保存的更改。",
+            resolve: () => {
+              setSettingsCategory(category)
+              setSettingsCategoryRequestId((id) => id + 1)
+              setVisitedNavs((current) => new Set([...current, "settings"]))
+              setActiveNav("settings")
+            },
+          }
+        : null
+    )
+  }, [settingsAiDirty, settingsAppDirty, setInstallGuard])
   const [pendingNav, setPendingNav] = React.useState<NavId | null>(null)
   const [navSaveBusy, setNavSaveBusy] = React.useState(false)
 
@@ -390,6 +411,7 @@ export default function Page() {
               initialCategory={settingsCategory}
               categoryRequestId={settingsCategoryRequestId}
               onAiDirtyChange={setSettingsAiDirty}
+              onAppDirtyChange={setSettingsAppDirty}
               returnAction={
                 settingsReturnTarget
                   ? {

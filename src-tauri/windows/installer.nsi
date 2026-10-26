@@ -245,7 +245,7 @@ Function PageReinstall
   ${If} $WixMode <> 1
     !if "${ALLOWDOWNGRADES}" == "false"
       ${If} $R0 = -1
-        MessageBox MB_ICONSTOP "$(dontUninstallDowngrade)"
+        MessageBox MB_ICONSTOP "$(dontUninstallDowngrade)" /SD IDOK
         SetErrorLevel 1
         Quit
       ${EndIf}
@@ -398,7 +398,7 @@ Function PageLeaveReinstall
       ${EndIf}
 
       ; Other errors? show generic error message and return to select un/reinstall page
-      MessageBox MB_ICONEXCLAMATION "$(unableToUninstall)"
+      MessageBox MB_ICONEXCLAMATION "$(unableToUninstall)" /SD IDOK
       Abort
     ${EndIf}
 
@@ -570,7 +570,7 @@ Function .onInit
           FileWrite $0 "$(silentDowngrades)"
         ${EndIf}
       ${Else}
-        MessageBox MB_ICONSTOP "$(silentDowngrades)"
+        MessageBox MB_ICONSTOP "$(silentDowngrades)" /SD IDOK
       ${EndIf}
       Abort
     ${EndIf}
@@ -660,7 +660,8 @@ Section WebView2
             ${If} $1 = 0
               DetailPrint "$(webview2InstallSuccess)"
             ${Else}
-              MessageBox MB_ICONEXCLAMATION|MB_ABORTRETRYIGNORE "$(webview2InstallError)" IDIGNORE ignore IDRETRY update_webview
+              MessageBox MB_ICONEXCLAMATION|MB_ABORTRETRYIGNORE "$(webview2InstallError)" /SD IDABORT IDIGNORE ignore IDRETRY update_webview
+              SetErrorLevel 1
               Quit
               ignore:
             ${EndIf}

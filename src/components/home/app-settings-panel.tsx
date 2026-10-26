@@ -56,7 +56,11 @@ const LOG_LEVELS: {
 
 const LOG_CAPACITY_PRESETS = [25, 100, 250, 500] as const
 
-export function AppSettingsPanel() {
+export function AppSettingsPanel({
+  onDirtyChange,
+}: {
+  onDirtyChange?: (dirty: boolean) => void
+}) {
   const [appSettings, setAppSettings] = React.useState<AppSettings | null>(null)
   const [logMaxDiskInput, setLogMaxDiskInput] = React.useState(
     String(DEFAULT_LOG_MAX_DISK_MIB)
@@ -196,11 +200,15 @@ export function AppSettingsPanel() {
     String(appSettings.logging?.maxDiskMib ?? DEFAULT_LOG_MAX_DISK_MIB) !==
       logMaxDiskInput
 
+  React.useEffect(() => {
+    onDirtyChange?.(logCapacityDirty)
+  }, [logCapacityDirty, onDirtyChange])
+
   return (
     <div className="byte-app-settings byte-settings-grid flex flex-col gap-2">
       <WorkbenchDetails
         title="应用更新"
-        description="检查新版本，设置自动更新。"
+        description="检查新版本，设置后台下载。"
       >
         <AppUpdatePanel />
       </WorkbenchDetails>

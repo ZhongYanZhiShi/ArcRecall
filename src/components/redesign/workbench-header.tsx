@@ -6,6 +6,7 @@ import * as React from "react"
 
 import type { NavId } from "@/components/app-shell"
 import { cn } from "@/lib/utils"
+import { AppUpdateEntry } from "@/components/app-update-entry"
 
 const TASK_NAV: { id: NavId; label: string }[] = [
   { id: "extract", label: "解压" },
@@ -79,6 +80,7 @@ export function WorkbenchHeader({
           />
         ))}
       </nav>
+      <AppUpdateEntry />
       <ThemeButton />
     </header>
   )

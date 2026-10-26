@@ -73,6 +73,7 @@ type SettingsPageProps = {
     onClick: () => void
   }
   onAiDirtyChange?: (dirty: boolean) => void
+  onAppDirtyChange?: (dirty: boolean) => void
 }
 
 type PendingSettingsLeave =
@@ -88,6 +89,7 @@ export const SettingsPage = React.forwardRef<
     categoryRequestId = 0,
     returnAction,
     onAiDirtyChange,
+    onAppDirtyChange,
     onDatabaseRestored,
   },
   ref
@@ -268,7 +270,10 @@ export const SettingsPage = React.forwardRef<
               keepMounted={visitedCategories.includes("app")}
               className="mt-0 outline-none"
             >
-              <AppSettingsPanel key={dataRevision} />
+              <AppSettingsPanel
+                key={dataRevision}
+                onDirtyChange={onAppDirtyChange}
+              />
             </TabsContent>
             <TabsContent
               value="data"

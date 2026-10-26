@@ -26,6 +26,8 @@ mod report_support;
 mod task_coordination;
 mod task_lifecycle;
 mod update_commands;
+#[cfg(windows)]
+mod update_helper;
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -394,6 +396,10 @@ fn resolve_app_paths(app: &AppHandle) -> Result<AppPaths, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    if update_helper::dispatch() {
+        return;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(
@@ -526,6 +532,7 @@ pub fn run() {
             app_update_check,
             app_update_download,
             app_update_install,
+            update_commands::app_update_started,
             health,
             clipboard_clear_if_matches,
             log_write,
