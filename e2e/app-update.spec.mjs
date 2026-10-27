@@ -22,6 +22,24 @@ async function setup(page, overrides = {}) {
       calls: [],
       failDownload: false,
       failCheck: false,
+      failSettings: false,
+      savedTools: "C:\\工具",
+      savedJohn: "C:\\工具\\John",
+      savedPerl: "C:\\工具\\Perl\\perl.exe",
+      settings: {
+        autoUpdate: true,
+        logging: { level: "info", maxDiskMib: 100 },
+        recovery: {
+          computeMode: "gpuPreferred",
+          scanMaxFilesPerDirectory: 10,
+          extractionLimits: { maxGib: 100, maxEntries: 100000, maxDepth: 5 },
+        },
+      },
+      desktopSettings: {
+        supported: true,
+        contextMenu: false,
+        setupCompleted: true,
+      },
     })
     const installedVersion = localStorage.getItem("test-current-version")
     if (installedVersion) {
@@ -44,6 +62,21 @@ async function setup(page, overrides = {}) {
       unregisterCallback() {},
       async invoke(command, args) {
         state.calls.push(command)
+        if (
+          command === "desktop_launch_list" ||
+          command === "compression_presets_list"
+        )
+          return []
+        if (command === "compression_queue_load")
+          return { enabled: false, items: [] }
+        if (command === "desktop_integration_status") {
+          if (state.failDesktopRead) throw new Error("暂时无法读取右键菜单")
+          return { ...state.desktopSettings }
+        }
+        if (command === "desktop_integration_save") {
+          state.desktopSettings.contextMenu = args.enabled
+          return { ...state.desktopSettings }
+        }
         if (command === "app_update_status") return { ...state.status }
         if (command === "app_update_check") {
           if (state.failCheck) {
@@ -62,23 +95,77 @@ async function setup(page, overrides = {}) {
           return
         }
         if (command === "app_update_install") return
-        if (command === "settings_get")
-          return {
-            autoUpdate: true,
-            logging: { level: "info", maxDiskMib: 100 },
-            recovery: { computeMode: "gpuPreferred" },
-          }
-        if (command === "settings_update")
-          return {
-            autoUpdate: true,
-            logging: { level: "info", maxDiskMib: args.update.value },
-          }
+        if (command === "settings_get") {
+          if (state.failSettingsRead) throw new Error("暂时无法读取设置")
+          return structuredClone(state.settings)
+        }
+        if (command === "settings_update") {
+          if (state.pendingSettings)
+            await new Promise((resolve) => {
+              state.finishSettings = resolve
+            })
+          if (state.failSettings) throw new Error("模拟保存失败")
+          const { kind, value } = args.update
+          if (kind === "logMaxDiskMib")
+            state.settings.logging.maxDiskMib = value
+          else if (kind === "logLevel") state.settings.logging.level = value
+          else if (kind === "autoUpdate") state.settings.autoUpdate = value
+          else state.settings.recovery[kind] = value
+          return structuredClone(state.settings)
+        }
         if (command === "recovery_queue_load")
           return {
             version: 1,
             enabled: !!state.status.queueItems,
             items: state.status.queueItems ?? [],
           }
+        if (command === "tool_hashcat_status")
+          return {
+            configuredToolsDirectory: state.savedTools,
+            toolsDirectory: state.savedTools,
+            defaultToolsDirectory: "C:\\默认工具",
+            installed: false,
+          }
+        if (command === "tool_john_perl_status")
+          return {
+            johnToolsDirectory: state.savedJohn,
+            perlPath: state.savedPerl,
+            ready: true,
+            message: "已检测保存的路径",
+          }
+        if (command === "tool_full_bundle_status") {
+          const component = {
+            installed: false,
+            bundled: false,
+            runnable: false,
+            version: "1",
+            message: "未安装",
+          }
+          return {
+            bundled: false,
+            installed: false,
+            sevenZip: { ...component, id: "7z", name: "7-Zip" },
+            hashcat: { ...component, id: "hashcat", name: "Hashcat" },
+            john: { ...component, id: "john", name: "John" },
+            perl: { ...component, id: "perl", name: "Perl" },
+          }
+        }
+        if (command === "tool_set_tools_directory") {
+          if (state.failPathSave) throw new Error("路径保存失败")
+          state.savedTools = args.path
+          return structuredClone(state.settings)
+        }
+        if (command === "tool_set_john_perl") {
+          if (state.failPathSave) throw new Error("路径保存失败")
+          state.savedJohn = args.johnToolsDirectory
+          state.savedPerl = args.perlPath
+          return {
+            johnToolsDirectory: state.savedJohn,
+            perlPath: state.savedPerl,
+            ready: true,
+            message: "路径已保存",
+          }
+        }
         if (command === "recovery_capabilities")
           return { gpuAvailable: false, cpuAvailable: true, methods: [] }
         if (command === "dictionary_count") return 0
@@ -189,6 +276,7 @@ test("后台检查失败不弹错误通知，主动检查失败就地反馈", as
   await page.getByRole("button", { name: "更新未完成", exact: true }).click()
   await page.evaluate(() => {
     window.updateTest.failCheck = true
+    window.updateTest.calls = []
   })
   await page
     .locator('[data-slot="popover-content"]')
@@ -242,11 +330,11 @@ test("原生任务空闲时，待处理队列仍阻止安装", async ({ page }) 
 test("未保存的日志设置阻止安装，并能返回处理", async ({ page }) => {
   await setup(page)
   await page.getByRole("button", { name: "设置", exact: true }).click()
-  await page.getByRole("tab", { name: "应用", exact: true }).click()
+  await page.getByRole("tab", { name: "常规", exact: true }).click()
   await page.locator("#log-max-disk-mib").fill("200")
   await page.getByRole("button", { name: "更新已就绪", exact: true }).click()
   const panel = page.locator('[data-slot="popover-content"]')
-  await expect(panel).toContainText("日志磁盘上限有未保存的更改")
+  await expect(panel).toContainText("常规设置有未保存的更改")
   await expect(
     panel.getByRole("button", { name: "安装并重启", exact: true })
   ).toBeDisabled()
@@ -287,11 +375,370 @@ test("用户确认安装后记录版本，下次启动只提示一次并保留�
   await page.reload()
   await expect(page.getByText("已更新至 v2.0.0", { exact: true })).toBeVisible()
   await page.getByRole("button", { name: "更新说明", exact: true }).click()
-  await expect(page.locator('[data-slot="popover-content"]')).toContainText(
-    "改进归档处理"
-  )
+  const notes = page.getByRole("dialog", { name: "更新说明", exact: true })
+  await expect(notes).toContainText("改进归档处理")
+  await expect(page.locator('[data-slot="popover-content"]')).toHaveCount(0)
+  await notes.getByRole("button", { name: "关闭", exact: true }).click()
+  await page.getByRole("button", { name: "设置", exact: true }).click()
+  await page.getByRole("tab", { name: "常规", exact: true }).click()
+  await expect(
+    page.getByRole("heading", { name: "当前版本更新说明" })
+  ).toBeVisible()
   await page.reload()
   await expect(page.getByText("已更新至 v2.0.0", { exact: true })).toHaveCount(
     0
   )
+})
+
+for (const width of [1280, 390]) {
+  test(`设置页内完成更新操作且无需详情弹窗（${width}px）`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 })
+    await setup(page, { phase: "available" })
+    await page.getByRole("button", { name: "设置", exact: true }).click()
+    await page.getByRole("tab", { name: "常规", exact: true }).click()
+    const panel = page.getByRole("tabpanel", { name: "常规", exact: true })
+    await expect(panel.getByText("应用更新", { exact: true })).toBeVisible()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    await panel.getByRole("button", { name: "下载更新", exact: true }).click()
+    await expect(
+      panel.getByRole("button", { name: "安装并重启", exact: true })
+    ).toBeEnabled()
+    await panel.getByRole("button", { name: "安装并重启", exact: true }).click()
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            window.updateTest.calls.filter(
+              (command) => command === "app_update_install"
+            ).length
+        )
+      )
+      .toBe(1)
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    await page.screenshot({ path: `artifacts/settings-update-${width}.png` })
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth
+      )
+    ).toBe(true)
+  })
+}
+
+test("设置页内检查更新并展示失败重试", async ({ page }) => {
+  await setup(page, { phase: "idle" })
+  await page.getByRole("button", { name: "设置", exact: true }).click()
+  await page.getByRole("tab", { name: "常规", exact: true }).click()
+  const panel = page.getByRole("tabpanel", { name: "常规", exact: true })
+  await page.evaluate(() => {
+    window.updateTest.failCheck = true
+    window.updateTest.calls = []
+  })
+  await panel.getByRole("button", { name: "检查更新", exact: true }).click()
+  await expect(panel.getByText("更新未完成，当前版本仍可使用。")).toBeVisible()
+  await page.evaluate(() => {
+    window.updateTest.failCheck = false
+  })
+  await panel.getByRole("button", { name: "重新检查", exact: true }).click()
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.updateTest.calls.filter(
+            (command) => command === "app_update_check"
+          ).length
+      )
+    )
+    .toBe(2)
+  await expect(page.getByRole("dialog")).toHaveCount(0)
+})
+
+for (const width of [1280, 390]) {
+  for (const entry of ["settings", "popover"]) {
+    test(`完整更新说明独立展示并返回原操作入口（${entry}-${width}）`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 800 })
+      const notes = "改进归档处理与路径兼容。\n".repeat(80) + "更新说明结束。"
+      await setup(page, { notes })
+      let panel
+      if (entry === "settings") {
+        await page.getByRole("button", { name: "设置", exact: true }).click()
+        await page.getByRole("tab", { name: "常规", exact: true }).click()
+        panel = page.getByRole("tabpanel", { name: "常规", exact: true })
+      } else {
+        await page
+          .getByRole("button", { name: "更新已就绪", exact: true })
+          .click()
+        panel = page.locator('[data-slot="popover-content"]')
+      }
+      const trigger = panel.getByRole("button", {
+        name: "查看更新说明",
+        exact: true,
+      })
+      await trigger.click()
+      const dialog = page.getByRole("dialog", { name: "更新说明", exact: true })
+      await expect(dialog).toContainText("版本 v2.0.0")
+      await expect(dialog).toContainText("更新说明结束。")
+      await expect(
+        dialog.getByRole("button", { name: "安装并重启" })
+      ).toHaveCount(0)
+      await expect(dialog).toHaveCSS("translate", "none")
+      const bounds = await dialog.boundingBox()
+      expect(bounds.x).toBeGreaterThanOrEqual(0)
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(width)
+      await expect(
+        dialog.getByRole("button", { name: "关闭", exact: true })
+      ).toBeInViewport({ ratio: 1 })
+      await page.keyboard.press("Escape")
+      await expect(dialog).not.toBeVisible()
+      await expect(trigger).toBeFocused()
+      await expect(
+        panel.getByRole("button", { name: "安装并重启", exact: true })
+      ).toBeEnabled()
+    })
+  }
+}
+
+for (const field of ["目录扫描文件数上限", "最大嵌套深度"]) {
+  test(`未保存的${field}阻止安装且返回原草稿`, async ({ page }) => {
+    await setup(page)
+    await page.getByRole("button", { name: "设置", exact: true }).click()
+    const input = page.getByRole("spinbutton", { name: field, exact: true })
+    await input.fill("12")
+    await page.getByRole("button", { name: "更新已就绪", exact: true }).click()
+    const popover = page.locator('[data-slot="popover-content"]')
+    await expect(popover).toContainText("解压与解密设置有未保存的更改")
+    await expect(
+      popover.getByRole("button", { name: "安装并重启", exact: true })
+    ).toBeDisabled()
+    await popover.getByRole("button", { name: "返回处理", exact: true }).click()
+    await expect(input).toHaveValue("12")
+    await expect(input).toBeFocused()
+    await page
+      .getByRole("button", {
+        name: field === "最大嵌套深度" ? "保存解压限制" : "保存上限",
+        exact: true,
+      })
+      .click()
+    await page.getByRole("button", { name: "更新已就绪", exact: true }).click()
+    await expect(
+      popover.getByRole("button", { name: "安装并重启", exact: true })
+    ).toBeEnabled()
+  })
+}
+
+test("右键菜单草稿保存前阻止安装，保存后解除保护", async ({ page }) => {
+  await setup(page)
+  await page.getByRole("button", { name: "设置", exact: true }).click()
+  await page.getByRole("tab", { name: "常规", exact: true }).click()
+  const save = page.getByRole("button", {
+    name: "保存右键菜单设置",
+    exact: true,
+  })
+  await expect(save).toBeDisabled()
+  await page.getByRole("checkbox", { name: /开启 Windows 右键菜单/ }).check()
+  await page.getByRole("button", { name: "更新已就绪", exact: true }).click()
+  const popover = page.locator('[data-slot="popover-content"]')
+  await expect(
+    popover.getByRole("button", { name: "安装并重启", exact: true })
+  ).toBeDisabled()
+  await popover.getByRole("button", { name: "返回处理", exact: true }).click()
+  await expect(
+    page.getByRole("checkbox", { name: /开启 Windows 右键菜单/ })
+  ).toBeChecked()
+  await save.click()
+  await expect(save).toBeDisabled()
+  await page.getByRole("button", { name: "更新已就绪", exact: true }).click()
+  await expect(
+    popover.getByRole("button", { name: "安装并重启", exact: true })
+  ).toBeEnabled()
+})
+
+test("解压限制校验输入、保留失败草稿并清理过期成功反馈", async ({ page }) => {
+  await setup(page)
+  await page.getByRole("button", { name: "设置", exact: true }).click()
+  const input = page.getByRole("spinbutton", {
+    name: "最大嵌套深度",
+    exact: true,
+  })
+  const save = page.getByRole("button", { name: "保存解压限制", exact: true })
+  await expect(save).toBeDisabled()
+  for (const value of ["", "0", "65", "1.5"]) {
+    await input.fill(value)
+    await expect(input).toHaveAttribute("aria-invalid", "true")
+    await expect(save).toBeDisabled()
+  }
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.updateTest.calls.filter(
+            (command) => command === "settings_update"
+          ).length
+      )
+    )
+    .toBe(0)
+  await input.fill("8")
+  await page.evaluate(() => {
+    window.updateTest.failSettings = true
+    window.updateTest.pendingSettings = true
+  })
+  await save.click()
+  await expect(
+    page.getByRole("button", { name: "正在保存…", exact: true })
+  ).toBeDisabled()
+  await page.evaluate(() => {
+    window.updateTest.finishSettings()
+  })
+  await expect(
+    page.getByRole("alert").filter({ hasText: "模拟保存失败" })
+  ).toBeVisible()
+  await expect(input).toHaveValue("8")
+  await page.evaluate(() => {
+    window.updateTest.failSettings = false
+    window.updateTest.pendingSettings = false
+  })
+  await save.click()
+  await expect(
+    page.getByText("已保存，下次启动的解压任务生效。", { exact: true })
+  ).toBeVisible()
+  await expect(save).toBeDisabled()
+  await input.fill("9")
+  await expect(
+    page.getByText("已保存，下次启动的解压任务生效。", { exact: true })
+  ).toHaveCount(0)
+  await expect(save).toBeEnabled()
+  await input.fill("8")
+  await expect(save).toBeDisabled()
+})
+
+for (const width of [1280, 390]) {
+  test(`引擎路径检测和刷新保留草稿，更新保护定位到对应字段（${width}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 })
+    await setup(page)
+    await page.getByRole("button", { name: "设置", exact: true }).click()
+    await page.getByRole("button", { name: "引擎管理", exact: true }).click()
+    const dialog = page.getByRole("dialog", { name: "引擎管理", exact: true })
+    await dialog.getByRole("tab", { name: "工具目录", exact: true }).click()
+    const tools = dialog.getByRole("textbox", {
+      name: "公共目录（绝对路径）",
+      exact: true,
+    })
+    await tools.fill("C:\\自定义工具")
+    await dialog.getByRole("tab", { name: "John / Perl", exact: true }).click()
+    const john = dialog.getByRole("textbox", {
+      name: "John 工具目录",
+      exact: true,
+    })
+    await john.fill("C:\\自定义工具\\John")
+    await dialog
+      .getByRole("button", { name: "检测已保存配置", exact: true })
+      .click()
+    await expect(john).toHaveValue("C:\\自定义工具\\John")
+    await expect(
+      dialog.getByRole("button", { name: "保存", exact: true })
+    ).toBeEnabled()
+    await dialog.getByRole("button", { name: "关闭", exact: true }).click()
+    await page.getByRole("button", { name: "重新探测", exact: true }).click()
+    await expect(
+      page.getByRole("button", { name: "重新探测", exact: true })
+    ).toBeEnabled()
+    await page.getByRole("button", { name: "更新已就绪", exact: true }).click()
+    const popover = page.locator('[data-slot="popover-content"]')
+    await expect(
+      popover.getByRole("button", { name: "安装并重启", exact: true })
+    ).toBeDisabled()
+    await popover.getByRole("button", { name: "返回处理", exact: true }).click()
+    await expect(dialog).toBeVisible()
+    await expect(tools).toBeFocused()
+    await expect(tools).toHaveValue("C:\\自定义工具")
+    await dialog.getByRole("button", { name: "撤销修改", exact: true }).click()
+    await dialog.getByRole("tab", { name: "John / Perl", exact: true }).click()
+    await expect(john).toHaveValue("C:\\自定义工具\\John")
+    await dialog.getByRole("button", { name: "关闭", exact: true }).click()
+    await page.getByRole("button", { name: "更新已就绪", exact: true }).click()
+    await popover.getByRole("button", { name: "返回处理", exact: true }).click()
+    await expect(john).toBeFocused()
+    await dialog.getByRole("button", { name: "撤销修改", exact: true }).click()
+    await dialog.getByRole("button", { name: "关闭", exact: true }).click()
+    await page.getByRole("button", { name: "更新已就绪", exact: true }).click()
+    await expect(
+      popover.getByRole("button", { name: "安装并重启", exact: true })
+    ).toBeEnabled()
+  })
+}
+
+test("设置读取失败可以在原位置重试", async ({ page }) => {
+  await setup(page)
+  await page.evaluate(() => {
+    window.updateTest.failSettingsRead = true
+    window.updateTest.failDesktopRead = true
+  })
+  await page.getByRole("button", { name: "设置", exact: true }).click()
+  await expect(
+    page.getByRole("button", { name: "重新读取解压限制", exact: true })
+  ).toBeVisible()
+  await page.evaluate(() => {
+    window.updateTest.failSettingsRead = false
+  })
+  await page
+    .getByRole("button", { name: "重新读取解压限制", exact: true })
+    .click()
+  await expect(
+    page.getByRole("spinbutton", { name: "最大嵌套深度", exact: true })
+  ).toBeEnabled()
+  await page.getByRole("tab", { name: "常规", exact: true }).click()
+  await expect(
+    page.getByRole("button", { name: "重新读取右键菜单设置", exact: true })
+  ).toBeVisible()
+  await page.evaluate(() => {
+    window.updateTest.failDesktopRead = false
+  })
+  await page
+    .getByRole("button", { name: "重新读取右键菜单设置", exact: true })
+    .click()
+  await expect(
+    page.getByRole("checkbox", { name: /开启 Windows 右键菜单/ })
+  ).toBeEnabled()
+})
+
+test("保存一组引擎路径不覆盖其他草稿，失败可重试", async ({ page }) => {
+  await setup(page)
+  await page.getByRole("button", { name: "设置", exact: true }).click()
+  await page.getByRole("button", { name: "引擎管理", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "引擎管理", exact: true })
+  await dialog.getByRole("tab", { name: "John / Perl", exact: true }).click()
+  const john = dialog.getByRole("textbox", {
+    name: "John 工具目录",
+    exact: true,
+  })
+  await john.fill("C:\\新工具\\John")
+  await dialog.getByRole("tab", { name: "工具目录", exact: true }).click()
+  await dialog
+    .getByRole("textbox", { name: "公共目录（绝对路径）", exact: true })
+    .fill("C:\\新工具")
+  await dialog.getByRole("button", { name: "保存目录", exact: true }).click()
+  await expect(
+    dialog.getByRole("button", { name: "保存目录", exact: true })
+  ).toBeDisabled()
+  await dialog.getByRole("tab", { name: "John / Perl", exact: true }).click()
+  await expect(john).toHaveValue("C:\\新工具\\John")
+  await page.evaluate(() => {
+    window.updateTest.failPathSave = true
+  })
+  await dialog.getByRole("button", { name: "保存", exact: true }).click()
+  await expect(page.locator("[data-sonner-toaster]")).toContainText(
+    "路径保存失败"
+  )
+  await expect(john).toHaveValue("C:\\新工具\\John")
+  await page.evaluate(() => {
+    window.updateTest.failPathSave = false
+  })
+  await dialog.getByRole("button", { name: "保存", exact: true }).click()
+  await expect(
+    dialog.getByRole("button", { name: "保存", exact: true })
+  ).toBeDisabled()
+  await expect(john).toHaveValue("C:\\新工具\\John")
 })

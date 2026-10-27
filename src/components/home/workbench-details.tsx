@@ -38,6 +38,7 @@ export function WorkbenchDetails({
   bodyClassName,
   footer,
   toolbar,
+  pending = false,
 }: {
   title: string
   description: string
@@ -48,6 +49,7 @@ export function WorkbenchDetails({
   bodyClassName?: string
   footer?: ReactNode
   toolbar?: ReactNode
+  pending?: boolean
 }) {
   const [actionsTarget, setActionsTarget] = useState<HTMLDivElement | null>(
     null
@@ -55,6 +57,7 @@ export function WorkbenchDetails({
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetTrigger
+        data-settings-pending={pending || undefined}
         render={
           <Button
             type="button"
@@ -66,7 +69,17 @@ export function WorkbenchDetails({
         <span className="truncate">{label ?? title}</span>
         <ChevronRight aria-hidden className="size-4 shrink-0" />
       </SheetTrigger>
-      <SheetContent className="workbench-details-panel gap-0 p-0">
+      <SheetContent
+        className="workbench-details-panel gap-0 p-0"
+        initialFocus={
+          pending
+            ? () =>
+                document.querySelector<HTMLElement>(
+                  '[role="dialog"] [data-settings-pending="true"]'
+                ) ?? true
+            : undefined
+        }
+      >
         <SheetHeader className="shrink-0 border-b p-4 pr-12">
           <SheetTitle>{title}</SheetTitle>
           <SheetDescription>{description}</SheetDescription>

@@ -42,37 +42,25 @@ const CATEGORIES: {
   label: string
   icon: React.ComponentType<{ className?: string; strokeWidth?: number }>
 }[] = [
-  {
-    id: "ai",
-    label: "AI 模型",
-    icon: Sparkles,
-  },
-  {
-    id: "engine",
-    label: "解密引擎",
-    icon: Cpu,
-  },
-  {
-    id: "app",
-    label: "应用",
-    icon: Settings2,
-  },
-  {
-    id: "data",
-    label: "数据",
-    icon: Database,
-  },
+  { id: "app", label: "常规", icon: Settings2 },
+  { id: "engine", label: "解压与解密", icon: Cpu },
+  { id: "ai", label: "AI 模型", icon: Sparkles },
+  { id: "data", label: "数据", icon: Database },
 ]
 
 type SettingsPageProps = {
   onDatabaseRestored: () => void
   initialCategory?: SettingsCategory
   categoryRequestId?: number
+  focusRequestId?: number
+  onEngineBusyChange?: (busy: boolean) => void
+  onAppBusyChange?: (busy: boolean) => void
   returnAction?: {
     label: string
     onClick: () => void
   }
   onAiDirtyChange?: (dirty: boolean) => void
+  onEngineDirtyChange?: (dirty: boolean) => void
   onAppDirtyChange?: (dirty: boolean) => void
 }
 
@@ -87,21 +75,51 @@ export const SettingsPage = React.forwardRef<
   {
     initialCategory = "engine",
     categoryRequestId = 0,
+    focusRequestId = 0,
+    onEngineBusyChange,
+    onAppBusyChange,
     returnAction,
     onAiDirtyChange,
     onAppDirtyChange,
+    onEngineDirtyChange,
     onDatabaseRestored,
   },
   ref
 ) {
   const [dataRevision, setDataRevision] = React.useState(0)
   const aiSettingsPanelRef = React.useRef<AiSettingsPanelHandle>(null)
+  const handledFocusRequest = React.useRef(0)
   const settingsScrollRef = React.useRef<HTMLDivElement>(null)
   const [category, setCategory] =
     React.useState<SettingsCategory>(initialCategory)
   React.useEffect(() => {
     settingsScrollRef.current?.scrollTo({ top: 0 })
   }, [category])
+  React.useEffect(() => {
+    if (!focusRequestId || handledFocusRequest.current === focusRequestId)
+      return
+    const frame = requestAnimationFrame(() => {
+      handledFocusRequest.current = focusRequestId
+      const target =
+        settingsScrollRef.current?.querySelector<HTMLElement>(
+          `[data-slot="tabs-content"][data-state="active"] [data-settings-pending="true"]`
+        ) ??
+        Array.from(
+          settingsScrollRef.current?.querySelectorAll<HTMLElement>(
+            '[data-settings-pending="true"]'
+          ) ?? []
+        ).find((element) => element.getClientRects().length > 0)
+      if (!target) return
+      target.scrollIntoView({ block: "center" })
+      target.focus({ preventScroll: true })
+      if (
+        target.hasAttribute("data-slot") &&
+        target.getAttribute("data-slot") === "sheet-trigger"
+      )
+        target.click()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focusRequestId, category])
   const [visitedCategories, setVisitedCategories] = React.useState([
     initialCategory,
   ])
@@ -203,7 +221,7 @@ export const SettingsPage = React.forwardRef<
       <WorkbenchPageContent className="gap-2">
         <WorkbenchPageHeader
           title="设置"
-          description="解密引擎、AI 命名和本机数据，都由你决定。"
+          description="管理常规偏好、解压与解密、AI 模型和本机数据。"
           actions={
             returnAction ? (
               <Button
@@ -263,7 +281,11 @@ export const SettingsPage = React.forwardRef<
               keepMounted={visitedCategories.includes("engine")}
               className="mt-0 outline-none"
             >
-              <EngineSettingsPanel key={dataRevision} />
+              <EngineSettingsPanel
+                key={dataRevision}
+                onDirtyChange={onEngineDirtyChange}
+                onBusyChange={onEngineBusyChange}
+              />
             </TabsContent>
             <TabsContent
               value="app"
@@ -273,6 +295,7 @@ export const SettingsPage = React.forwardRef<
               <AppSettingsPanel
                 key={dataRevision}
                 onDirtyChange={onAppDirtyChange}
+                onBusyChange={onAppBusyChange}
               />
             </TabsContent>
             <TabsContent

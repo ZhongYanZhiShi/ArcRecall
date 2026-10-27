@@ -1,4 +1,5 @@
-import { WorkbenchDetails, WorkbenchDetailsActions } from "./workbench-details"
+import { ExtractionLimitSettings } from "./desktop-settings"
+import { WorkbenchDetailsActions } from "./workbench-details"
 import {
   Cpu,
   Download,
@@ -47,6 +48,32 @@ import {
   MAX_SCAN_MAX_FILES_PER_DIRECTORY,
 } from "@/lib/settings"
 
+type DefaultRecoveryProps = {
+  appSettings: AppSettings | null
+  capabilities: RecoveryCapabilities | null
+  settingsBusy: boolean
+  engineBusy: boolean
+  message: string | null
+  messageError: boolean
+  onChange: (mode: RecoveryComputeMode) => void
+  onRefresh: () => void
+}
+
+type ExtractionBehaviorProps = {
+  scanLimitDirty: boolean
+  onLimitsDirtyChange: (dirty: boolean) => void
+  onLimitsBusyChange: (busy: boolean) => void
+  onDiscardScanLimit: () => void
+  appSettings: AppSettings | null
+  settingsBusy: boolean
+  message: string | null
+  scanLimitValue: string
+  onScanLimitChange: (value: string) => void
+  onSaveScanLimit: () => void
+  onRemoveEmptyDirectoriesChange: (value: boolean) => void
+  onFlattenOutputDirectoriesChange: (value: boolean) => void
+}
+
 export function DefaultRecoveryCard({
   appSettings,
   capabilities,
@@ -56,26 +83,7 @@ export function DefaultRecoveryCard({
   messageError,
   onChange,
   onRefresh,
-  scanLimitValue,
-  onScanLimitChange,
-  onSaveScanLimit,
-  onRemoveEmptyDirectoriesChange,
-  onFlattenOutputDirectoriesChange,
-}: {
-  appSettings: AppSettings | null
-  capabilities: RecoveryCapabilities | null
-  settingsBusy: boolean
-  engineBusy: boolean
-  message: string | null
-  messageError: boolean
-  onChange: (mode: RecoveryComputeMode) => void
-  onRefresh: () => void
-  scanLimitValue: string
-  onScanLimitChange: (value: string) => void
-  onSaveScanLimit: () => void
-  onRemoveEmptyDirectoriesChange: (value: boolean) => void
-  onFlattenOutputDirectoriesChange: (value: boolean) => void
-}) {
+}: DefaultRecoveryProps) {
   const hashcatCpuAvailable = Boolean(
     capabilities?.methods.find((method) => method.id === "hashcatCpu")
       ?.available
@@ -141,106 +149,7 @@ export function DefaultRecoveryCard({
             </FieldLabel>
           </RadioGroup>
         </FieldSet>
-        <WorkbenchDetails
-          title="解压行为"
-          description="调整目录整理规则和嵌套压缩包扫描上限。"
-        >
-          <Field orientation="horizontal">
-            <FieldContent>
-              <FieldLabel htmlFor="remove-empty-directories">
-                智能清理空文件夹
-              </FieldLabel>
-              <FieldDescription id="remove-empty-directories-help">
-                解压成功后，从内向外清理本次产生的多层空文件夹。保留文件、目录链接、
-                输出根目录、原有目录和带附加数据的目录，不移动文件。下次任务生效。
-              </FieldDescription>
-            </FieldContent>
-            <Switch
-              id="remove-empty-directories"
-              aria-describedby="remove-empty-directories-help"
-              checked={appSettings?.recovery?.removeEmptyDirectories ?? true}
-              disabled={settingsBusy || appSettings === null}
-              onCheckedChange={onRemoveEmptyDirectoriesChange}
-            />
-          </Field>
-          <Field orientation="horizontal">
-            <FieldContent>
-              <FieldLabel htmlFor="flatten-output-directories">
-                去除多层无效嵌套
-              </FieldLabel>
-              <FieldDescription id="flatten-output-directories-help">
-                仅整理新建解压目录顶部连续至少两层、与压缩包同名的重复目录，并保留一层原名。
-                普通目录层级、已有输出目录和含链接或附加数据的目录保持原样。默认开启；需完整保留原始路径时请关闭，下次任务生效。
-              </FieldDescription>
-            </FieldContent>
-            <Switch
-              id="flatten-output-directories"
-              aria-describedby="flatten-output-directories-help"
-              checked={appSettings?.recovery?.flattenOutputDirectories ?? true}
-              disabled={settingsBusy || appSettings === null}
-              onCheckedChange={onFlattenOutputDirectoriesChange}
-            />
-          </Field>
-          <form
-            id="recovery-scan-limit-form"
-            onSubmit={(event) => {
-              event.preventDefault()
-              onSaveScanLimit()
-            }}
-          >
-            <Field>
-              <FieldLabel htmlFor="recursive-scan-file-limit">
-                目录扫描文件数上限
-              </FieldLabel>
-              <FieldDescription id="recursive-scan-file-limit-help">
-                默认 {DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY}
-                。直属文件超过上限时，跳过该目录及其子目录的嵌套压缩包扫描，保留已解压内容。设为
-                0 不限制，下次任务生效。
-              </FieldDescription>
-              <div className="flex flex-wrap items-center gap-2">
-                <InputGroup className="w-40">
-                  <InputGroupInput
-                    id="recursive-scan-file-limit"
-                    type="number"
-                    min={0}
-                    max={MAX_SCAN_MAX_FILES_PER_DIRECTORY}
-                    step={1}
-                    required
-                    value={scanLimitValue}
-                    onChange={(event) => onScanLimitChange(event.target.value)}
-                    aria-describedby="recursive-scan-file-limit-help"
-                    disabled={settingsBusy || appSettings === null}
-                  />
-                </InputGroup>
-                <WorkbenchDetailsActions>
-                  {message ? (
-                    <p
-                      role="status"
-                      className="max-h-20 w-full overflow-y-auto text-sm break-words text-muted-foreground"
-                    >
-                      {message}
-                    </p>
-                  ) : null}
-                  <Button
-                    type="submit"
-                    form="recovery-scan-limit-form"
-                    variant="outline"
-                    size="sm"
-                    disabled={settingsBusy || appSettings === null}
-                    aria-busy={settingsBusy && message === "正在保存扫描上限…"}
-                  >
-                    {settingsBusy && message === "正在保存扫描上限…" ? (
-                      <Spinner aria-hidden="true" data-icon="inline-start" />
-                    ) : null}
-                    {settingsBusy && message === "正在保存扫描上限…"
-                      ? "保存中…"
-                      : "保存上限"}
-                  </Button>
-                </WorkbenchDetailsActions>
-              </div>
-            </Field>
-          </form>
-        </WorkbenchDetails>
+
         <div>
           <p className="mb-1.5 text-xs font-medium text-muted-foreground">
             恢复方式与可选能力
@@ -285,6 +194,171 @@ export function DefaultRecoveryCard({
         ) : null}
       </CardContent>
     </Card>
+  )
+}
+
+export function ExtractionBehaviorSettings({
+  scanLimitDirty,
+  onLimitsDirtyChange,
+  onLimitsBusyChange,
+  onDiscardScanLimit,
+  appSettings,
+  settingsBusy,
+  message,
+  scanLimitValue,
+  onScanLimitChange,
+  onSaveScanLimit,
+  onRemoveEmptyDirectoriesChange,
+  onFlattenOutputDirectoriesChange,
+}: ExtractionBehaviorProps) {
+  return (
+    <>
+      <Card size="sm">
+        <CardHeader className="border-b border-border/80">
+          <CardTitle>解压后整理</CardTitle>
+          <CardDescription>自动保存，下次任务生效。</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <Field orientation="horizontal">
+            <FieldContent>
+              <FieldLabel htmlFor="remove-empty-directories">
+                智能清理空文件夹
+              </FieldLabel>
+              <FieldDescription id="remove-empty-directories-help">
+                清理本次解压产生的空文件夹，保留已有目录和所有文件。
+              </FieldDescription>
+              <details className="text-sm text-muted-foreground">
+                <summary className="cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring">
+                  查看整理规则
+                </summary>
+                <p className="mt-2">
+                  解压成功后，从内向外清理本次产生的多层空文件夹。保留文件、目录链接、
+                  输出根目录、原有目录和带附加数据的目录，不移动文件。下次任务生效。
+                </p>
+              </details>
+            </FieldContent>
+            <Switch
+              id="remove-empty-directories"
+              aria-describedby="remove-empty-directories-help"
+              checked={appSettings?.recovery?.removeEmptyDirectories ?? true}
+              disabled={settingsBusy || appSettings === null}
+              onCheckedChange={onRemoveEmptyDirectoriesChange}
+            />
+          </Field>
+          <Field orientation="horizontal">
+            <FieldContent>
+              <FieldLabel htmlFor="flatten-output-directories">
+                去除多层无效嵌套
+              </FieldLabel>
+              <FieldDescription id="flatten-output-directories-help">
+                整理输出顶部重复的同名目录，保留普通目录结构。
+              </FieldDescription>
+              <details className="text-sm text-muted-foreground">
+                <summary className="cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring">
+                  查看整理规则
+                </summary>
+                <p className="mt-2">
+                  仅整理新建解压目录顶部连续至少两层、与压缩包同名的重复目录，并保留一层原名。
+                  普通目录层级、已有输出目录和含链接或附加数据的目录保持原样。默认开启；需完整保留原始路径时请关闭，下次任务生效。
+                </p>
+              </details>
+            </FieldContent>
+            <Switch
+              id="flatten-output-directories"
+              aria-describedby="flatten-output-directories-help"
+              checked={appSettings?.recovery?.flattenOutputDirectories ?? true}
+              disabled={settingsBusy || appSettings === null}
+              onCheckedChange={onFlattenOutputDirectoriesChange}
+            />
+          </Field>
+        </CardContent>
+      </Card>
+      <Card size="sm">
+        <CardHeader className="border-b border-border/80">
+          <CardTitle>扫描与安全限制</CardTitle>
+          <CardDescription>
+            修改后分别保存；可撤销尚未保存的修改。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <form
+            id="recovery-scan-limit-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              onSaveScanLimit()
+            }}
+          >
+            <Field>
+              <FieldLabel htmlFor="recursive-scan-file-limit">
+                目录扫描文件数上限
+              </FieldLabel>
+              {scanLimitDirty ? <Badge variant="warning">未保存</Badge> : null}
+              <FieldDescription id="recursive-scan-file-limit-help">
+                默认 {DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY}
+                。直属文件超过上限时，跳过该目录及其子目录的嵌套压缩包扫描，保留已解压内容。设为
+                0 不限制，下次任务生效。
+              </FieldDescription>
+              <div className="flex flex-wrap items-center gap-2">
+                <InputGroup className="w-40">
+                  <InputGroupInput
+                    id="recursive-scan-file-limit"
+                    data-settings-pending={scanLimitDirty || undefined}
+                    type="number"
+                    min={0}
+                    max={MAX_SCAN_MAX_FILES_PER_DIRECTORY}
+                    step={1}
+                    required
+                    value={scanLimitValue}
+                    onChange={(event) => onScanLimitChange(event.target.value)}
+                    aria-describedby="recursive-scan-file-limit-help"
+                    disabled={settingsBusy || appSettings === null}
+                  />
+                </InputGroup>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="submit"
+                    form="recovery-scan-limit-form"
+                    className="min-w-24 scroll-my-4"
+                    variant="outline"
+                    size="sm"
+                    disabled={settingsBusy || appSettings === null}
+                    aria-busy={settingsBusy && message === "正在保存扫描上限…"}
+                  >
+                    {settingsBusy && message === "正在保存扫描上限…" ? (
+                      <Spinner aria-hidden="true" data-icon="inline-start" />
+                    ) : null}
+                    {settingsBusy && message === "正在保存扫描上限…"
+                      ? "保存中…"
+                      : "保存上限"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={settingsBusy || !scanLimitDirty}
+                    onClick={onDiscardScanLimit}
+                  >
+                    撤销修改
+                  </Button>
+                </div>
+              </div>
+            </Field>
+            {message && !settingsBusy ? (
+              <p
+                role="status"
+                className="max-h-20 w-full overflow-y-auto text-sm break-words text-muted-foreground"
+              >
+                {message}
+              </p>
+            ) : null}
+          </form>
+          <ExtractionLimitSettings
+            onDirtyChange={onLimitsDirtyChange}
+            onBusyChange={onLimitsBusyChange}
+          />
+        </CardContent>
+      </Card>
+    </>
   )
 }
 
@@ -419,6 +493,8 @@ export function FullBundleCard({
 
 export function ToolsDirectoryCard({
   status,
+  dirty,
+  onDiscard,
   value,
   busy,
   onChange,
@@ -428,6 +504,8 @@ export function ToolsDirectoryCard({
 }: {
   status: HashcatStatus | null
   value: string
+  dirty: boolean
+  onDiscard: () => void
   busy: boolean
   onChange: (value: string) => void
   onOpen: (path: string) => void
@@ -441,11 +519,16 @@ export function ToolsDirectoryCard({
         <CardDescription>引擎安装位置；留空使用默认目录。</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
+        <p className="text-sm text-muted-foreground">
+          修改后保存；关闭面板会保留草稿。
+        </p>
+        {dirty ? <Badge variant="warning">未保存</Badge> : null}
         <Field>
           <FieldLabel htmlFor="tools-dir">公共目录（绝对路径）</FieldLabel>
           <InputGroup>
             <InputGroupInput
               id="tools-dir"
+              data-settings-pending={dirty || undefined}
               value={value}
               onChange={(event) => onChange(event.target.value)}
               disabled={busy}
@@ -473,11 +556,19 @@ export function ToolsDirectoryCard({
           </FieldDescription>
         </Field>
         <WorkbenchDetailsActions>
-          <Button size="sm" disabled={busy} onClick={onSave}>
+          <Button size="sm" disabled={busy || !dirty} onClick={onSave}>
             保存目录
           </Button>
           <Button size="sm" variant="outline" disabled={busy} onClick={onReset}>
             恢复默认
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy || !dirty}
+            onClick={onDiscard}
+          >
+            撤销修改
           </Button>
         </WorkbenchDetailsActions>
       </CardContent>
@@ -571,6 +662,8 @@ export function HashcatCard({
 
 export function JohnPerlCard({
   status,
+  dirty,
+  onDiscard,
   johnDirectory,
   perlPath,
   busy,
@@ -583,6 +676,8 @@ export function JohnPerlCard({
   status: JohnPerlStatus | null
   johnDirectory: string
   perlPath: string
+  dirty: boolean
+  onDiscard: () => void
   busy: boolean
   onJohnDirectoryChange: (value: string) => void
   onPerlPathChange: (value: string) => void
@@ -615,24 +710,40 @@ export function JohnPerlCard({
               disabled={busy || status === null}
               onClick={onProbe}
             >
-              重新检测
+              检测已保存配置
             </Button>
             <Button
               size="sm"
-              disabled={busy || status === null}
+              disabled={busy || status === null || !dirty}
               onClick={onSave}
             >
               保存
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy || !dirty}
+              onClick={onDiscard}
+            >
+              撤销修改
             </Button>
           </WorkbenchDetailsActions>
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
+        <p className="text-sm text-muted-foreground">
+          修改后保存；关闭面板会保留草稿。
+        </p>
+        {dirty ? <Badge variant="warning">未保存</Badge> : null}
         <Field>
           <FieldLabel htmlFor="john-dir">John 工具目录</FieldLabel>
           <InputGroup>
             <InputGroupInput
               id="john-dir"
+              data-settings-pending={
+                johnDirectory !== (status?.johnToolsDirectory ?? "") ||
+                undefined
+              }
               value={johnDirectory}
               onChange={(event) => onJohnDirectoryChange(event.target.value)}
               disabled={busy}
@@ -656,6 +767,9 @@ export function JohnPerlCard({
           <InputGroup>
             <InputGroupInput
               id="perl-path"
+              data-settings-pending={
+                perlPath !== (status?.perlPath ?? "") || undefined
+              }
               value={perlPath}
               onChange={(event) => onPerlPathChange(event.target.value)}
               disabled={busy}

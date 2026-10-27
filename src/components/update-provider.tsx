@@ -4,6 +4,7 @@ import * as React from "react"
 import { toast } from "sonner"
 import { invoke } from "@tauri-apps/api/core"
 
+import { AppUpdateNotes } from "@/components/app-update-notes"
 import { isDesktopRuntime } from "@/lib/runtime"
 import { updateSettings } from "@/lib/settings"
 import { recoveryQueue } from "@/lib/recovery-queue-session"
@@ -96,6 +97,10 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
   const announcedUpdates = React.useRef(new Set<string>())
   const operation = React.useRef(false)
   const [open, setOpen] = React.useState(false)
+  const [releaseNotes, setReleaseNotes] = React.useState<{
+    version: string
+    notes: string | null
+  } | null>(null)
   const [reminder, setReminder] = React.useState(false)
   const [installGuard, setInstallGuard] =
     React.useState<UpdateContextValue["installGuard"]>(null)
@@ -253,9 +258,26 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       const target = localStorage.getItem("app-update-installing")
       if (target !== status.currentVersion) return
       localStorage.removeItem("app-update-installing")
+      let notes: string | null = null
+      try {
+        const previous = JSON.parse(
+          localStorage.getItem("app-update-last-release") ?? "null"
+        )
+        if (
+          previous?.version === status.currentVersion &&
+          typeof previous.notes === "string"
+        )
+          notes = previous.notes
+      } catch {
+        /* Invalid cached notes do not prevent the success notification. */
+      }
       toast.success(`已更新至 v${status.currentVersion}`, {
         id: "app-update-complete",
-        action: { label: "更新说明", onClick: () => setOpen(true) },
+        action: {
+          label: "更新说明",
+          onClick: () =>
+            setReleaseNotes({ version: status.currentVersion, notes }),
+        },
       })
     } catch {
       /* A missing storage marker must not prevent updates. */
@@ -316,6 +338,14 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       }}
     >
       {children}
+      <AppUpdateNotes
+        notes={releaseNotes?.notes ?? null}
+        version={releaseNotes?.version ?? null}
+        open={releaseNotes !== null}
+        onOpenChange={(next) => {
+          if (!next) setReleaseNotes(null)
+        }}
+      />
     </UpdateContext.Provider>
   )
 }

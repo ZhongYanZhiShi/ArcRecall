@@ -179,7 +179,8 @@ export const AiSettingsPanel = React.forwardRef<
   const renamePromptControl = (
     <WorkbenchDetails
       title="归档重命名提示词"
-      label={promptDirty ? "重命名提示词 · 未保存" : "重命名提示词"}
+      pending={promptDirty}
+      label={promptDirty ? "编辑提示词 · 未保存" : "编辑提示词"}
       description="定义 AI 生成归档名称的规则，保存后用于后续压缩任务。"
       bodyClassName="ai-prompt-body"
       footer={
@@ -242,6 +243,7 @@ export const AiSettingsPanel = React.forwardRef<
         </FieldLabel>
         <Textarea
           id="ai-rename-prompt"
+          data-settings-pending={promptDirty || undefined}
           value={prompt}
           disabled={busy || settings === null}
           aria-invalid={Boolean(renamePromptError)}
@@ -292,7 +294,7 @@ export const AiSettingsPanel = React.forwardRef<
   }
 
   return (
-    <div className="byte-ai-panel flex flex-col gap-2">
+    <div className="byte-ai-panel flex flex-col gap-4">
       <Card size="sm">
         <CardHeader className="border-b border-border/80">
           <CardTitle>AI 模型配置</CardTitle>
@@ -419,6 +421,7 @@ export const AiSettingsPanel = React.forwardRef<
                 <FieldLabel htmlFor="ai-profile-name">配置名称</FieldLabel>
                 <Input
                   id="ai-profile-name"
+                  data-settings-pending={profileDirty || undefined}
                   value={draft.name}
                   disabled={busy}
                   aria-invalid={invalidField === "name"}
@@ -693,7 +696,6 @@ export const AiSettingsPanel = React.forwardRef<
         </CardContent>
         <div className="byte-ai-actions flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-1.5">
-            {renamePromptControl}
             {isActive ? <Badge variant="default">当前使用</Badge> : null}
             {draft.id === null || profileDirty ? (
               <Badge variant="warning">
@@ -745,6 +747,20 @@ export const AiSettingsPanel = React.forwardRef<
           </div>
         </div>
       </Card>
+      <section
+        aria-labelledby="rename-prompt-heading"
+        className="flex shrink-0 flex-col items-start gap-3 border-t pt-4"
+      >
+        <div>
+          <h3 id="rename-prompt-heading" className="text-sm font-medium">
+            归档重命名
+          </h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            编辑 AI 为归档生成名称时使用的提示词。
+          </p>
+        </div>
+        {renamePromptControl}
+      </section>
 
       <AlertDialog
         open={pendingDraftAction !== null}

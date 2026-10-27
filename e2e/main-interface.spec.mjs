@@ -29,7 +29,7 @@ for (const [width, height] of [
     await page.setViewportSize({ width, height })
     await page.goto("/")
     await page.getByRole("button", { name: "设置", exact: true }).click()
-    await page.getByRole("tab", { name: "解密引擎", exact: true }).click()
+    await page.getByRole("tab", { name: "解压与解密", exact: true }).click()
     await page
       .getByRole("button", { name: "引擎管理", exact: true })
       .scrollIntoViewIfNeeded()
@@ -41,10 +41,10 @@ for (const [width, height] of [
       page.getByRole("button", { name: "保存配置", exact: true })
     ).toBeInViewport({ ratio: 1 })
     const prompt = page.getByRole("button", {
-      name: "重命名提示词",
+      name: "编辑提示词",
       exact: true,
     })
-    await expect(prompt).toBeInViewport({ ratio: 1 })
+    await expect(prompt).toBeVisible()
     await prompt.click()
     const drawer = page.getByRole("dialog", { name: "归档重命名提示词" })
     await expect(drawer).toBeVisible()
@@ -178,7 +178,7 @@ for (const width of [2560, 1920, 390]) {
         await expect(start).toBeInViewport()
       }
       if (id === "settings") {
-        for (const name of ["AI 模型", "解密引擎", "应用", "数据"]) {
+        for (const name of ["常规", "解压与解密", "AI 模型", "数据"]) {
           await page.getByRole("tab", { name, exact: true }).click()
           await expect(
             page.getByRole("tabpanel", { name, exact: true })
@@ -190,5 +190,36 @@ for (const width of [2560, 1920, 390]) {
       }
     }
     expect(errors).toEqual([])
+  })
+}
+
+for (const width of [600, 640]) {
+  test(`小高度与缩放等效视口下 AI 表单可完整滚动（${width}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 400 })
+    await page.goto("/")
+    await page.getByRole("button", { name: "设置", exact: true }).click()
+    await page.getByRole("tab", { name: "AI 模型", exact: true }).click()
+    const name = page.getByRole("textbox", { name: "配置名称", exact: true })
+    await name.fill("小窗口配置")
+    await expect(name).toBeInViewport({ ratio: 1 })
+    const save = page.getByRole("button", { name: "保存配置", exact: true })
+    await save.scrollIntoViewIfNeeded()
+    await expect(save).toBeInViewport({ ratio: 1 })
+    const prompt = page.getByRole("button", { name: "编辑提示词", exact: true })
+    await prompt.scrollIntoViewIfNeeded()
+    // Allow subpixel intersection rounding while checking the actual click below.
+    await expect(prompt).toBeInViewport({ ratio: 0.99 })
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth
+      )
+    ).toBe(true)
+    await page.screenshot({ path: `artifacts/settings-short-${width}.png` })
+    await prompt.click()
+    await expect(
+      page.getByRole("dialog", { name: "归档重命名提示词" })
+    ).toBeVisible()
   })
 }

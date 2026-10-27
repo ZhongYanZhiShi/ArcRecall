@@ -4,6 +4,7 @@ import { useAppUpdate } from "@/components/update-provider"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { AppUpdateNotes } from "@/components/app-update-notes"
 
 export function AppUpdateDetails({ onClose }: { onClose?: () => void }) {
   const {
@@ -70,18 +71,19 @@ export function AppUpdateDetails({ onClose }: { onClose?: () => void }) {
       )}
       {notes && (
         <section className="flex flex-col gap-2 text-sm" aria-label="更新说明">
-          <h3 className="font-medium">本次更新</h3>
+          <h3 className="font-medium">
+            {notesVersion === status.currentVersion
+              ? "当前版本更新说明"
+              : "本次更新"}
+          </h3>
           <p className="line-clamp-3 break-words whitespace-pre-wrap text-muted-foreground">
             {notes}
           </p>
-          <details>
-            <summary className="cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring">
-              查看 v{notesVersion} 完整更新说明
-            </summary>
-            <p className="mt-2 max-h-48 overflow-y-auto break-words whitespace-pre-wrap text-muted-foreground">
-              {notes}
-            </p>
-          </details>
+          <AppUpdateNotes notes={notes} version={notesVersion}>
+            <Button variant="outline" size="sm" className="self-start">
+              查看更新说明
+            </Button>
+          </AppUpdateNotes>
         </section>
       )}
       {failure && (

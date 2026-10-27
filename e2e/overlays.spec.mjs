@@ -33,7 +33,7 @@ for (const theme of ["light", "dark"]) {
       await page
         .getByRole("textbox", { name: "配置名称", exact: true })
         .fill("弹窗验证配置")
-      await page.getByRole("tab", { name: "应用", exact: true }).click()
+      await page.getByRole("tab", { name: "常规", exact: true }).click()
       const dialog = page.getByRole("alertdialog")
       await expect(dialog).toBeInViewport({ ratio: 1 })
       const bounds = await dialog.boundingBox()

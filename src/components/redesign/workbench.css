@@ -1023,18 +1023,7 @@ html.byte.light {
 .byte [data-workbench="settings"] .byte-settings-grid > [data-slot="card"] {
   min-width: 0;
   padding: 20px 0;
-  align-self: start;
-}
-@media (min-width: 1200px) {
-  .byte-settings-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    column-gap: 32px;
-    align-items: start;
-  }
-  .byte-settings-grid > :not([data-slot="card"]) {
-    grid-column: 1 / -1;
-  }
+  align-self: stretch;
 }
 @media (max-width: 767px) {
   .byte [data-workbench="logs"] [aria-label="日志概览"] > * {
@@ -1823,7 +1812,7 @@ html.byte.light {
     min-height: 0;
   }
   .byte-ai-panel > [data-slot="card"] {
-    height: 100%;
+    flex: 1;
     min-height: 0;
     overflow: hidden;
   }
@@ -1839,17 +1828,6 @@ html.byte.light {
   .byte-ai-actions {
     position: static;
     padding-block: 4px;
-  }
-  .byte-engine-panel {
-    gap: 8px;
-  }
-  .byte-engine-actions {
-    order: -1;
-    padding-top: 0;
-    border-top: 0;
-  }
-  .byte-engine-actions > div:first-child {
-    display: none;
   }
   .byte-engine-panel
     > [data-slot="card"]
@@ -1959,7 +1937,7 @@ html.byte.light {
     min-height: 0;
   }
   .byte-ai-panel > [data-slot="card"] {
-    height: 100%;
+    flex: 1;
     min-height: 0;
     overflow: hidden;
   }
@@ -1992,4 +1970,20 @@ html.byte.light {
 }
 .byte .full-text-tooltip > [aria-hidden="true"] {
   display: none;
+}
+
+/* Short windows and browser zoom use the page scroll area instead of squeezing the AI form. */
+@media (min-width: 600px) and (max-height: 550px) {
+  .byte-settings-scroll > [data-slot="tabs-content"]:has(.byte-ai-panel),
+  .byte-ai-panel {
+    height: auto;
+  }
+  .byte-ai-panel > [data-slot="card"] {
+    flex: none;
+    overflow: visible;
+  }
+  .byte-ai-panel > [data-slot="card"] > [data-slot="card-content"] {
+    flex: none;
+    overflow: visible;
+  }
 }

@@ -3,9 +3,8 @@
 import { CircleAlert, RefreshCw } from "lucide-react"
 import * as React from "react"
 import { toast } from "sonner"
-import { DesktopSettings, ExtractionLimitSettings } from "./desktop-settings"
+import { DesktopSettings } from "./desktop-settings"
 import { AppUpdatePanel } from "@/components/home/app-update-panel"
-import { WorkbenchDetails } from "@/components/home/workbench-details"
 
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -59,9 +58,13 @@ const LOG_CAPACITY_PRESETS = [25, 100, 250, 500] as const
 
 export function AppSettingsPanel({
   onDirtyChange,
+  onBusyChange,
 }: {
   onDirtyChange?: (dirty: boolean) => void
+  onBusyChange?: (busy: boolean) => void
 }) {
+  const [desktopBusy, setDesktopBusy] = React.useState(false)
+  const [desktopDirty, setDesktopDirty] = React.useState(false)
   const [appSettings, setAppSettings] = React.useState<AppSettings | null>(null)
   const [logMaxDiskInput, setLogMaxDiskInput] = React.useState(
     String(DEFAULT_LOG_MAX_DISK_MIB)
@@ -202,19 +205,19 @@ export function AppSettingsPanel({
       logMaxDiskInput
 
   React.useEffect(() => {
-    onDirtyChange?.(logCapacityDirty)
-  }, [logCapacityDirty, onDirtyChange])
+    onDirtyChange?.(logCapacityDirty || desktopDirty)
+  }, [logCapacityDirty, desktopDirty, onDirtyChange])
+
+  React.useEffect(() => {
+    onBusyChange?.(busy || desktopBusy)
+  }, [busy, desktopBusy, onBusyChange])
 
   return (
-    <div className="byte-app-settings byte-settings-grid flex flex-col gap-2">
-      <WorkbenchDetails
-        title="应用更新"
-        description="检查新版本，设置后台下载。"
-      >
-        <AppUpdatePanel />
-      </WorkbenchDetails>
-      <DesktopSettings />
-      <ExtractionLimitSettings />
+    <div className="byte-app-settings byte-settings-grid flex flex-col gap-4">
+      <DesktopSettings
+        onDirtyChange={setDesktopDirty}
+        onBusyChange={setDesktopBusy}
+      />
       {loadError ? (
         <Alert variant="warning">
           <CircleAlert />
@@ -243,7 +246,7 @@ export function AppSettingsPanel({
             </Badge>
           </div>
           <CardDescription>
-            密码、候选内容和用户路径会在写入前隐藏。
+            日志级别自动保存，磁盘上限修改后保存。密码、候选内容和用户路径会在写入前隐藏。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -301,6 +304,7 @@ export function AppSettingsPanel({
                 <InputGroup>
                   <InputGroupInput
                     id="log-max-disk-mib"
+                    data-settings-pending={logCapacityDirty || undefined}
                     type="number"
                     inputMode="numeric"
                     min={MIN_LOG_MAX_DISK_MIB}
@@ -341,6 +345,21 @@ export function AppSettingsPanel({
                 ) : null}
                 {savingCapacity ? "保存中…" : "保存"}
               </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={busy || !logCapacityDirty}
+                onClick={() =>
+                  setLogMaxDiskInput(
+                    String(
+                      appSettings?.logging?.maxDiskMib ??
+                        DEFAULT_LOG_MAX_DISK_MIB
+                    )
+                  )
+                }
+              >
+                撤销修改
+              </Button>
             </div>
             <ToggleGroup
               value={
@@ -372,6 +391,7 @@ export function AppSettingsPanel({
           </FieldSet>
         </CardContent>
       </Card>
+      <AppUpdatePanel />
     </div>
   )
 }

@@ -2,7 +2,13 @@
 
 import { useAppUpdate } from "@/components/update-provider"
 import { AppUpdateDetails } from "@/components/app-update-details"
-import { Card, CardHeader, CardContent, CardTitle } from "@/components/ui/card"
+import {
+  Card,
+  CardHeader,
+  CardContent,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card"
 import {
   Field,
   FieldContent,
@@ -16,11 +22,12 @@ export function AppUpdatePanel() {
   const { status, desktop, loaded, busy, setAutomatic } = useAppUpdate()
   const disabled = !loaded || !status.configured || busy
   return (
-    <Card size="sm" className="drawer-section">
-      <CardHeader>
-        <CardTitle>
+    <Card size="sm">
+      <CardHeader className="border-b border-border/80">
+        <CardTitle>应用更新</CardTitle>
+        <CardDescription>
           当前版本 {status.currentVersion ? `v${status.currentVersion}` : "—"}
-        </CardTitle>
+        </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {!desktop ? (

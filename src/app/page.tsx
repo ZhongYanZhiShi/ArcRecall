@@ -144,18 +144,37 @@ export default function Page() {
     React.useState<SettingsReturnTarget | null>(null)
   const [settingsCategoryRequestId, setSettingsCategoryRequestId] =
     React.useState(0)
+  const [settingsFocusRequest, setSettingsFocusRequest] = React.useState(0)
+  const [settingsEngineBusy, setSettingsEngineBusy] = React.useState(false)
+  const [settingsAppBusy, setSettingsAppBusy] = React.useState(false)
   const [settingsAiDirty, setSettingsAiDirty] = React.useState(false)
+  const [settingsEngineDirty, setSettingsEngineDirty] = React.useState(false)
   const [settingsAppDirty, setSettingsAppDirty] = React.useState(false)
   const { setInstallGuard } = useAppUpdate()
   React.useEffect(() => {
-    const category = settingsAiDirty ? "ai" : "app"
+    const category = settingsAiDirty
+      ? "ai"
+      : settingsEngineDirty || settingsEngineBusy
+        ? "engine"
+        : "app"
     setInstallGuard(
-      settingsAiDirty || settingsAppDirty
+      settingsAiDirty ||
+        settingsEngineDirty ||
+        settingsAppDirty ||
+        settingsEngineBusy ||
+        settingsAppBusy
         ? {
             reason: settingsAiDirty
               ? "AI 模型或重命名提示词有未保存的更改。"
-              : "日志磁盘上限有未保存的更改。",
+              : settingsEngineBusy
+                ? "解压与解密设置正在处理，请等待完成。"
+                : settingsEngineDirty
+                  ? "解压与解密设置有未保存的更改。"
+                  : settingsAppBusy
+                    ? "常规设置正在保存，请等待完成。"
+                    : "常规设置有未保存的更改。",
             resolve: () => {
+              setSettingsFocusRequest((id) => id + 1)
               setSettingsCategory(category)
               setSettingsCategoryRequestId((id) => id + 1)
               setVisitedNavs((current) => new Set([...current, "settings"]))
@@ -164,7 +183,14 @@ export default function Page() {
           }
         : null
     )
-  }, [settingsAiDirty, settingsAppDirty, setInstallGuard])
+  }, [
+    settingsAiDirty,
+    settingsEngineDirty,
+    settingsAppDirty,
+    settingsEngineBusy,
+    settingsAppBusy,
+    setInstallGuard,
+  ])
   const [pendingNav, setPendingNav] = React.useState<NavId | null>(null)
   const [navSaveBusy, setNavSaveBusy] = React.useState(false)
 
@@ -419,6 +445,10 @@ export default function Page() {
               categoryRequestId={settingsCategoryRequestId}
               onAiDirtyChange={setSettingsAiDirty}
               onAppDirtyChange={setSettingsAppDirty}
+              onEngineDirtyChange={setSettingsEngineDirty}
+              onEngineBusyChange={setSettingsEngineBusy}
+              onAppBusyChange={setSettingsAppBusy}
+              focusRequestId={settingsFocusRequest}
               returnAction={
                 settingsReturnTarget
                   ? {

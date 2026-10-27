@@ -284,7 +284,7 @@ for (const theme of ["dark", "light"])
       )
       await dismissNotices(page)
       await page
-        .getByRole("button", { name: "重命名提示词", exact: true })
+        .getByRole("button", { name: "编辑提示词", exact: true })
         .click()
       const dialog = page.getByRole("dialog")
       const prompt = dialog.getByRole("textbox", { name: "AI 重命名提示词" })
@@ -385,28 +385,26 @@ for (const theme of ["dark", "light"])
       page,
     }) => {
       await setup(page, theme, width)
-      await page.getByRole("button", { name: "解压行为", exact: true }).click()
       const dialog = page.getByRole("dialog")
-      await dialog
+      await page
         .getByRole("spinbutton", { name: "目录扫描文件数上限" })
         .fill("12")
       await submitOnce(
         page,
-        dialog.getByRole("button", { name: "保存上限", exact: true }),
+        page.getByRole("button", { name: "保存上限", exact: true }),
         "settings_update"
       )
       await expect(
-        dialog.getByRole("button", { name: "保存中…", exact: true })
+        page.getByRole("button", { name: "保存中…", exact: true })
       ).toBeDisabled()
       await expect(
-        dialog.getByRole("button", { name: "保存中…", exact: true })
+        page.getByRole("button", { name: "保存中…", exact: true })
       ).toBeInViewport({ ratio: 1 })
       await screenshot(page, `${prefix}-engine-pending`)
       await reject(page)
       await expect(
-        dialog.getByRole("spinbutton", { name: "目录扫描文件数上限" })
+        page.getByRole("spinbutton", { name: "目录扫描文件数上限" })
       ).toHaveValue("12")
-      await dialog.getByRole("button", { name: "关闭", exact: true }).click()
       await page.getByRole("button", { name: "引擎管理", exact: true }).click()
       await dialog.getByRole("tab", { name: "工具目录", exact: true }).click()
       await dialog
@@ -441,7 +439,7 @@ for (const theme of ["dark", "light"])
         dialog.getByRole("textbox", { name: "公共目录（绝对路径）" })
       ).toHaveValue("C:\\测试工具")
       await dialog.getByRole("button", { name: "关闭", exact: true }).click()
-      await page.getByRole("tab", { name: "应用", exact: true }).click()
+      await page.getByRole("tab", { name: "常规", exact: true }).click()
       await page.getByRole("spinbutton", { name: "最大磁盘占用" }).fill("50")
       await submitOnce(
         page,

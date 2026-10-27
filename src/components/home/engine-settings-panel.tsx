@@ -8,6 +8,7 @@ import { toast } from "sonner"
 
 import {
   DefaultRecoveryCard,
+  ExtractionBehaviorSettings,
   FullBundleCard,
   HashcatCard,
   JohnPerlCard,
@@ -56,7 +57,15 @@ type EngineActionResult = {
 
 let cachedEngineStatus: EngineStatusSnapshot | null = null
 
-export function EngineSettingsPanel() {
+export function EngineSettingsPanel({
+  onDirtyChange,
+  onBusyChange,
+}: {
+  onDirtyChange?: (dirty: boolean) => void
+  onBusyChange?: (busy: boolean) => void
+}) {
+  const [limitsBusy, setLimitsBusy] = React.useState(false)
+  const [limitsDirty, setLimitsDirty] = React.useState(false)
   const [scanLimitDraft, setScanLimitDraft] = React.useState<string | null>(
     null
   )
@@ -75,15 +84,22 @@ export function EngineSettingsPanel() {
       () => cachedEngineStatus?.recoveryCapabilities ?? null
     )
   const [appSettings, setAppSettings] = React.useState<AppSettings | null>(null)
-  const [toolsDirectory, setToolsDirectoryInput] = React.useState(
-    () => cachedEngineStatus?.hashcat.configuredToolsDirectory ?? ""
+  const [toolsDraft, setToolsDirectoryInput] = React.useState<string | null>(
+    null
   )
-  const [johnDirectory, setJohnDirectory] = React.useState(
-    () => cachedEngineStatus?.johnPerl.johnToolsDirectory ?? ""
-  )
-  const [perlPath, setPerlPath] = React.useState(
-    () => cachedEngineStatus?.johnPerl.perlPath ?? ""
-  )
+  const [johnDraft, setJohnDirectory] = React.useState<string | null>(null)
+  const [perlDraft, setPerlPath] = React.useState<string | null>(null)
+  const toolsDirectory = toolsDraft ?? hashcat?.configuredToolsDirectory ?? ""
+  const johnDirectory = johnDraft ?? johnPerl?.johnToolsDirectory ?? ""
+  const perlPath = perlDraft ?? johnPerl?.perlPath ?? ""
+  const toolsDirty =
+    toolsDraft !== null &&
+    toolsDirectory !== (hashcat?.configuredToolsDirectory ?? "")
+  const johnDirty =
+    (johnDraft !== null &&
+      johnDirectory !== (johnPerl?.johnToolsDirectory ?? "")) ||
+    (perlDraft !== null && perlPath !== (johnPerl?.perlPath ?? ""))
+  const [engineTab, setEngineTab] = React.useState("bundle")
   const [engineBusy, setEngineBusy] = React.useState(false)
   const engineOperation = React.useRef(false)
   const recoveryOperation = React.useRef(false)
@@ -103,8 +119,6 @@ export function EngineSettingsPanel() {
       cachedEngineStatus = { ...cachedEngineStatus, johnPerl: status }
     }
     setJohnPerlStatus(status)
-    setJohnDirectory(status.johnToolsDirectory || "")
-    setPerlPath(status.perlPath || "")
   }, [])
 
   const applyEngineStatus = React.useCallback(
@@ -114,9 +128,6 @@ export function EngineSettingsPanel() {
       setHashcat(snapshot.hashcat)
       setJohnPerlStatus(snapshot.johnPerl)
       setCapabilities(snapshot.recoveryCapabilities)
-      setToolsDirectoryInput(snapshot.hashcat.configuredToolsDirectory || "")
-      setJohnDirectory(snapshot.johnPerl.johnToolsDirectory || "")
-      setPerlPath(snapshot.johnPerl.perlPath || "")
     },
     []
   )
@@ -158,7 +169,6 @@ export function EngineSettingsPanel() {
     if (bundle.status === "fulfilled") setFullBundle(bundle.value)
     if (hashcatStatus.status === "fulfilled") {
       setHashcat(hashcatStatus.value)
-      setToolsDirectoryInput(hashcatStatus.value.configuredToolsDirectory || "")
     }
     if (john.status === "fulfilled") applyJohnStatus(john.value)
     if (recovery.status === "fulfilled") setCapabilities(recovery.value)
@@ -240,6 +250,7 @@ export function EngineSettingsPanel() {
     runEngineAction("正在保存公共工具目录…", async () => {
       await setToolsDirectory(toolsDirectory.trim())
       await refreshEngine()
+      setToolsDirectoryInput(null)
       return {
         message: toolsDirectory.trim()
           ? "已保存公共工具目录；下载的引擎将安装到此目录。"
@@ -249,10 +260,10 @@ export function EngineSettingsPanel() {
 
   const handleResetToolsDirectory = () => {
     if (engineOperation.current) return
-    setToolsDirectoryInput("")
     runEngineAction("正在恢复默认工具目录…", async () => {
       await setToolsDirectory("")
       await refreshEngine()
+      setToolsDirectoryInput(null)
       return { message: "已恢复默认工具目录。" }
     })
   }
@@ -282,6 +293,8 @@ export function EngineSettingsPanel() {
       const status = await setJohnPerl(johnDirectory.trim(), perlPath.trim())
       applyJohnStatus(status)
       await refreshEngine()
+      setJohnDirectory(null)
+      setPerlPath(null)
       return { message: status.message, error: !status.ready }
     })
 
@@ -397,6 +410,21 @@ export function EngineSettingsPanel() {
       appSettings?.recovery?.scanMaxFilesPerDirectory ??
         DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY
     )
+  const scanLimitDirty =
+    appSettings !== null &&
+    scanLimitValue !==
+      String(
+        appSettings.recovery?.scanMaxFilesPerDirectory ??
+          DEFAULT_SCAN_MAX_FILES_PER_DIRECTORY
+      )
+  React.useEffect(() => {
+    onDirtyChange?.(scanLimitDirty || limitsDirty || toolsDirty || johnDirty)
+  }, [scanLimitDirty, limitsDirty, toolsDirty, johnDirty, onDirtyChange])
+
+  React.useEffect(() => {
+    onBusyChange?.(recoveryBusy || engineBusy || limitsBusy)
+  }, [recoveryBusy, engineBusy, limitsBusy, onBusyChange])
+
   const handleSaveScanLimit = async () => {
     if (recoveryBusy || recoveryOperation.current || appSettings === null)
       return
@@ -445,7 +473,7 @@ export function EngineSettingsPanel() {
   }
 
   return (
-    <div className="byte-engine-panel flex flex-col gap-6">
+    <div className="byte-engine-panel flex flex-col gap-4">
       {loadError ? (
         <Alert variant="warning">
           <CircleAlert />
@@ -469,10 +497,24 @@ export function EngineSettingsPanel() {
         capabilities={capabilities}
         settingsBusy={recoveryBusy}
         engineBusy={engineBusy}
-        message={recoveryMessage}
+        message={
+          recoveryMessage === "正在保存默认解密方式…" ? recoveryMessage : null
+        }
         messageError={recoveryError}
         onChange={handleRecoveryModeChange}
         onRefresh={handleRefresh}
+      />
+      <ExtractionBehaviorSettings
+        scanLimitDirty={scanLimitDirty}
+        onLimitsDirtyChange={setLimitsDirty}
+        onLimitsBusyChange={setLimitsBusy}
+        onDiscardScanLimit={() => {
+          setScanLimitDraft(null)
+          setRecoveryMessage(null)
+        }}
+        appSettings={appSettings}
+        settingsBusy={recoveryBusy}
+        message={recoveryMessage}
         scanLimitValue={scanLimitValue}
         onScanLimitChange={setScanLimitDraft}
         onSaveScanLimit={() => void handleSaveScanLimit()}
@@ -490,9 +532,21 @@ export function EngineSettingsPanel() {
             管理完整引擎包、工具目录与运行环境。
           </p>
         </div>
-        <Tabs defaultValue="bundle" className="w-full">
+        <Tabs
+          value={engineTab}
+          onValueChange={(value) => {
+            if (value) setEngineTab(value)
+          }}
+          className="w-full"
+        >
           <WorkbenchDetails
             title="引擎管理"
+            pending={toolsDirty || johnDirty}
+            label={toolsDirty || johnDirty ? "引擎管理 · 未保存" : "引擎管理"}
+            onOpenChange={(open) => {
+              if (open && (toolsDirty || johnDirty))
+                setEngineTab(toolsDirty ? "tools" : "john")
+            }}
             description="安装引擎、配置工具路径与检查运行环境。"
             footer={
               engineMessage ? (
@@ -526,6 +580,8 @@ export function EngineSettingsPanel() {
               <ToolsDirectoryCard
                 status={hashcat}
                 value={toolsDirectory}
+                dirty={toolsDirty}
+                onDiscard={() => setToolsDirectoryInput(null)}
                 busy={engineBusy}
                 onChange={setToolsDirectoryInput}
                 onOpen={handleOpenPath}
@@ -544,6 +600,11 @@ export function EngineSettingsPanel() {
               <JohnPerlCard
                 status={johnPerl}
                 johnDirectory={johnDirectory}
+                dirty={johnDirty}
+                onDiscard={() => {
+                  setJohnDirectory(null)
+                  setPerlPath(null)
+                }}
                 perlPath={perlPath}
                 busy={engineBusy}
                 onJohnDirectoryChange={setJohnDirectory}
