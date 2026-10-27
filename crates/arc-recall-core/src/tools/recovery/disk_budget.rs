@@ -68,7 +68,7 @@ pub(super) fn check_free_space(path: &Path, needed: u64) -> Result<(), RecoveryE
 }
 
 #[cfg(windows)]
-fn available_space(path: &Path) -> io::Result<Option<u64>> {
+pub fn available_space(path: &Path) -> io::Result<Option<u64>> {
     use std::os::windows::ffi::OsStrExt;
     let mut existing = path;
     while !existing.exists() {
@@ -99,7 +99,7 @@ fn available_space(path: &Path) -> io::Result<Option<u64>> {
 }
 
 #[cfg(not(windows))]
-fn available_space(_path: &Path) -> io::Result<Option<u64>> {
+pub fn available_space(_path: &Path) -> io::Result<Option<u64>> {
     Ok(None)
 }
 

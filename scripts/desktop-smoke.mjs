@@ -56,6 +56,11 @@ await writeFile(
     recovery: { computeMode: "cpuOnly", scanMaxFilesPerDirectory: 0 },
   })
 )
+if (process.argv.includes("--archive-extensions-only"))
+  await writeFile(
+    join(data, "desktop-integration.json"),
+    JSON.stringify({ setupCompleted: false })
+  )
 const payload = join(root, "payload.txt")
 const archive = join(root, "literal-password.7z")
 const pending = join(root, "pending.7z")
@@ -145,6 +150,22 @@ async function launch() {
     context.pages()[0] ??
     (await context.waitForEvent("page"))
   page.on("pageerror", (error) => errors.push(error.message))
+  await page.waitForFunction(() => Boolean(window.__TAURI_INTERNALS__?.invoke))
+  if (process.argv.includes("--archive-extensions-only")) {
+    const welcome = page.getByRole("dialog", {
+      name: "欢迎使用 ArcRecall · 推荐设置",
+    })
+    if (!(await invoke("desktop_integration_status")).setupCompleted) {
+      await expect(welcome).toBeVisible()
+      await page.screenshot({ path: join(evidence, "archive-onboarding.png") })
+      await welcome.getByRole("button", { name: "保存并开始使用" }).click()
+      await expect(welcome).not.toBeVisible()
+      assert.equal(
+        (await invoke("desktop_integration_status")).contextMenu,
+        true
+      )
+    }
+  }
   await page.getByRole("button", { name: "打开解压选项" }).waitFor()
   if (process.argv.includes("--secondary-monitor")) {
     const monitors = await invoke("plugin:window|available_monitors")
@@ -585,6 +606,31 @@ async function verifyAiFileReference() {
     if (profileId) await invoke("ai_profile_delete", { profileId })
     await new Promise((done) => server.close(done))
   }
+}
+
+if (process.argv.includes("--archive-extensions-only")) {
+  try {
+    await launch()
+    const { verifyArchiveExtensions } =
+      await import("./desktop-archive-extensions.mjs")
+    await verifyArchiveExtensions({
+      invoke,
+      getPage: () => page,
+      data,
+      evidence,
+      binary,
+      archive,
+      password,
+      close,
+      launch,
+      pastePaths,
+    })
+    assert.deepEqual(errors, [])
+  } finally {
+    await close(false)
+  }
+  console.log(`Archive extension evidence: ${evidence}`)
+  process.exit(0)
 }
 
 if (process.argv.includes("--improvements-only")) {

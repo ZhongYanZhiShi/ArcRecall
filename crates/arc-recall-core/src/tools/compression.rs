@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -49,6 +50,7 @@ pub enum CompressionPhase {
 
 #[derive(Clone)]
 pub struct CompressionJob {
+    pub volume_size_mib: Option<u32>,
     pub sources: Vec<PathBuf>,
     pub output_directory: Option<PathBuf>,
     pub base_name: String,
@@ -74,6 +76,7 @@ pub struct CompressionResult {
 }
 
 pub struct PreparedCompressionJob {
+    volume_size_mib: Option<u32>,
     source_groups: Vec<CompressionSourceGroup>,
     output_path: PathBuf,
     temporary_path: PathBuf,
@@ -122,6 +125,14 @@ pub enum CompressionError {
 pub fn prepare_compression(
     job: CompressionJob,
 ) -> Result<PreparedCompressionJob, CompressionError> {
+    if job
+        .volume_size_mib
+        .is_some_and(|size| !(1..=1_048_576).contains(&size))
+    {
+        return Err(CompressionError::InvalidRequest(
+            "分卷大小必须为 1–1048576 MiB。".into(),
+        ));
+    }
     if job.sources.is_empty() {
         return Err(CompressionError::InvalidRequest(
             "请至少选择一个文件或文件夹。".into(),
@@ -175,8 +186,16 @@ pub fn prepare_compression(
     let preferred_output = output_directory.join(format!("{base_name}.{}", job.format.extension()));
     let output_path = resolve_available_archive_path(&preferred_output);
     let temporary_path = temporary_archive_path(&output_path, &job.work_id);
+    let output_path = if job.volume_size_mib.is_some() {
+        let directory =
+            resolve_available_archive_path(&output_directory.join(format!("{base_name}-volumes")));
+        directory.join(format!("{base_name}.{}.001", job.format.extension()))
+    } else {
+        output_path
+    };
 
     Ok(PreparedCompressionJob {
+        volume_size_mib: job.volume_size_mib,
         source_groups,
         output_path,
         temporary_path,
@@ -257,7 +276,11 @@ pub fn compress_archive(
             "7-Zip 未生成预期的临时归档。".into(),
         ));
     }
-    let output_path = publish_archive(partial, &job.output_path)?;
+    let output_path = if let Some(size) = job.volume_size_mib {
+        publish_volumes(&job.temporary_path, &job.output_path, size, cancellation)?
+    } else {
+        publish_archive(partial, &job.output_path)?
+    };
     on_update(CompressionUpdate {
         phase: CompressionPhase::Completed,
         message: "压缩完成。".into(),
@@ -268,6 +291,64 @@ pub fn compress_archive(
         output_path,
         source_count: total,
     })
+}
+
+/// Split a complete archive as numbered byte volumes. Building the complete
+/// archive first allows multiple source directories without 7-Zip's split-update restriction.
+fn publish_volumes(
+    source: &Path,
+    first: &Path,
+    size_mib: u32,
+    cancel: &CancellationToken,
+) -> Result<PathBuf, CompressionError> {
+    let preferred = first
+        .parent()
+        .ok_or_else(|| CompressionError::InvalidRequest("分卷输出目录无效".into()))?;
+    let parent = preferred
+        .parent()
+        .ok_or_else(|| CompressionError::InvalidRequest("分卷输出目录无效".into()))?;
+    let staging = tempfile::tempdir_in(parent).map_err(CompressionError::OutputIo)?;
+    let name = first
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| CompressionError::InvalidRequest("分卷文件名无效".into()))?;
+    let stem = name.strip_suffix(".001").unwrap_or(name);
+    let mut input = fs::File::open(source).map_err(CompressionError::OutputIo)?;
+    let total = input.metadata().map_err(CompressionError::OutputIo)?.len();
+    let volume_bytes = u64::from(size_mib) * 1024 * 1024;
+    let count = total.div_ceil(volume_bytes);
+    if count == 0 || count > 10_000 {
+        return Err(CompressionError::InvalidRequest(
+            "分卷数量须为 1–10000，请增大分卷大小。".into(),
+        ));
+    }
+    let mut buffer = vec![0; 1024 * 1024];
+    for index in 1..=count {
+        let mut output = fs::File::create(staging.path().join(format!("{stem}.{index:03}")))
+            .map_err(CompressionError::OutputIo)?;
+        let mut remaining = volume_bytes.min(total - (index - 1) * volume_bytes);
+        while remaining > 0 {
+            if cancel.is_cancelled() {
+                return Err(CompressionError::Cancelled);
+            }
+            let length = remaining.min(buffer.len() as u64) as usize;
+            input
+                .read_exact(&mut buffer[..length])
+                .map_err(CompressionError::OutputIo)?;
+            output
+                .write_all(&buffer[..length])
+                .map_err(CompressionError::OutputIo)?;
+            remaining -= length as u64;
+        }
+        output.sync_all().map_err(CompressionError::OutputIo)?;
+    }
+    if cancel.is_cancelled() {
+        return Err(CompressionError::Cancelled);
+    }
+    let destination = resolve_available_archive_path(preferred);
+    // The directory is published only after every volume has been written.
+    fs::rename(staging.path(), &destination).map_err(CompressionError::OutputIo)?;
+    Ok(destination.join(name))
 }
 
 pub fn sanitize_archive_base_name(value: &str) -> Result<String, CompressionError> {
@@ -540,6 +621,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn numbered_volumes_roundtrip_and_preserve_existing_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("temporary.zip");
+        let bytes: Vec<u8> = (0..2_500_000).map(|i| (i % 251) as u8).collect();
+        fs::write(&source, &bytes).unwrap();
+        let first = temp.path().join("资料-volumes").join("资料.zip.001");
+        let token = CancellationToken::default();
+        let output = publish_volumes(&source, &first, 1, &token).unwrap();
+        let mut combined = Vec::new();
+        for index in 1..=3 {
+            combined.extend(
+                fs::read(
+                    output
+                        .parent()
+                        .unwrap()
+                        .join(format!("资料.zip.{index:03}")),
+                )
+                .unwrap(),
+            );
+        }
+        assert_eq!(combined, bytes);
+        let second = publish_volumes(&source, &first, 1, &token).unwrap();
+        assert_ne!(output, second);
+        assert!(output.is_file());
+        token.cancel();
+        assert!(matches!(
+            publish_volumes(&source, &first, 1, &token),
+            Err(CompressionError::Cancelled)
+        ));
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 3);
+    }
+
+    #[test]
     fn sanitizes_name_and_strips_known_extension() {
         assert_eq!(
             sanitize_archive_base_name("  项目:备份.7z  ").unwrap(),
@@ -597,6 +711,7 @@ mod tests {
         fs::write(&sibling, b"content").unwrap();
 
         let prepared = prepare_compression(CompressionJob {
+            volume_size_mib: None,
             sources: vec![folder.join("nested").join("file.txt"), folder, sibling],
             output_directory: Some(directory.path().join("out")),
             base_name: "bundle".into(),
@@ -648,6 +763,7 @@ mod tests {
         fs::write(right.join("same.txt"), b"right").unwrap();
 
         let error = prepare_compression(CompressionJob {
+            volume_size_mib: None,
             sources: vec![left.join("same.txt"), right.join("same.txt")],
             output_directory: None,
             base_name: "bundle".into(),
@@ -670,6 +786,7 @@ mod tests {
             source_names: vec![OsString::from("source")],
         };
         let job = PreparedCompressionJob {
+            volume_size_mib: None,
             source_groups: Vec::new(),
             output_path: PathBuf::from("C:\\out\\archive.7z"),
             temporary_path: PathBuf::from("C:\\out\\.archive.part"),
@@ -696,6 +813,7 @@ mod tests {
             source_names: vec![OsString::from("@list.txt"), OsString::from("-mhe=off")],
         };
         let job = PreparedCompressionJob {
+            volume_size_mib: None,
             source_groups: Vec::new(),
             output_path: PathBuf::from("C:\\out\\archive.7z"),
             temporary_path: PathBuf::from("C:\\out\\.archive.part"),

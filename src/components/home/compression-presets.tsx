@@ -225,6 +225,7 @@ export function CompressionPresets({
                         nameTemplate: template,
                         openWhenDone: draft.openWhenDone,
                         options: {
+                          volumeSizeMib: draft.volumeSizeMib,
                           verifyAfterCompression: draft.verifyAfterCompression,
                           format: draft.format,
                           level: draft.level,

@@ -6,12 +6,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use arc_recall_core::{
-    ArchiveAnalysis, CancellationToken, DEFAULT_RECURSIVE_MAX_ARCHIVES,
-    DEFAULT_RECURSIVE_MAX_DEPTH, DictionaryCandidateStore, DictionaryError, RecoveryComputeDevice,
-    RecoveryComputeMode, RecoveryDictionary, RecoveryError, RecoveryHistoryStore, RecoveryJob,
-    RecoveryOperation, RecoveryPhase, RecoveryTiming, RecursiveRecoveryOptions, analyze_archive,
-    fingerprint_archive_sha256_with_cancellation, path_for_display,
-    recover_and_extract_recursive_lazy, resume_recursive_scan_lazy,
+    ArchiveAnalysis, CancellationToken, DEFAULT_RECURSIVE_MAX_ARCHIVES, DictionaryCandidateStore,
+    DictionaryError, RecoveryComputeDevice, RecoveryComputeMode, RecoveryDictionary, RecoveryError,
+    RecoveryHistoryStore, RecoveryJob, RecoveryOperation, RecoveryPhase, RecoveryTiming,
+    RecursiveRecoveryOptions, analyze_archive, fingerprint_archive_sha256_with_cancellation,
+    path_for_display, recover_and_extract_recursive_lazy, resume_recursive_scan_lazy,
 };
 use serde::Deserialize;
 use tauri::State;
@@ -319,6 +318,7 @@ async fn recovery_start_inner(
         depth_limit_reached: false,
         count_limit_reached: false,
         events: initial_events,
+        archive_tree: Vec::new(),
         completed_archive_paths: Vec::new(),
         skipped_archive_paths: Vec::new(),
         pending_archive_paths: Vec::new(),
@@ -524,10 +524,14 @@ async fn recovery_start_inner(
                 max_files_per_directory: recovery_settings.scan_max_files_per_directory,
                 remove_empty_directories: recovery_settings.remove_empty_directories,
                 flatten_output_directories: recovery_settings.flatten_output_directories,
-                max_depth: DEFAULT_RECURSIVE_MAX_DEPTH,
+                max_depth: recovery_settings.extraction_limits.max_depth,
+                max_total_bytes: u64::from(recovery_settings.extraction_limits.max_gib)
+                    * 1024
+                    * 1024
+                    * 1024,
+                max_total_entries: u64::from(recovery_settings.extraction_limits.max_entries),
                 max_nested_archives: DEFAULT_RECURSIVE_MAX_ARCHIVES,
                 compute_mode: initial.compute_mode,
-                ..RecursiveRecoveryOptions::default()
             };
             if let Some(resume) = resume {
                 resume_recursive_scan_lazy(
@@ -595,6 +599,8 @@ async fn recovery_start_inner(
                         .iter()
                         .map(|directory| path_for_display(&directory.path))
                         .collect();
+                    task_status.archive_tree =
+                        task::archive_tree(&task_status.archive_path, &result);
                     task_status.content_directories = result
                         .content_directories
                         .iter()

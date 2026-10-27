@@ -17,6 +17,7 @@ const LEGACY_AI_RENAME_PROMPT: &str = "在保留原意的前提下，将用户�
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 pub enum SettingsUpdate {
     AutoUpdate(bool),
+    ExtractionLimits(ExtractionLimits),
     LogLevel(AppLogLevel),
     LogMaxDiskMib(u16),
     RecoveryComputeMode(RecoveryComputeMode),
@@ -24,6 +25,30 @@ pub enum SettingsUpdate {
     RemoveEmptyDirectories(bool),
     FlattenOutputDirectories(bool),
     CompressionNaming(CompressionNamingSettings),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ExtractionLimits {
+    pub max_gib: u32,
+    pub max_entries: u32,
+    pub max_depth: u32,
+}
+impl Default for ExtractionLimits {
+    fn default() -> Self {
+        Self {
+            max_gib: 100,
+            max_entries: 100_000,
+            max_depth: crate::tools::DEFAULT_RECURSIVE_MAX_DEPTH,
+        }
+    }
+}
+impl ExtractionLimits {
+    pub fn validate(&self) -> bool {
+        (1..=100_000).contains(&self.max_gib)
+            && (1..=10_000_000).contains(&self.max_entries)
+            && (1..=64).contains(&self.max_depth)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +167,8 @@ pub struct EngineSettings {
 #[serde(rename_all = "camelCase")]
 pub struct RecoverySettings {
     #[serde(default)]
+    pub extraction_limits: ExtractionLimits,
+    #[serde(default)]
     pub compute_mode: RecoveryComputeMode,
     #[serde(default = "default_scan_max_files_per_directory")]
     pub scan_max_files_per_directory: u32,
@@ -166,6 +193,7 @@ const fn default_scan_max_files_per_directory() -> u32 {
 impl Default for RecoverySettings {
     fn default() -> Self {
         Self {
+            extraction_limits: ExtractionLimits::default(),
             compute_mode: RecoveryComputeMode::default(),
             scan_max_files_per_directory: default_scan_max_files_per_directory(),
             remove_empty_directories: default_remove_empty_directories(),
@@ -315,6 +343,9 @@ impl AppSettings {
     fn normalize(&mut self) {
         self.version = CURRENT_SETTINGS_VERSION;
         self.logging.normalize();
+        if !self.recovery.extraction_limits.validate() {
+            self.recovery.extraction_limits = ExtractionLimits::default();
+        }
         self.ai.normalize();
     }
 }
@@ -335,6 +366,8 @@ fn default_ai_rename_prompt() -> String {
 pub enum SettingsError {
     #[error("日志最大占用必须在 {MIN_LOG_MAX_DISK_MIB}–{MAX_LOG_MAX_DISK_MIB} MiB 之间。")]
     InvalidLogDiskLimit,
+    #[error("解压限制无效：体积 1–100000 GiB，条目 1–10000000，深度 1–64。")]
+    InvalidExtractionLimits,
     #[error("参考文件后缀无效，后缀长度须为 1–32 个字符，最多可选 32 种。")]
     InvalidCompressionNaming,
     #[error("io error: {0}")]
@@ -353,6 +386,12 @@ impl SettingsStore {
     pub fn update_preferences(&self, update: SettingsUpdate) -> Result<AppSettings, SettingsError> {
         let mut settings = self.load()?;
         match update {
+            SettingsUpdate::ExtractionLimits(value) => {
+                if !value.validate() {
+                    return Err(SettingsError::InvalidExtractionLimits);
+                }
+                settings.recovery.extraction_limits = value;
+            }
             SettingsUpdate::AutoUpdate(value) => settings.auto_update = value,
             SettingsUpdate::LogLevel(value) => settings.logging.level = value,
             SettingsUpdate::LogMaxDiskMib(value) => {
@@ -538,6 +577,39 @@ pub struct DatabaseInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extraction_limits_validate_and_survive_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let store = SettingsStore::open(&path).unwrap();
+        let limits = super::ExtractionLimits {
+            max_gib: 8,
+            max_entries: 500,
+            max_depth: 3,
+        };
+        store
+            .update_preferences(SettingsUpdate::ExtractionLimits(limits.clone()))
+            .unwrap();
+        assert_eq!(
+            SettingsStore::open(&path)
+                .unwrap()
+                .load()
+                .unwrap()
+                .recovery
+                .extraction_limits,
+            limits
+        );
+        assert!(
+            store
+                .update_preferences(SettingsUpdate::ExtractionLimits(super::ExtractionLimits {
+                    max_depth: 0,
+                    ..limits.clone()
+                }))
+                .is_err()
+        );
+        assert_eq!(store.load().unwrap().recovery.extraction_limits, limits);
+    }
 
     #[test]
     fn compression_naming_tags_and_selection_survive_reopen_and_deletion() {

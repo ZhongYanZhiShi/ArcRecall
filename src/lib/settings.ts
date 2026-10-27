@@ -32,6 +32,7 @@ export type AppSettings = {
   logging?: LoggingSettings
   compressionNaming?: CompressionNamingSettings
   recovery?: {
+    extractionLimits?: { maxGib: number; maxEntries: number; maxDepth: number }
     computeMode: RecoveryComputeMode
     scanMaxFilesPerDirectory?: number
     removeEmptyDirectories?: boolean
@@ -207,6 +208,10 @@ export async function getSettings(): Promise<AppSettings> {
 }
 
 export type SettingsUpdate =
+  | {
+      kind: "extractionLimits"
+      value: { maxGib: number; maxEntries: number; maxDepth: number }
+    }
   | { kind: "autoUpdate"; value: boolean }
   | { kind: "logLevel"; value: AppLogLevel }
   | { kind: "logMaxDiskMib"; value: number }

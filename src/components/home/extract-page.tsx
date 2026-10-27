@@ -1,4 +1,5 @@
 "use client"
+import { ArchiveDiagnostics } from "./archive-diagnostics"
 
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import * as React from "react"
@@ -103,6 +104,9 @@ export function ExtractPage({
     null
   )
   const [dictionaryCount, setDictionaryCount] = React.useState<number | null>(
+    null
+  )
+  const [diagnosticPath, setDiagnosticPath] = React.useState<string | null>(
     null
   )
   const [analyzingPath, setAnalyzingPath] = React.useState<string | null>(null)
@@ -215,6 +219,7 @@ export function ExtractPage({
       operationBusy.current = true
       const requestId = ++analysisRequestId.current
       setDragOver(false)
+      setDiagnosticPath(normalizedPath)
       setAnalyzingPath(normalizedPath)
       setBusy(true)
       setError(null)
@@ -370,6 +375,20 @@ export function ExtractPage({
     )
   }, [openWhenDone, task])
 
+  React.useEffect(() => {
+    const receive = (event: Event) => {
+      if (isInputLocked()) return
+      const { path, accept } = (
+        event as CustomEvent<{ path: string; accept: () => Promise<void> }>
+      ).detail
+      void accept()
+        .then(() => selectArchivePath(path))
+        .catch(notifyExtractError)
+    }
+    window.addEventListener("arcrecall-shell-open", receive)
+    return () => window.removeEventListener("arcrecall-shell-open", receive)
+  }, [isInputLocked, selectArchivePath])
+
   const handlePickArchive = React.useCallback(async () => {
     if (isInputLocked()) return
     const version = analysisRequestId.current
@@ -405,75 +424,100 @@ export function ExtractPage({
     }
   }, [isInputLocked])
 
-  const handleStart = React.useCallback(async () => {
-    if (!analysis || isInputLocked()) {
-      return
-    }
-    if (outputMode === "custom" && !outputDir) {
-      setError("请先选择自定义输出目录。")
-      setOptionsOpen(true)
-      return
-    }
-    operationBusy.current = true
-    analysisRequestId.current += 1
-    setBusy(true)
-    setDragOver(false)
-    setError(null)
-    try {
-      if (recoveryQueueJournal.getSnapshot().enabled) {
-        const [itemId] = recoveryQueue.enqueue([analysis.archivePath], {
-          exactOutputDirectory:
+  const startAnalyzedArchive = React.useCallback(
+    async (archive: ArchiveAnalysis, retry = false) => {
+      if (isInputLocked()) {
+        return
+      }
+      if (outputMode === "custom" && !outputDir) {
+        setError("请先选择自定义输出目录。")
+        setOptionsOpen(true)
+        return
+      }
+      operationBusy.current = true
+      analysisRequestId.current += 1
+      setBusy(true)
+      setDragOver(false)
+      setError(null)
+      try {
+        if (recoveryQueueJournal.getSnapshot().enabled) {
+          const [itemId] = recoveryQueue.enqueue([archive.archivePath], {
+            exactOutputDirectory:
+              outputMode === "custom"
+                ? outputDir
+                : archive.suggestedOutputDirectory,
+            knownPassword: knownPassword || null,
+            recursive,
+            computeMode,
+            dictionaryGroup,
+          })
+          if (itemId === undefined)
+            throw new Error("无法加入任务队列，请重新选择归档。")
+          setAnalysis(null)
+          setSelectedQueueItemId(itemId)
+          await recoveryQueue.start({ openWhenDone }, itemId)
+          return
+        }
+        const started = await startRecovery({
+          archivePath: archive.archivePath,
+          outputDirectory:
             outputMode === "custom"
               ? outputDir
-              : analysis.suggestedOutputDirectory,
+              : archive.suggestedOutputDirectory,
           knownPassword: knownPassword || null,
+          avoidOutputCollision: retry || outputMode === "sibling",
           recursive,
           computeMode,
           dictionaryGroup,
         })
-        if (itemId === undefined)
-          throw new Error("无法加入任务队列，请重新选择归档。")
-        setAnalysis(null)
-        setSelectedQueueItemId(itemId)
-        await recoveryQueue.start({ openWhenDone }, itemId)
-        return
+        autoOpenTasks.current.add(started.taskId)
+        setSelectedQueueItemId(null)
+        setPasswordTaskId(null)
+        setPasswordCopied(false)
+        setReattachedTaskId(null)
+        setTask(started)
+      } catch (reason) {
+        setError(toErrorMessage(reason))
+      } finally {
+        operationBusy.current = false
+        setBusy(false)
       }
-      const started = await startRecovery({
-        archivePath: analysis.archivePath,
-        outputDirectory:
-          outputMode === "custom"
-            ? outputDir
-            : analysis.suggestedOutputDirectory,
-        knownPassword: knownPassword || null,
-        avoidOutputCollision: outputMode === "sibling",
-        recursive,
-        computeMode,
-        dictionaryGroup,
-      })
-      autoOpenTasks.current.add(started.taskId)
-      setSelectedQueueItemId(null)
-      setPasswordTaskId(null)
-      setPasswordCopied(false)
-      setReattachedTaskId(null)
-      setTask(started)
-    } catch (reason) {
-      setError(toErrorMessage(reason))
-    } finally {
-      operationBusy.current = false
-      setBusy(false)
-    }
-  }, [
-    analysis,
-    computeMode,
-    dictionaryGroup,
-    knownPassword,
-    openWhenDone,
-    isInputLocked,
-    outputDir,
-    outputMode,
-    recursive,
-    setTask,
-  ])
+    },
+    [
+      computeMode,
+      dictionaryGroup,
+      knownPassword,
+      openWhenDone,
+      isInputLocked,
+      outputDir,
+      outputMode,
+      recursive,
+      setTask,
+    ]
+  )
+
+  const handleStart = React.useCallback(async () => {
+    if (analysis) await startAnalyzedArchive(analysis)
+  }, [analysis, startAnalyzedArchive])
+
+  const handleVolumeRetry = React.useCallback(
+    async (path: string) => {
+      if (isInputLocked()) throw new Error("请等待当前操作完成后重试。")
+      operationBusy.current = true
+      setBusy(true)
+      let next: ArchiveAnalysis
+      try {
+        next = await analyzeArchive(path)
+        setAnalysis(next)
+        setDiagnosticPath(next.archivePath)
+      } finally {
+        operationBusy.current = false
+        setBusy(false)
+      }
+      await startAnalyzedArchive(next, true)
+    },
+    [isInputLocked, startAnalyzedArchive]
+  )
 
   const handleComputeModeChange = React.useCallback(
     async (nextMode: RecoveryComputeMode) => {
@@ -700,6 +744,22 @@ export function ExtractPage({
       analyzingPath={analyzingPath}
       busy={busy || queue.running || !journal.ready}
       error={error}
+      diagnostics={
+        analysis?.archivePath || diagnosticPath || task?.archivePath ? (
+          <ArchiveDiagnostics
+            key={`${analysis?.archivePath || diagnosticPath || task?.archivePath}:${outputDir}`}
+            path={analysis?.archivePath || diagnosticPath || task!.archivePath}
+            output={
+              outputMode === "custom"
+                ? (outputDir ?? undefined)
+                : analysis?.suggestedOutputDirectory
+            }
+            password={knownPassword}
+            disabled={busy || running || queue.running}
+            onRetry={handleVolumeRetry}
+          />
+        ) : null
+      }
       running={running}
       taskResultRef={taskResultRef}
       handlePickArchive={handlePickArchive}
@@ -756,6 +816,7 @@ export function ExtractPage({
           ? (paths) => {
               if (isInputLocked()) return
               const allowed = new Set([
+                ...(!task.rootExtractionCompleted ? [task.archivePath] : []),
                 ...(task.skippedArchivePaths ?? []),
                 ...(task.pendingArchivePaths ?? []),
               ])

@@ -74,7 +74,88 @@ pub(super) enum RecoveryFailureKind {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct ArchiveTreeNode {
+    path: String,
+    parent: Option<String>,
+    output: Option<String>,
+    state: String,
+    message: String,
+}
+pub(super) fn archive_tree(
+    root_path: &str,
+    result: &RecursiveRecoveryResult,
+) -> Vec<ArchiveTreeNode> {
+    // Worker paths may use Windows' extended prefix while UI paths never do.
+    // Normalize before identity and ancestry comparisons, not only at serialization.
+    let normalize = |path: &Path| PathBuf::from(path_for_display(path));
+    let root = normalize(Path::new(root_path));
+    let completed: std::collections::BTreeSet<_> = result
+        .completed_archive_paths
+        .iter()
+        .map(|p| normalize(p))
+        .collect();
+    let skipped: std::collections::BTreeSet<_> = result
+        .skipped_archive_paths
+        .iter()
+        .map(|p| normalize(p))
+        .collect();
+    let outputs: std::collections::BTreeMap<_, _> = result
+        .archive_outputs
+        .iter()
+        .map(|(p, output)| (normalize(p), normalize(output)))
+        .collect();
+    let issues: std::collections::BTreeMap<_, _> = result
+        .archive_issues
+        .iter()
+        .map(|(p, issue)| (normalize(p), issue))
+        .collect();
+    let mut paths = std::collections::BTreeSet::from([root.clone()]);
+    paths.extend(completed.iter().cloned());
+    paths.extend(skipped.iter().cloned());
+    paths.extend(result.pending_archive_paths.iter().map(|p| normalize(p)));
+    paths
+        .into_iter()
+        .map(|path| {
+            let parent = if path == root {
+                None
+            } else {
+                outputs
+                    .iter()
+                    .filter(|(archive, output)| **archive != path && path.starts_with(output))
+                    .max_by_key(|(_, output)| output.components().count())
+                    .map(|(archive, _)| path_for_display(archive))
+                    .or_else(|| Some(path_for_display(&root)))
+            };
+            let state = if completed.contains(&path) {
+                "success"
+            } else if skipped.contains(&path) {
+                "skipped"
+            } else if path == root {
+                "failed"
+            } else {
+                "pending"
+            };
+            ArchiveTreeNode {
+                parent,
+                output: outputs.get(&path).map(|p| path_for_display(p)),
+                state: state.into(),
+                message: issues.get(&path).map(|s| (*s).clone()).unwrap_or_else(|| {
+                    if path == root {
+                        result.root.message.clone()
+                    } else {
+                        String::new()
+                    }
+                }),
+                path: path_for_display(&path),
+            }
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct RecoveryTaskStatus {
+    pub(super) archive_tree: Vec<ArchiveTreeNode>,
     pub(super) task_id: String,
     pub(super) dictionary_group: Option<String>,
     pub(super) phase: RecoveryPhase,
@@ -481,6 +562,7 @@ mod tests {
             depth_limit_reached: false,
             count_limit_reached: false,
             events: VecDeque::new(),
+            archive_tree: Vec::new(),
             completed_archive_paths: Vec::new(),
             skipped_archive_paths: Vec::new(),
             pending_archive_paths: Vec::new(),

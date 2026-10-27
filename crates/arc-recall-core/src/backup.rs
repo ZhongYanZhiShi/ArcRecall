@@ -328,6 +328,7 @@ mod tests {
                 &CompressionPreset {
                     name: "资料压缩".into(),
                     options: crate::compression_presets::CompressionOptions {
+                        volume_size_mib: None,
                         verify_after_compression: false,
                         format: crate::CompressionFormat::SevenZip,
                         level: 5,
@@ -379,6 +380,7 @@ mod tests {
         let preset = CompressionPreset {
             name: "资料打包".into(),
             options: crate::compression_presets::CompressionOptions {
+                volume_size_mib: None,
                 verify_after_compression: false,
                 format: crate::CompressionFormat::SevenZip,
                 level: 5,

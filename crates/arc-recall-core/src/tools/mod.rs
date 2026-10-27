@@ -5,6 +5,7 @@ mod hashcat;
 mod install_io;
 mod john;
 mod preview;
+pub mod volume_diagnostics;
 pub use folder_scan::{FolderScanResult, scan_archive_folder};
 mod recovery;
 mod runner;
@@ -32,8 +33,8 @@ pub use recovery::{
     RecoveryCapabilities, RecoveryComputeDevice, RecoveryComputeMode, RecoveryDictionary,
     RecoveryError, RecoveryJob, RecoveryMethodCapability, RecoveryOperation, RecoveryPhase,
     RecoveryResult, RecoveryTiming, RecoveryToolPaths, RecoveryUpdate, RecursiveRecoveryOptions,
-    RecursiveRecoveryResult, SkippedScanDirectory, analyze_archive, create_repaired_archive_copy,
-    detect_archive_format, fingerprint_archive_sha256,
+    RecursiveRecoveryResult, SkippedScanDirectory, analyze_archive, available_space,
+    create_repaired_archive_copy, detect_archive_format, fingerprint_archive_sha256,
     fingerprint_archive_sha256_with_cancellation, fingerprint_file_sha256, path_for_display,
     probe_recovery_capabilities, recover_and_extract, recover_and_extract_lazy,
     recover_and_extract_recursive_lazy, resume_recursive_scan_lazy, run_archive_action,

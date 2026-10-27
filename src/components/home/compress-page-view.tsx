@@ -545,6 +545,49 @@ export function CompressPageView({
                     disabled={draftLocked}
                   />
 
+                  <Field className="gap-2">
+                    <FieldLabel htmlFor="volume-size">
+                      分卷大小（MiB，可选）
+                    </FieldLabel>
+                    <InputGroup>
+                      <InputGroupInput
+                        id="volume-size"
+                        type="number"
+                        min={1}
+                        max={1048576}
+                        placeholder="留空表示不分卷"
+                        value={draft.volumeSizeMib ?? ""}
+                        disabled={draftLocked}
+                        onChange={(e) =>
+                          updateDraft(
+                            "volumeSizeMib",
+                            e.target.value === ""
+                              ? null
+                              : Number(e.target.value)
+                          )
+                        }
+                      />
+                    </InputGroup>
+                    <div className="flex flex-wrap gap-2">
+                      {[null, 100, 500, 2048].map((size) => (
+                        <Button
+                          key={size ?? "none"}
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          disabled={draftLocked}
+                          onClick={() => updateDraft("volumeSizeMib", size)}
+                        >
+                          {size == null ? "不分卷" : `${size} MiB`}
+                        </Button>
+                      ))}
+                    </div>
+                    <FieldDescription>
+                      创建连续数字分卷，保存在独立的 -volumes
+                      目录中。需额外暂存一份完整归档；解压时请选择 .001
+                      并保留全部卷。
+                    </FieldDescription>
+                  </Field>
                   <SwitchControl
                     checked={draft.verifyAfterCompression}
                     onCheckedChange={(value) =>

@@ -831,6 +831,13 @@ Section Uninstall
     Delete "$INSTDIR\\{{this}}"
   {{/each}}
 
+  ; Remove only the per-user menu owned by this installation.
+  ReadRegStr $R7 HKCU "Software\Classes\*\shell\ArcRecall\shell\open\command" ""
+  ${If} $R7 == "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --shell-action open -- $\"%1$\""
+  ${AndIf} $UpdateMode <> 1
+    DeleteRegKey HKCU "Software\Classes\*\shell\ArcRecall"
+  ${EndIf}
+
   ; Delete app associations
   {{#each file_associations as |association| ~}}
     {{#each association.ext as |ext| ~}}

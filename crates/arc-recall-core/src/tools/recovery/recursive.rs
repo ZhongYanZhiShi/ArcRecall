@@ -288,6 +288,11 @@ fn run_recursive_recovery(
     } else {
         Vec::new()
     };
+    let mut archive_outputs = std::collections::BTreeMap::new();
+    let mut archive_issues = std::collections::BTreeMap::new();
+    if root.success {
+        archive_outputs.insert(job.archive_path.clone(), root.output_directory.clone());
+    }
     let mut skipped_archive_paths = Vec::new();
     let mut pending_archive_paths = Vec::new();
     let mut scan_interrupted = false;
@@ -338,6 +343,9 @@ fn run_recursive_recovery(
             root.message
                 .push_str(&format!(" {}", flatten_summary.message()));
         }
+        if root.success {
+            archive_outputs.insert(job.archive_path.clone(), root.output_directory.clone());
+        }
         return Ok(RecursiveRecoveryResult {
             root,
             discovered_nested_archives: 0,
@@ -348,6 +356,8 @@ fn run_recursive_recovery(
             recovered_passwords,
             recovered_archives,
             scanned_files: 0,
+            archive_outputs,
+            archive_issues,
             completed_archive_paths,
             skipped_archive_paths,
             pending_archive_paths,
@@ -371,6 +381,8 @@ fn run_recursive_recovery(
         state.scanned_files = previous.scanned_files;
         state.depth_limit_reached = previous.depth_limit_reached;
         state.count_limit_reached = previous.count_limit_reached;
+        archive_outputs = previous.archive_outputs;
+        archive_issues = previous.archive_issues;
         completed_archive_paths = previous.completed_archive_paths;
         state
             .processed_archives
@@ -437,6 +449,9 @@ fn run_recursive_recovery(
             if !nested.archive_path.is_file() {
                 pending_archive_paths.retain(|path| path != &nested.archive_path);
                 skipped_archive_paths.push(nested.archive_path.clone());
+                archive_issues
+                    .entry(nested.archive_path.clone())
+                    .or_insert_with(|| "已跳过：格式、扫描限制或源文件状态不允许继续。".into());
                 state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
                 report(state.update(
                     "嵌套压缩包已不存在，已跳过。",
@@ -452,6 +467,9 @@ fn run_recursive_recovery(
             if state.discovered_nested_archives >= state.options.max_nested_archives {
                 pending_archive_paths.retain(|path| path != &nested.archive_path);
                 skipped_archive_paths.push(nested.archive_path.clone());
+                archive_issues
+                    .entry(nested.archive_path.clone())
+                    .or_insert_with(|| "已跳过：格式、扫描限制或源文件状态不允许继续。".into());
                 state.count_limit_reached = true;
                 state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
                 report(state.update(
@@ -469,6 +487,9 @@ fn run_recursive_recovery(
             if nested.depth > state.options.max_depth {
                 pending_archive_paths.retain(|path| path != &nested.archive_path);
                 skipped_archive_paths.push(nested.archive_path.clone());
+                archive_issues
+                    .entry(nested.archive_path.clone())
+                    .or_insert_with(|| "已跳过：格式、扫描限制或源文件状态不允许继续。".into());
                 state.depth_limit_reached = true;
                 state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
                 report(state.update(
@@ -535,8 +556,17 @@ fn run_recursive_recovery(
             match nested_result {
                 Ok(result) if result.success => {
                     if let Err(error) = output_transaction.commit() {
+                        archive_issues.insert(
+                            nested.archive_path.clone(),
+                            format!("输出发布失败：{error}"),
+                        );
                         pending_archive_paths.retain(|path| path != &nested.archive_path);
                         skipped_archive_paths.push(nested.archive_path.clone());
+                        archive_issues
+                            .entry(nested.archive_path.clone())
+                            .or_insert_with(|| {
+                                "已跳过：格式、扫描限制或源文件状态不允许继续。".into()
+                            });
                         state.skipped_nested_archives =
                             state.skipped_nested_archives.saturating_add(1);
                         report(state.update(
@@ -572,6 +602,7 @@ fn run_recursive_recovery(
                     }
                     pending_archive_paths.retain(|path| path != &nested.archive_path);
                     completed_archive_paths.push(nested.archive_path.clone());
+                    archive_outputs.insert(nested.archive_path.clone(), nested_output.clone());
                     state.extracted_nested_archives =
                         state.extracted_nested_archives.saturating_add(1);
                     if let Some(mut record) = result.recovered_archive.clone() {
@@ -630,8 +661,15 @@ fn run_recursive_recovery(
                     }
                 }
                 Ok(_) => {
+                    archive_issues.insert(
+                        nested.archive_path.clone(),
+                        "未找到密码，请补充密码或调整字典后重试。".into(),
+                    );
                     pending_archive_paths.retain(|path| path != &nested.archive_path);
                     skipped_archive_paths.push(nested.archive_path.clone());
+                    archive_issues
+                        .entry(nested.archive_path.clone())
+                        .or_insert_with(|| "已跳过：格式、扫描限制或源文件状态不允许继续。".into());
                     state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
                     report(state.update(
                         format!(
@@ -645,8 +683,12 @@ fn run_recursive_recovery(
                 Err(RecoveryError::Cancelled) => return Err(RecoveryError::Cancelled),
                 Err(error @ RecoveryError::BudgetExceeded(_)) => return Err(error),
                 Err(error) => {
+                    archive_issues.insert(nested.archive_path.clone(), error.to_string());
                     pending_archive_paths.retain(|path| path != &nested.archive_path);
                     skipped_archive_paths.push(nested.archive_path.clone());
+                    archive_issues
+                        .entry(nested.archive_path.clone())
+                        .or_insert_with(|| "已跳过：格式、扫描限制或源文件状态不允许继续。".into());
                     state.skipped_nested_archives = state.skipped_nested_archives.saturating_add(1);
                     report(state.update(
                         format!(
@@ -717,7 +759,12 @@ fn run_recursive_recovery(
             .push_str(&format!(" {}", flatten_summary.message()));
     }
 
+    if root.success {
+        archive_outputs.insert(job.archive_path.clone(), root.output_directory.clone());
+    }
     Ok(RecursiveRecoveryResult {
+        archive_outputs,
+        archive_issues,
         root,
         discovered_nested_archives: state.discovered_nested_archives,
         extracted_nested_archives: state.extracted_nested_archives,

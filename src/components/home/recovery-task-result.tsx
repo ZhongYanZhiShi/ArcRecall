@@ -39,6 +39,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import type { RecoveryTaskEvent, RecoveryTaskStatus } from "@/lib/recovery"
 import { cn } from "@/lib/utils"
+import { ArchiveResultTree } from "./archive-result-tree"
 import { RecoveryReportExport } from "@/components/home/recovery-report-export"
 
 export function RecoveryTaskResult({
@@ -124,6 +125,12 @@ export function RecoveryTaskResult({
         />
       ) : null}
       <div className="byte-result-body flex flex-col gap-3 p-4">
+        <ArchiveResultTree
+          nodes={task.archiveTree ?? []}
+          onOpen={onOpenDirectory}
+          onRetry={onRetryArchives}
+          disabled={task.running}
+        />
         {task.completed && task.phase !== "exhausted" ? (
           <dl className="byte-result-metrics" aria-label="本次任务统计">
             <div>

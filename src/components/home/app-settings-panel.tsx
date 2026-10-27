@@ -3,6 +3,7 @@
 import { CircleAlert, RefreshCw } from "lucide-react"
 import * as React from "react"
 import { toast } from "sonner"
+import { DesktopSettings, ExtractionLimitSettings } from "./desktop-settings"
 import { AppUpdatePanel } from "@/components/home/app-update-panel"
 import { WorkbenchDetails } from "@/components/home/workbench-details"
 
@@ -212,6 +213,8 @@ export function AppSettingsPanel({
       >
         <AppUpdatePanel />
       </WorkbenchDetails>
+      <DesktopSettings />
+      <ExtractionLimitSettings />
       {loadError ? (
         <Alert variant="warning">
           <CircleAlert />

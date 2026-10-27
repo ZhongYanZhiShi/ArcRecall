@@ -81,6 +81,7 @@ import { cn } from "@/lib/utils"
 export type OutputMode = "sibling" | "custom"
 
 type ExtractPageViewProps = {
+  diagnostics?: React.ReactNode
   handlePickBatch?: () => void
   handleRepairCopy?: () => void
   repairedCopyPath?: string | null
@@ -141,6 +142,7 @@ export function ExtractPageView({
   queueContent,
   workflowTools,
   queueMemorySettings,
+  diagnostics,
   dictionarySettings,
   outputMode,
   setOutputMode,
@@ -829,6 +831,7 @@ export function ExtractPageView({
 
         {queueContent}
 
+        {diagnostics && <div className="mt-3">{diagnostics}</div>}
         {error ? (
           <Alert variant="destructive" className="mt-2 shrink-0">
             <CircleAlert />

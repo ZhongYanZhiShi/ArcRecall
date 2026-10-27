@@ -14,6 +14,7 @@ export type CompressionPhase =
   | "failed"
 
 export type CompressionStartRequest = {
+  volumeSizeMib?: number | null
   verifyAfterCompression?: boolean
   sources: string[]
   outputDirectory?: string | null

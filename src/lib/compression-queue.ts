@@ -24,13 +24,15 @@ type Snapshot = {
   error: string | null
 }
 type Dependencies = {
+  ready?: () => boolean
+  checkpoint?: () => Promise<unknown>
   start: (request: CompressionStartRequest) => Promise<CompressionTaskStatus>
   status: (id: string) => Promise<CompressionTaskStatus | null>
   cancel: (id: string) => Promise<unknown>
   wait: () => Promise<void>
 }
 
-// Session-only queue. Credentials live only in the active run's closure and are
+// Credentials live only in the active run's closure and are
 // never exposed through snapshots, records, presets, or backups.
 export function createCompressionQueue(deps: Dependencies) {
   let snapshot: Snapshot = {
@@ -60,7 +62,28 @@ export function createCompressionQueue(deps: Dependencies) {
         listeners.delete(listener)
       }
     },
+    restore(items: CompressionQueueItem[]) {
+      if (snapshot.running || snapshot.items.length)
+        throw new Error("当前压缩队列非空，不能覆盖。")
+      publish({
+        items: items.map((item) => ({
+          ...item,
+          id: `compression-queue-${++sequence}`,
+          taskId: undefined,
+          result: undefined,
+          state: item.state === "running" ? "cancelled" : item.state,
+          error:
+            item.state === "failed"
+              ? "来源或输出目录已失效，请检查后重新排队。"
+              : item.state === "cancelled"
+                ? "上次任务已中断，请查看任务记录后决定是否重试。"
+                : undefined,
+        })),
+      })
+    },
     add(requests: Request[], passwordRequired: boolean) {
+      if (deps.ready && !deps.ready())
+        throw new Error("正在恢复压缩队列，请稍后重试。")
       if (snapshot.running) throw new Error("请先暂停压缩队列。")
       if (!requests.length || snapshot.items.length + requests.length > 200)
         throw new Error("压缩队列最多保留 200 项，请先清理已完成项。")
@@ -71,6 +94,7 @@ export function createCompressionQueue(deps: Dependencies) {
         return {
           id: `compression-queue-${++sequence}`,
           request: {
+            volumeSizeMib: request.volumeSizeMib,
             sources: [...request.sources],
             baseName: request.baseName,
             outputDirectory: request.outputDirectory,
@@ -144,6 +168,8 @@ export function createCompressionQueue(deps: Dependencies) {
     },
     async run(credentials: Credentials = {}) {
       if (snapshot.running) return
+      if (deps.ready && !deps.ready())
+        throw new Error("正在恢复压缩队列，请稍后重试。")
       if (
         snapshot.items.some(
           (item) =>
@@ -165,6 +191,7 @@ export function createCompressionQueue(deps: Dependencies) {
           let taskId = item.taskId
           if (!taskId) {
             patchItem(item.id, { state: "running", error: undefined })
+            await deps.checkpoint?.()
             try {
               const task = await deps.start({
                 ...item.request,
@@ -179,6 +206,7 @@ export function createCompressionQueue(deps: Dependencies) {
               })
               continue
             }
+            await deps.checkpoint?.()
             if (stopRequested) await deps.cancel(taskId)
           }
           // A polling failure preserves the native task ID. Resuming observes

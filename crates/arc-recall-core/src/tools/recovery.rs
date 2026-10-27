@@ -13,6 +13,7 @@ pub use actions::{ArchiveActionRequest, ArchiveActionResult, run_archive_action}
 mod cleanup;
 mod cracking;
 mod disk_budget;
+pub use disk_budget::available_space;
 mod flatten;
 use disk_budget::TaskDiskBudget;
 mod recursive;
@@ -417,6 +418,8 @@ pub struct RecoveryResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecursiveRecoveryResult {
+    pub archive_outputs: std::collections::BTreeMap<PathBuf, PathBuf>,
+    pub archive_issues: std::collections::BTreeMap<PathBuf, String>,
     /// Root success means its output was published, even when a later recursive
     /// step was cancelled. Consumers must check `root.cancelled` for task status.
     pub root: RecoveryResult,

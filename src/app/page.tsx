@@ -1,5 +1,8 @@
 "use client"
 
+import { DesktopSettings } from "@/components/home/desktop-settings"
+import { DesktopLaunchBridge } from "@/components/home/desktop-launch-bridge"
+
 import dynamic from "next/dynamic"
 import * as React from "react"
 
@@ -316,6 +319,10 @@ export default function Page() {
   return (
     <>
       <ClientLoggingBridge />
+      <DesktopSettings onboarding />
+      <DesktopLaunchBridge
+        onOpenExtract={() => handleDockNavChange("extract")}
+      />
       <AppShell
         activeNav={activeNav}
         streamActivity={

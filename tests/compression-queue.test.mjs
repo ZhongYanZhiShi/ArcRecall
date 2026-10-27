@@ -180,3 +180,63 @@ test("原生任务确认不存在时暂停剩余队列，允许明确重新排�
     ["waiting", "waiting"]
   )
 })
+
+test("恢复队列不会重跑中断项，加密等待项需要重新确认密码", async () => {
+  const starts = []
+  const queue = createCompressionQueue({
+    start: async (r) => {
+      starts.push(r)
+      return finished("new")
+    },
+    status: async () => finished("new"),
+    cancel: async () => {},
+    wait: async () => {},
+  })
+  queue.restore([
+    {
+      id: "old",
+      request: request("中断来源"),
+      passwordRequired: true,
+      state: "running",
+      taskId: "old-task",
+    },
+    {
+      id: "next",
+      request: request("待处理来源"),
+      passwordRequired: true,
+      state: "waiting",
+    },
+  ])
+  assert.equal(queue.getSnapshot().items[0].state, "cancelled")
+  assert.equal(queue.getSnapshot().items[0].taskId, undefined)
+  await assert.rejects(queue.run(), /重新输入密码/)
+  assert.equal(starts.length, 0)
+  await queue.run({ password: "new-session-secret" })
+  assert.equal(starts.length, 1)
+  assert.equal(starts[0].baseName, "待处理来源")
+  assert.ok(!JSON.stringify(queue.getSnapshot()).includes("new-session-secret"))
+})
+
+test("启动后保存队列失败时保留原生任务标识，继续仅观察原任务", async () => {
+  let checkpoints = 0,
+    starts = 0
+  const queue = createCompressionQueue({
+    checkpoint: async () => {
+      if (++checkpoints === 2) throw new Error("磁盘写入失败")
+    },
+    start: async () => {
+      starts++
+      return { ...finished("native-id"), running: true }
+    },
+    status: async () => finished("native-id"),
+    cancel: async () => {},
+    wait: async () => {},
+  })
+  queue.add([request("资料")], false)
+  await queue.run()
+  assert.equal(queue.getSnapshot().items[0].taskId, "native-id")
+  assert.equal(queue.getSnapshot().items[0].state, "running")
+  await queue.run()
+  assert.equal(starts, 1)
+  assert.equal(queue.getSnapshot().items[0].state, "success")
+})

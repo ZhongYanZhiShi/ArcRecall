@@ -4,6 +4,7 @@ type OutputMode = "sibling" | "custom"
 type CompressionLevel = 0 | 1 | 3 | 5 | 7 | 9
 
 export type CompressionDraft = {
+  volumeSizeMib?: number | null
   packagingMode?: "combined" | "separate"
   batchNameTemplate?: string
   verifyAfterCompression: boolean

@@ -82,6 +82,7 @@ dependencies = [
 name = "arc-recall-core"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "hex",
  "lz4",
  "reqwest",
@@ -114,6 +115,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "windows-sys 0.61.2",
+ "winreg",
 ]
 
 [[package]]

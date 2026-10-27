@@ -8,7 +8,11 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet"
-import { compressionQueue } from "@/lib/compression-queue-session"
+import { isDesktopRuntime } from "@/lib/runtime"
+import {
+  compressionQueue,
+  compressionQueueMemory,
+} from "@/lib/compression-queue-session"
 
 const labels = {
   waiting: "等待",
@@ -29,6 +33,14 @@ export function CompressionQueuePanel({
     compressionQueue.getSnapshot,
     compressionQueue.getSnapshot
   )
+  const memory = React.useSyncExternalStore(
+    compressionQueueMemory.subscribe,
+    compressionQueueMemory.getSnapshot,
+    compressionQueueMemory.getSnapshot
+  )
+  React.useEffect(() => {
+    void compressionQueueMemory.initialize()
+  }, [])
   const [open, setOpen] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const invoke = (work: () => Promise<unknown>) => {
@@ -45,10 +57,38 @@ export function CompressionQueuePanel({
           <SheetHeader>
             <SheetTitle>批量压缩队列</SheetTitle>
             <SheetDescription>
-              逐项压缩，失败后继续。队列仅在本次应用运行期间保留；暂停或停止后保留等待项。每项使用加入时的压缩选项，加密项统一使用本次启动时选择的密码。
+              逐项压缩，失败后继续。可开启队列记忆，重启后手动继续；暂停或停止后保留等待项。每项使用加入时的压缩选项，加密项统一使用本次启动时选择的密码。
             </SheetDescription>
           </SheetHeader>
           <div className="space-y-3 px-4 pb-4">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={memory.enabled}
+                disabled={
+                  !isDesktopRuntime() ||
+                  !memory.ready ||
+                  memory.saving ||
+                  snapshot.running ||
+                  disabled
+                }
+                onChange={(e) =>
+                  invoke(() =>
+                    compressionQueueMemory.setEnabled(e.target.checked)
+                  )
+                }
+              />
+              记住压缩队列
+            </label>
+            <p className="text-xs text-muted-foreground">
+              只保存来源、选项和状态，不保存密码。恢复后检查来源与输出位置，中断项需手动重新排队；不会自动开始。
+              {memory.restored > 0 ? `已恢复 ${memory.restored} 项。` : ""}
+            </p>
+            {memory.error && (
+              <p role="alert" className="text-sm text-destructive">
+                队列保存失败：{memory.error}
+              </p>
+            )}
             {(error || snapshot.error) && (
               <p role="alert" className="text-sm text-destructive">
                 {error || snapshot.error}

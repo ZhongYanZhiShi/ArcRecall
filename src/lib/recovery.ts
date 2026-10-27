@@ -69,7 +69,16 @@ export type RecoveryTaskEvent = {
   scannedFileCount: number | null
 }
 
+export type ArchiveTreeNode = {
+  path: string
+  parent: string | null
+  output: string | null
+  state: "success" | "skipped" | "failed" | "pending"
+  message: string
+}
+
 export type RecoveryTaskStatus = {
+  archiveTree?: ArchiveTreeNode[]
   dictionaryGroup?: string | null
   taskId: string
   phase: RecoveryPhase

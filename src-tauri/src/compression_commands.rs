@@ -25,6 +25,8 @@ const COMPRESSION_PASSWORD_KEYRING_ACCOUNT: &str = "permanent";
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CompressionStartRequest {
     #[serde(default)]
+    volume_size_mib: Option<u32>,
+    #[serde(default)]
     verify_after_compression: bool,
     sources: Vec<String>,
     output_directory: Option<String>,
@@ -157,6 +159,7 @@ pub(crate) async fn compression_start(
     let task_id = next_compression_task_id();
     let compression_options = arc_recall_core::compression_presets::CompressionRecordOptions {
         options: arc_recall_core::compression_presets::CompressionOptions {
+            volume_size_mib: request.volume_size_mib,
             verify_after_compression: request.verify_after_compression,
             format: request.format,
             level: request.level,
@@ -202,6 +205,7 @@ pub(crate) async fn compression_start(
             .then(|| password.clone())
             .flatten();
         let job = CompressionJob {
+            volume_size_mib: request.volume_size_mib,
             sources: request.sources.into_iter().map(PathBuf::from).collect(),
             output_directory: request
                 .output_directory

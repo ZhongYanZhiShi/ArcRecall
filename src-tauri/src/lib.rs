@@ -1,3 +1,9 @@
+mod archive_diagnostics;
+use archive_diagnostics::*;
+mod compression_journal;
+use compression_journal::*;
+mod desktop_integration;
+use desktop_integration::*;
 mod backup_management_commands;
 mod compression_preset_commands;
 mod planning_commands;
@@ -411,6 +417,12 @@ pub fn run() {
         .manage(AppUpdater::default())
         .setup(|app| {
             let paths = resolve_app_paths(app.handle())?;
+            match desktop_integration::initialize(&paths.root, std::env::args().collect())? {
+                Some(lock) => {
+                    app.manage(lock);
+                }
+                None => std::process::exit(0),
+            }
             let recovery_session = RecoverySession::create(&paths.temp)?;
             arc_recall_core::task_records::TaskRecordStore::open(
                 &paths.root.join("task-records.db"),
@@ -497,6 +509,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            archive_volume_diagnostics,
+            archive_space_preflight,
+            compression_queue_load,
+            compression_queue_save,
+            desktop_integration_status,
+            desktop_integration_save,
+            desktop_launch_list,
+            desktop_launch_ack,
             task_records_search,
             task_records_export,
             task_records_delete,

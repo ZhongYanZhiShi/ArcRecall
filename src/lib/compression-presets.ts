@@ -5,6 +5,7 @@ import type { CompressionDraft } from "./compression-draft"
 import { isDesktopRuntime } from "./runtime"
 
 export type CompressionOptions = {
+  volumeSizeMib?: number | null
   verifyAfterCompression?: boolean
   format: CompressionDraft["format"]
   level: CompressionDraft["level"]
@@ -64,6 +65,7 @@ export function draftWithCompressionPreset(
   return {
     ...draft,
     ...preset.options,
+    volumeSizeMib: preset.options.volumeSizeMib ?? null,
     verifyAfterCompression: preset.options.verifyAfterCompression ?? false,
     outputMode: preset.options.outputDirectory ? "custom" : "sibling",
     baseName: renderCompressionName(preset.nameTemplate, name, date),

@@ -27,7 +27,15 @@ export function buildCompressionPlan(
     throw new Error("请选择自定义输出目录。")
   if (draft.encryptFileNames && !draft.password && !usePermanentPassword)
     throw new Error("开启文件名加密前需要设置密码。")
+  if (
+    draft.volumeSizeMib != null &&
+    (!Number.isInteger(draft.volumeSizeMib) ||
+      draft.volumeSizeMib < 1 ||
+      draft.volumeSizeMib > 1048576)
+  )
+    throw new Error("分卷大小必须为 1–1048576 MiB。")
   const options = {
+    volumeSizeMib: draft.volumeSizeMib,
     outputDirectory:
       draft.outputMode === "custom" ? draft.outputDirectory : null,
     format: draft.format,

@@ -33,17 +33,21 @@ const LABELS: Record<IntegrityState, string> = {
 
 export function BatchIntegrityCheck({
   paths,
+  initiallyOpen = false,
   disabled,
   onSelectPassed,
   onBusyChange,
 }: {
   paths: string[]
+  initiallyOpen?: boolean
   disabled: boolean
   onSelectPassed?: (paths: string[]) => void
   onBusyChange?: (busy: boolean) => void
 }) {
-  const [open, setOpen] = React.useState(false)
-  const [batchPaths, setBatchPaths] = React.useState<string[]>([])
+  const [open, setOpen] = React.useState(initiallyOpen)
+  const [batchPaths, setBatchPaths] = React.useState<string[]>(
+    initiallyOpen ? paths : []
+  )
   const [status, setStatus] = React.useState<BatchCheckStatus | null>(null)
   const [password, setPassword] = React.useState("")
   const [busy, setBusy] = React.useState(false)

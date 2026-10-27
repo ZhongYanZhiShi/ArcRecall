@@ -57,7 +57,7 @@ Compression records can replace the current draft after confirmation, without st
 
 New unified backups use version 3 and include compression presets, automatic-verification options, and separate compression and verification outcomes. Versions 1 and 2 remain readable; older presets default to no automatic verification. Version 1 and legacy database restores preserve local compression presets. Automatic and pre-restore safety backups include these fields too. Presets are stored in `compression-presets.db`.
 
-Compression supports one archive containing all sources or a separate archive per source. Separate compression uses the preset's `{name}` / `{date}` template, without AI naming. Start immediately or enqueue first to reorder waiting items. The session-only queue holds up to 200 items, continues after failures, supports pause after the current item, cancellation with waiting items retained, removal, and requeuing failed items. Switching pages does not stop it; exiting discards the queue while retaining execution records. Encrypted items use the password selected for the current run; passwords are excluded from queue snapshots. Automatic folder opening occurs once at batch completion.
+Compression supports one archive containing all sources or a separate archive per source. Separate compression uses the preset's `{name}` / `{date}` template, without AI naming. Start immediately or enqueue first to reorder waiting items. The queue holds up to 200 items, continues after failures, supports pause after the current item, cancellation with waiting items retained, removal, and requeuing failed items. Switching pages does not stop it. Optional queue memory restores waiting items after restart and requires manual continuation; interrupted entries need explicit requeueing. Encrypted items use the password selected for the current run; passwords are excluded from queue snapshots. Automatic folder opening occurs once at batch completion.
 
 Optional post-compression verification tests the output using the current password. Compression and verification outcomes are recorded separately; failed or cancelled checks preserve the generated archive. Task records offer independent output verification with a fresh password and a separate check record. Requeuing a failed compression item creates a new archive; use independent verification to avoid recompression. Nested archives are not recursively tested.
 
@@ -70,7 +70,7 @@ Supports detection, password verification, and recursive extraction for 7z, ZIP 
 | RAR3 / RAR5 | Encryption variants depend on engine support; multipart support is incomplete |
 | LZ4 Frame   | Only unwraps supported inner archives                                         |
 
-Split archives require a complete volume set. Creating split archives is not supported. Password recovery is not guaranteed; GPU recovery requires a usable Hashcat device.
+Split archives require a complete volume set. Creating numbered split archives is supported. Password recovery is not guaranteed; GPU recovery requires a usable Hashcat device.
 
 Nested scanning skips directories with more than 10 direct files and their subdirectories by default. Adjust this under Settings → Recovery engines, or rescan from the most recent task's results in the current session.
 
@@ -105,3 +105,12 @@ Use `pnpm desktop:build:basic` to build the basic edition. For signed local pack
 [Issues](https://github.com/ZhongYanZhiShi/ArcRecall/issues) and pull requests are welcome. See the [contribution guide](./CONTRIBUTING.en.md).
 
 Licensed under [Apache License 2.0](./LICENSE). Only process files you own or are authorized to access.
+
+## Archive diagnostics and desktop integration
+
+- Volume diagnostics list discovered parts, numbering gaps, naming warnings and analysis errors. Recheck after adding missing files. Continuous names do not prove the final volume is present; RAR multipart engine limitations still apply.
+- Disk preflight compares the outer archive's declared size with available output space. Settings → Application exposes per-task limits (default: 100 GiB, 100,000 entries and 5 nested levels). Runtime monitoring retains a 256 MiB disk reserve; nested expansion cannot be fully predicted.
+- Recent recovery results include a nested archive tree with output locations, outcomes and retry actions. The tree is currently session-only.
+- Compression accepts a volume size in MiB for 7z and ZIP. Numbered parts are published together in a new `-volumes` directory without replacing existing output. A complete temporary archive is built before splitting, so extra disk space is required. Presets, batch compression, retry drafts and post-compression verification retain this option.
+- Optional compression queue memory persists paths, parameters and states locally, never passwords. Restart validates sources and output directories and requires manual continuation; interrupted entries require explicit requeueing. Queue memory is excluded from unified backups.
+- Windows context-menu integration can be enabled or disabled under Settings → Application. It uses the current user's registry, may appear under “Show more options” on Windows 11, and routes requests to an existing instance. New installations show a recommended-settings window on first launch; upgrades with existing settings skip it. Menu configuration and onboarding state are local-only.

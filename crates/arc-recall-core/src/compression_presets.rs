@@ -7,6 +7,8 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompressionOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_size_mib: Option<u32>,
     #[serde(default)]
     pub verify_after_compression: bool,
     pub format: CompressionFormat,
@@ -16,6 +18,12 @@ pub struct CompressionOptions {
 }
 impl CompressionOptions {
     pub fn validate(&self) -> Result<(), String> {
+        if self
+            .volume_size_mib
+            .is_some_and(|size| !(1..=1_048_576).contains(&size))
+        {
+            return Err("分卷大小必须为 1–1048576 MiB。".into());
+        }
         if ![0, 1, 3, 5, 7, 9].contains(&self.level) {
             return Err("压缩级别必须是 0、1、3、5、7 或 9。".into());
         }
@@ -191,6 +199,7 @@ mod tests {
         CompressionPreset {
             name: "资料压缩".into(),
             options: CompressionOptions {
+                volume_size_mib: None,
                 verify_after_compression: false,
                 format: CompressionFormat::SevenZip,
                 level: 5,

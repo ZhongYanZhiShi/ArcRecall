@@ -197,6 +197,7 @@ mod tests {
             compression: Some(
                 arc_recall_core::compression_presets::CompressionRecordOptions {
                     options: arc_recall_core::compression_presets::CompressionOptions {
+                        volume_size_mib: None,
                         verify_after_compression: false,
                         format: arc_recall_core::CompressionFormat::SevenZip,
                         level: 5,
