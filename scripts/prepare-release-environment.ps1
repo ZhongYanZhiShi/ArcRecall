@@ -12,7 +12,7 @@ function Initialize-ReleaseEnvironment {
         if (-not (Test-Path -LiteralPath $module -PathType Leaf)) { continue }
         $versions = Get-ChildItem -LiteralPath $toolsRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
         foreach ($version in $versions) {
-            $required = @('include/stdarg.h', 'include/vcruntime.h', 'lib/x64/libcmt.lib', 'bin/Hostx64/x64/cl.exe', 'bin/Hostx64/x64/link.exe')
+            $required = @('include/stdarg.h', 'include/vcruntime.h', 'lib/x64/libcmt.lib', 'lib/x64/msvcrt.lib', 'bin/Hostx64/x64/cl.exe', 'bin/Hostx64/x64/link.exe')
             $missing = @($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $version.FullName $_) -PathType Leaf) })
             if ($missing.Count) { continue }
             Import-Module $module
