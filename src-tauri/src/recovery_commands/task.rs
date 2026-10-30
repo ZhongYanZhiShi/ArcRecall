@@ -72,15 +72,7 @@ pub(super) enum RecoveryFailureKind {
     Other,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ArchiveTreeNode {
-    path: String,
-    parent: Option<String>,
-    output: Option<String>,
-    state: String,
-    message: String,
-}
+pub(crate) use arc_recall_core::task_records::ArchiveTreeNode;
 pub(super) fn archive_tree(
     root_path: &str,
     result: &RecursiveRecoveryResult,
@@ -207,6 +199,7 @@ pub(crate) struct RecoveryTaskStatus {
 impl RecoveryTaskStatus {
     pub(super) fn record(&self) -> arc_recall_core::task_records::TaskRecord {
         arc_recall_core::task_records::TaskRecord {
+            archive_tree: self.archive_tree.clone(),
             task_id: self.task_id.clone(),
             archive_path: self.archive_path.clone(),
             output_directory: self.output_directory.clone(),

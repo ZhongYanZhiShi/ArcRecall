@@ -32,6 +32,8 @@ pub struct TaskCheckItem {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskRecord {
     #[serde(default)]
+    pub archive_tree: Vec<ArchiveTreeNode>,
+    #[serde(default)]
     pub compression_succeeded: bool,
     #[serde(default)]
     pub compression_verification: Option<CompressionVerification>,
@@ -59,6 +61,16 @@ pub struct TaskRecord {
     pub dictionary_group: Option<String>,
     pub pending_archive_paths: Vec<String>,
     pub skipped_scan_directories: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveTreeNode {
+    pub path: String,
+    pub parent: Option<String>,
+    pub output: Option<String>,
+    pub state: String,
+    pub message: String,
 }
 
 pub struct TaskRecordStore(Connection);
@@ -220,6 +232,39 @@ impl TaskRecordStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn archive_tree_survives_reopen_and_legacy_records_default_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("records.db");
+        let record = TaskRecord {
+            task_id: "nested".into(),
+            archive_tree: vec![ArchiveTreeNode {
+                path: "嵌套归档.zip".into(),
+                parent: None,
+                output: Some("输出".into()),
+                state: "success".into(),
+                message: String::new(),
+            }],
+            ..Default::default()
+        };
+        {
+            TaskRecordStore::open(&path).unwrap().save(&record).unwrap();
+        }
+        let restored = TaskRecordStore::open(&path)
+            .unwrap()
+            .find("nested")
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.archive_tree, record.archive_tree);
+        let mut old = serde_json::to_value(record).unwrap();
+        old.as_object_mut().unwrap().remove("archiveTree");
+        assert!(
+            serde_json::from_value::<TaskRecord>(old)
+                .unwrap()
+                .archive_tree
+                .is_empty()
+        );
+    }
     #[test]
     fn ordered_history_uses_an_index_and_full_reads_preserve_ties_and_interrupted_states() {
         let temp = tempfile::tempdir().unwrap();

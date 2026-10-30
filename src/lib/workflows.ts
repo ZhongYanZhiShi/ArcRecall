@@ -12,6 +12,7 @@ export type TaskOperation =
   | "integrityCheck"
   | "batchIntegrityCheck"
 export type TaskRecord = {
+  archiveTree?: import("./recovery").ArchiveTreeNode[]
   compressionSucceeded?: boolean
   compressionVerification?: import("./compression").CompressionTaskStatus["verification"]
   compression?: import("./compression-presets").CompressionRecordOptions | null

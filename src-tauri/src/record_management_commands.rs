@@ -60,6 +60,7 @@ fn render(
     }
     if !include_paths {
         for record in &mut records {
+            record.archive_tree.clear();
             record.archive_path.clear();
             record.output_directory.clear();
             record.output_path = None;
@@ -208,6 +209,13 @@ mod tests {
                     password_required: true,
                 },
             ),
+            archive_tree: vec![arc_recall_core::task_records::ArchiveTreeNode {
+                path: "private-source".into(),
+                parent: Some("private-source".into()),
+                output: Some("private-source".into()),
+                state: "failed".into(),
+                message: "private-source".into(),
+            }],
             task_id: "=formula".into(),
             archive_path: "private-source".into(),
             source_paths: vec!["private-source".into()],

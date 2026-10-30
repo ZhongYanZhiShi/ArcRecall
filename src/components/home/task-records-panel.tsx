@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { ArchiveResultTree } from "./archive-result-tree"
 import { runBatchCheck } from "@/lib/batch-integrity"
 import { openPath } from "@/lib/settings"
 import { buildRecordRetryPlan } from "@/lib/task-record-retry"
@@ -612,6 +613,21 @@ export function TaskRecordsPanel({
                             ? "当前候选未找到密码，请补充密码或字典后重试。"
                             : "操作未完成，请检查源文件、密码和访问权限。"}
                       </p>
+                    )}
+                    {!!row.archiveTree?.length && (
+                      <ArchiveResultTree
+                        nodes={row.archiveTree}
+                        disabled={busy}
+                        onRetry={(paths) => {
+                          setSelected({ ...row, pendingArchivePaths: paths })
+                          setPassword("")
+                        }}
+                        onOpen={(path) => {
+                          void openOutputDirectory(path).catch((e) =>
+                            setError(String(e))
+                          )
+                        }}
+                      />
                     )}
                     {row.outputPath && (
                       <p className="text-xs break-all">
