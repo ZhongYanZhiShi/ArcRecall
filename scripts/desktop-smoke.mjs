@@ -149,6 +149,10 @@ async function launch() {
       .find((candidate) => /tauri|localhost/.test(candidate.url())) ??
     context.pages()[0] ??
     (await context.waitForEvent("page"))
+  assert.ok(
+    !/^https?:\/\/(localhost|127\.0\.0\.1):3000(?:\/|$)/.test(page.url()),
+    "Desktop acceptance requires an embedded frontend: rebuild with --features tauri/custom-protocol after cargo test, or point ARC_RECALL_TEST_BINARY to an isolated acceptance binary."
+  )
   page.on("pageerror", (error) => errors.push(error.message))
   await page.waitForFunction(() => Boolean(window.__TAURI_INTERNALS__?.invoke))
   if (process.argv.includes("--archive-extensions-only")) {
@@ -204,18 +208,8 @@ async function launch() {
 async function close(requireGraceful = true) {
   if (!child) return
   const exit = once(child, "exit")
-  // Exercise the real native close event without broadening production IPC permissions.
-  spawnSync(
-    "powershell.exe",
-    [
-      "-NoProfile",
-      "-Command",
-      motionWindowHandle
-        ? `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class CloseMotionWindow { [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l); }'; [CloseMotionWindow]::PostMessage([IntPtr]${motionWindowHandle}, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)`
-        : `[Diagnostics.Process]::GetProcessById(${child.pid}).CloseMainWindow()`,
-    ],
-    { windowsHide: true, stdio: "ignore" }
-  )
+  // Use the same graceful exit handler as the tray menu; closing now hides.
+  await invoke("background_exit").catch(() => {})
   await Promise.race([exit, delay(8000)])
   const forced = child.exitCode === null
   if (forced) {
@@ -606,6 +600,28 @@ async function verifyAiFileReference() {
     if (profileId) await invoke("ai_profile_delete", { profileId })
     await new Promise((done) => server.close(done))
   }
+}
+
+if (process.argv.includes("--background-only")) {
+  try {
+    await launch()
+    const { verifyBackground } = await import("./desktop-background.mjs")
+    await verifyBackground({
+      invoke,
+      getPage: () => page,
+      root,
+      data,
+      evidence,
+      sevenZip,
+      close,
+      launch,
+    })
+    assert.deepEqual(errors, [])
+  } finally {
+    await close(false)
+  }
+  console.log(`Background evidence: ${evidence}`)
+  process.exit(0)
 }
 
 if (process.argv.includes("--archive-extensions-only")) {

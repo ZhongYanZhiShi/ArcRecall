@@ -123,3 +123,7 @@ pnpm desktop:build
 欢迎提交 [Issue](https://github.com/ZhongYanZhiShi/ArcRecall/issues) 或 Pull Request，详见[贡献指南](./CONTRIBUTING.md)。
 
 使用 [Apache License 2.0](./LICENSE) 开源。请仅处理你拥有或已获得授权的文件。
+
+关闭主窗口后应用保留在系统托盘继续处理任务，可通过托盘菜单重新打开，或选择“退出并停止任务”安全退出。解压恢复及压缩任务结束后发送系统通知（取消任务不通知），通知不包含文件路径或密码；系统通知设置可能影响显示。
+
+托盘与历史结果树的隔离桌面验收：构建最新前端和启用 `tauri/custom-protocol` 的调试程序后，设置 `ARC_RECALL_TEST_BINARY` 指向该程序，运行 `node scripts/desktop-smoke.mjs --background-only`。

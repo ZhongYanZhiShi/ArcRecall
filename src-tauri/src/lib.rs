@@ -1,4 +1,5 @@
 mod archive_diagnostics;
+mod background;
 use archive_diagnostics::*;
 mod compression_journal;
 use compression_journal::*;
@@ -407,6 +408,7 @@ pub fn run() {
         return;
     }
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_opener::Builder::new()
@@ -505,10 +507,14 @@ pub fn run() {
                 exit_ready: AtomicBool::new(false),
                 seven_zip_cache: Arc::new(Mutex::new(None)),
             });
+            background::setup(app.handle())?;
             backup_management_commands::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            background::notify_task_finished,
+            background::background_show,
+            background::background_exit,
             archive_volume_diagnostics,
             archive_space_preflight,
             compression_queue_load,
@@ -611,9 +617,14 @@ pub fn run() {
         .on_window_event(|window, event| {
             if window.label() == "main"
                 && let tauri::WindowEvent::CloseRequested { api, .. } = event
-                && request_app_shutdown(window.app_handle())
+                && !window
+                    .app_handle()
+                    .state::<AppState>()
+                    .exit_ready
+                    .load(Ordering::Acquire)
             {
                 api.prevent_close();
+                let _ = window.hide();
             }
         })
         .build(tauri::generate_context!())

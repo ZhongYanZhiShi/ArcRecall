@@ -1,3 +1,4 @@
+import { notifyTaskCompletion } from "./task-notification"
 import { invoke } from "@tauri-apps/api/core"
 
 import { isDesktopRuntime } from "@/lib/runtime"
@@ -124,9 +125,14 @@ export async function getCompressionStatus(
   taskId?: string
 ): Promise<CompressionTaskStatus | null> {
   requireDesktopRuntime()
-  return invoke<CompressionTaskStatus | null>("compression_status", {
-    taskId: taskId ?? null,
-  })
+  const status = await invoke<CompressionTaskStatus | null>(
+    "compression_status",
+    {
+      taskId: taskId ?? null,
+    }
+  )
+  if (taskId && status) notifyTaskCompletion(status)
+  return status
 }
 
 export async function cancelCompression(taskId: string): Promise<boolean> {

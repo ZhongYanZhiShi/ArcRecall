@@ -1,3 +1,4 @@
+import { notifyTaskCompletion } from "./task-notification"
 import { invoke } from "@tauri-apps/api/core"
 
 import { createAsyncRefreshCache } from "@/lib/async-refresh-cache"
@@ -262,9 +263,11 @@ export async function getRecoveryStatus(
   taskId?: string
 ): Promise<RecoveryTaskStatus | null> {
   requireDesktopRuntime()
-  return invoke<RecoveryTaskStatus | null>("recovery_status", {
+  const status = await invoke<RecoveryTaskStatus | null>("recovery_status", {
     taskId: taskId ?? null,
   })
+  if (taskId && status) notifyTaskCompletion(status)
+  return status
 }
 
 export async function cancelRecovery(taskId: string): Promise<boolean> {
